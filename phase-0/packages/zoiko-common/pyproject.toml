@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "zoiko-common"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "cryptography>=42.0",
     "pycose>=1.1",

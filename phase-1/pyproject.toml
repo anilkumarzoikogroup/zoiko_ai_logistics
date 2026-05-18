@@ -6,7 +6,7 @@ build-backend = "setuptools.backends.legacy:build"
 name        = "zoiko-phase1"
 version     = "1.0.0"
 description = "Phase 1 — KMS, OIDC, Kafka, OPA for Zoiko AI Logistics"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "cryptography>=42",
     "fastapi>=0.111",

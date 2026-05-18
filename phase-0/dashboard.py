@@ -1,4 +1,4 @@
-"""
+﻿"""
 Zoiko AI Logistics — SC-001 Dashboard
     set DB_URL=postgresql://postgres:zoiko123@localhost/zoiko
     streamlit run dashboard.py
@@ -70,6 +70,17 @@ def q(sql, params=None):
 def q1(sql, params=None):
     rows = q(sql, params)
     return rows[0] if rows else {}
+
+def _fix_uuids(data):
+    """Convert uuid.UUID objects to str so PyArrow/Streamlit can render them."""
+    import pandas as pd
+    if not data:
+        return data
+    df = pd.DataFrame(data) if isinstance(data, list) else pd.DataFrame([data])
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].apply(lambda x: str(x) if isinstance(x, uuid.UUID) else x)
+    return df
 
 def execute(sql, params=None):
     conn = get_conn()
@@ -218,7 +229,7 @@ elif page == "➕ New Case":
     with tab1:
         tenants = q("SELECT slug, display_name, status, created_at FROM tenants ORDER BY created_at DESC;")
         if tenants:
-            st.dataframe(tenants, use_container_width=True)
+            st.dataframe(_fix_uuids(tenants), use_container_width=True)
         else:
             st.info("No tenants yet.")
 
@@ -699,13 +710,13 @@ elif page == "🗄️ Database":
         st.warning("APPEND-ONLY — INSERT only, no UPDATE or DELETE")
 
     rows = q(f"SELECT * FROM {sel_table} LIMIT 50;")
-    st.dataframe(rows if rows else [], use_container_width=True)
+    st.dataframe(_fix_uuids(rows if rows else []), use_container_width=True)
 
     st.divider()
     st.subheader("Row Count — All Tables")
     summary = [{"Domain": g, "Table": t, "Append-Only": "yes" if t in append_only else "", "Rows": q1(f"SELECT COUNT(*) n FROM {t};").get("n",0)}
                for g, tbls in groups.items() for t in tbls]
-    st.dataframe(summary, use_container_width=True)
+    st.dataframe(_fix_uuids(summary), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Phase 1 separator — not a real page
@@ -752,7 +763,7 @@ elif page == "🔑 KMS Keys":
             "Rotates In":  f"{k.days_until_rotation} days",
             "Fingerprint": k.fingerprint(),
         })
-    st.dataframe(key_data, use_container_width=True)
+    st.dataframe(_fix_uuids(key_data), use_container_width=True)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Root CA",     "✅ Active")
@@ -962,7 +973,7 @@ elif page == "🛡️ OPA Policies":
             ("EXECUTE_RECOVERY",    "expired token",     "❌ DENY",  "Token expired"),
             ("READ_CASE",           "any authenticated", "✅ ALLOW", "Read-only, always allowed"),
         ]
-        st.dataframe([{"Action": a, "Caller": c, "Decision": d, "Reason": r} for a,c,d,r in rules], use_container_width=True)
+        st.dataframe(_fix_uuids([{"Action": a, "Caller": c, "Decision": d, "Reason": r} for a,c,d,r in rules]), use_container_width=True)
 
     with tab2:
         st.subheader("tenant_isolation.rego — Hard Tenant Boundary")
@@ -1062,7 +1073,7 @@ elif page == "📨 Kafka Events":
                 "Key Data": str(list(payload.values())[0])[:40],
                 "Messages": broker.message_count(topic),
             })
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(_fix_uuids(rows), use_container_width=True)
 
         # Show consumer reading decision.made
         st.divider()
@@ -1127,7 +1138,7 @@ elif page == "📨 Kafka Events":
             "acr.issued":          "acr-svc → audit-worm",
             "audit.locked":        "audit-worm → compliance",
         }.get(t, "—")} for t in sorted(REGISTERED_TOPICS)]
-        st.dataframe(topic_data, use_container_width=True)
+        st.dataframe(_fix_uuids(topic_data), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # — Phase 2 separator
@@ -1206,12 +1217,12 @@ elif page == "📥 Ingestion":
         st.subheader("source_records row (DB)")
         row = q1("SELECT id, source_type, encode(canonical_hash,'hex') h, kid, idempotency_key, created_at FROM source_records WHERE id=%s", (result.source_record_id,))
         if row:
-            st.dataframe([row], use_container_width=True)
+            st.dataframe(_fix_uuids([row]), use_container_width=True)
 
         st.subheader("outbox row (DB)")
         ob = q1("SELECT id, topic, partition_key, shipped_at, created_at FROM outbox WHERE partition_key=%s", (str(result.source_record_id),))
         if ob:
-            st.dataframe([ob], use_container_width=True)
+            st.dataframe(_fix_uuids([ob]), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ✔ VALIDATION
@@ -1240,7 +1251,7 @@ elif page == "✔ Validation":
     st.subheader("Contract Rates on File")
     rates = q("SELECT carrier_id, rate_type, rate_value, currency, effective_on, expires_on FROM contract_rates WHERE tenant_id=%s ORDER BY carrier_id", (tenant["id"],))
     if rates:
-        st.dataframe(rates, use_container_width=True)
+        st.dataframe(_fix_uuids(rates), use_container_width=True)
     else:
         st.warning("No contract rates found for this tenant.")
 
@@ -1295,12 +1306,12 @@ elif page == "✔ Validation":
                     viol_data = [{"Rule": v.rule, "Carrier": v.carrier_id, "Rate Type": v.rate_type,
                                   "Expected $": v.expected, "Actual $": v.actual, "Delta $": v.delta}
                                  for v in result.rule_violations]
-                    st.dataframe(viol_data, use_container_width=True)
+                    st.dataframe(_fix_uuids(viol_data), use_container_width=True)
 
                 db_row = q1("SELECT id, status, rule_violations, validated_at FROM validation_results WHERE id=%s", (result.validation_id,))
                 if db_row:
                     st.subheader("validation_results row (DB)")
-                    st.dataframe([db_row], use_container_width=True)
+                    st.dataframe(_fix_uuids([db_row]), use_container_width=True)
 
     with tab2:
         st.subheader("Add a Contract Rate")
@@ -1397,7 +1408,7 @@ elif page == "📄 Canonical Truth":
                 db_row = q1("SELECT id, invoice_number, carrier_id, total_amount, encode(canonical_hash,'hex') hash, created_at FROM canonical_invoices WHERE id=%s", (result.canonical_invoice_id,))
                 if db_row:
                     st.subheader("canonical_invoices row (DB)")
-                    st.dataframe([db_row], use_container_width=True)
+                    st.dataframe(_fix_uuids([db_row]), use_container_width=True)
 
     with tab2:
         rows = q("""
@@ -1411,7 +1422,7 @@ elif page == "📄 Canonical Truth":
             ORDER BY ci.created_at DESC
         """, (tenant["id"],))
         if rows:
-            st.dataframe(rows, use_container_width=True)
+            st.dataframe(_fix_uuids(rows), use_container_width=True)
             st.caption(f"{len(rows)} canonical invoice(s) on file")
         else:
             st.info("No canonical invoices yet.")
@@ -1552,7 +1563,8 @@ elif page == "🗂 Case Flow":
                 ORDER BY occurred_at ASC
             """, (case2["id"],))
             if events:
-                st.dataframe(events, use_container_width=True)
+                st.dataframe(_fix_uuids(events), use_container_width=True)
                 st.caption(f"{len(events)} event(s) — APPEND-ONLY, no UPDATE or DELETE ever issued")
             else:
                 st.info("No events logged for this case yet.")
+

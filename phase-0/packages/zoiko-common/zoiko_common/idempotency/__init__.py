@@ -16,7 +16,10 @@ attempt will re-check the DB via the outbox and can recover.
 """
 from __future__ import annotations
 
-from enum import StrEnum
+from enum import Enum
+
+class StrEnum(str, Enum):
+    pass
 
 import redis.asyncio as aioredis
 
