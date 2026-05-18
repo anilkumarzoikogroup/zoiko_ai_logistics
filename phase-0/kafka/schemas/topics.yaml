@@ -1,0 +1,247 @@
+# Zoiko Logistics — Strimzi KafkaTopic definitions (all 17 topics)
+# Deployed to GKE via: kubectl apply -f kafka/schemas/topics.yaml
+#
+# Partition key convention: "{tenant_id}:{case_id}"
+# This guarantees ordered delivery per case for deterministic FSM replay.
+#
+# Retention: 7 days (604800000 ms) for all operational topics.
+# Replication factor: 3 (staging/prod). Override to 1 for local dev.
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-ingestion-source-record-created-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-validation-validation-completed-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-canonical-canonical-truth-created-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-case-case-opened-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-case-case-state-changed-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-evidence-evidence-bundle-created-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-reasoning-finding-generated-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-reasoning-decision-proposed-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-governance-governance-review-requested-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-governance-governance-decision-made-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-token-token-issued-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-execution-execution-requested-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-execution-execution-completed-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-reconciliation-reconciliation-completed-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-audit-acr-created-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 12
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-infra-outbox-relay-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 6
+  replicas: 3
+  config:
+    retention.ms: "604800000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"
+---
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaTopic
+metadata:
+  name: zoiko-infra-dead-letter-v1
+  labels:
+    strimzi.io/cluster: zoiko-kafka
+spec:
+  partitions: 3
+  replicas: 3
+  config:
+    # Dead letter kept longer for investigation
+    retention.ms: "2592000000"
+    cleanup.policy: delete
+    min.insync.replicas: "2"

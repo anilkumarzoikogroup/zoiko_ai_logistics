@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Zoiko AI Logistics — Phase Story</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Calibri", "Segoe UI", Arial, sans-serif;
+    font-size: 11pt;
+    color: #1a1a1a;
+    background: #fff;
+    max-width: 780px;
+    margin: 0 auto;
+    padding: 40px 50px;
+  }
+  h1 {
+    font-size: 15pt;
+    font-weight: bold;
+    margin-bottom: 6px;
+    color: #000;
+  }
+  h2 {
+    font-size: 12pt;
+    font-weight: bold;
+    margin-top: 22px;
+    margin-bottom: 6px;
+    color: #000;
+  }
+  h3 {
+    font-size: 11pt;
+    font-weight: bold;
+    margin-top: 16px;
+    margin-bottom: 4px;
+    color: #000;
+  }
+  p { margin-bottom: 8px; line-height: 1.6; }
+  ul { margin: 6px 0 8px 24px; }
+  li { margin-bottom: 4px; line-height: 1.6; }
+  .divider {
+    border: none;
+    border-top: 1px solid #ccc;
+    margin: 20px 0;
+  }
+  .phase-divider {
+    border: none;
+    border-top: 3px solid #000;
+    margin: 36px 0 28px 0;
+  }
+  .italic { font-style: italic; color: #333; margin-top: 4px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+  }
+  th {
+    background: #1a1a1a;
+    color: #fff;
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 10.5pt;
+  }
+  td {
+    border: 1px solid #ccc;
+    padding: 7px 12px;
+    font-size: 10.5pt;
+  }
+  tr:nth-child(even) td { background: #f5f5f5; }
+  .summary-box {
+    background: #f9f9f9;
+    border-left: 4px solid #1a1a1a;
+    padding: 12px 16px;
+    margin: 14px 0;
+    font-weight: bold;
+    font-size: 11pt;
+    line-height: 1.7;
+  }
+  .phase-label {
+    display: inline-block;
+    background: #1a1a1a;
+    color: #fff;
+    padding: 4px 14px;
+    font-size: 13pt;
+    font-weight: bold;
+    margin-bottom: 10px;
+  }
+  @media print {
+    body { padding: 20px 30px; }
+    .phase-divider { margin: 24px 0 20px 0; page-break-before: always; }
+    .phase-divider:first-of-type { page-break-before: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════════════ PHASE 0 -->
+<span class="phase-label">Phase 0</span>
+<h1>The Foundation Story</h1>
+<hr class="divider">
+
+<h2>The Problem</h2>
+<p>Imagine Zoiko is a company that ships goods across the US.</p>
+<p>They hired <strong>DHL</strong> to ship a package from <strong>Dallas to Atlanta</strong>.</p>
+<p>The contract says DHL can charge <strong>$120 for fuel</strong>.</p>
+<p>But DHL sent an invoice for <strong>$220</strong> — charging an extra <strong>$100 for "accessorial fees"</strong> that were never authorized.</p>
+<p><strong>Someone needs to catch this, prove it, recover the $100 — and leave a paper trail no one can tamper with.</strong></p>
+<p>That's exactly what Phase 0 builds the foundation for.</p>
+
+<hr class="divider">
+
+<h2>What Phase 0 Built</h2>
+
+<h3>Step 1 — The Invoice Arrives</h3>
+<p>DHL sends the invoice. The system receives it and immediately does 3 things:</p>
+<ul>
+  <li><strong>Sorts and standardizes</strong> the invoice data the exact same way every time (JCS — like a universal translator for data)</li>
+  <li><strong>Takes a fingerprint</strong> of it (SHA-256 hash) — like a wax seal on an envelope</li>
+  <li><strong>Signs it</strong> with a digital signature — proof that Zoiko's system received exactly this document, untouched</li>
+</ul>
+<p class="italic">Think of it like a notary stamping a document the moment it arrives.</p>
+
+<hr class="divider">
+
+<h3>Step 2 — The Database</h3>
+<p>25 tables were created to store every single event:</p>
+<ul>
+  <li>Who sent what</li>
+  <li>What was validated</li>
+  <li>Who approved what</li>
+  <li>What was executed</li>
+  <li>What was the final outcome</li>
+</ul>
+<p class="italic">Think of it like filing cabinets — one drawer for invoices, one for approvals, one for audit records etc.</p>
+
+<hr class="divider">
+
+<h3>Step 3 — The Audit Trail (ACR)</h3>
+<p>At the end of the process, the system builds an <strong>Action Certification Record</strong> — a tamper-proof document that contains:</p>
+<ul>
+  <li>The original invoice fingerprint</li>
+  <li>The finding (confidence 0.96 — accessorial charge is unauthorized)</li>
+  <li>Both human approvals</li>
+  <li>The recovery execution</li>
+  <li>All locked together in a <strong>Merkle tree</strong> (like a chain of fingerprints)</li>
+</ul>
+<p><em>If anyone changes even one word anywhere — the fingerprint changes and the tampering is instantly detected.</em></p>
+
+<hr class="divider">
+
+<h3>Step 4 — Offline Verification</h3>
+<p>The ACR can be given to any external auditor — a bank, a regulator, a court.</p>
+<p>They don't need access to Zoiko's systems. They just run a verification script and it either says:</p>
+<ul>
+  <li>✓ VERIFIED — $100 overcharge confirmed, recovery legitimate</li>
+  <li>✗ TAMPERED — something was changed after signing</li>
+</ul>
+<p class="italic">Like a sealed envelope with a wax stamp — if the seal is broken, everyone knows.</p>
+
+<hr class="divider">
+
+<h2>The SC-001 Result</h2>
+<table>
+  <tr><th>What</th><th>Amount</th></tr>
+  <tr><td>DHL billed</td><td>$220</td></tr>
+  <tr><td>Contract allows</td><td>$120</td></tr>
+  <tr><td>Overcharge detected</td><td>$100</td></tr>
+  <tr><td>AI confidence</td><td>96%</td></tr>
+  <tr><td>Humans who approved</td><td>2 (analyst + manager)</td></tr>
+  <tr><td>Recovery status</td><td>CONFIRMED</td></tr>
+  <tr><td>Audit record</td><td>Tamper-proof, offline verifiable</td></tr>
+</table>
+
+<h2>One Line Summary</h2>
+<div class="summary-box">
+  Phase 0 built the cryptographic backbone — every invoice that enters the system gets fingerprinted, signed, and locked into an audit trail that nobody can alter, not even Zoiko itself.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ PHASE 1 -->
+<hr class="phase-divider">
+
+<span class="phase-label">Phase 1</span>
+<h1>The Security Layer Story</h1>
+<hr class="divider">
+
+<h2>The Problem Phase 0 Left Open</h2>
+<p>Phase 0 could fingerprint and sign documents perfectly. But it had no way to answer three critical questions:</p>
+<ul>
+  <li><strong>Who is making this request?</strong> — Anyone could pretend to be Alice the analyst</li>
+  <li><strong>Are they allowed to do this?</strong> — No rules existed to stop an analyst from approving their own proposal</li>
+  <li><strong>How do services talk to each other safely?</strong> — No messaging system, no audit of which service said what</li>
+</ul>
+<p>Phase 1 answers all three.</p>
+
+<hr class="divider">
+
+<h2>What Phase 1 Built</h2>
+
+<h3>Component 1 — KMS Key Hierarchy (The Lock and Key System)</h3>
+<p>Every tenant (company using Zoiko) gets their own set of 3 dedicated keys:</p>
+<ul>
+  <li><strong>Root CA Key</strong> — the master key, never used directly (like the vault key in a bank)</li>
+  <li><strong>DEK Encrypt Key</strong> — encrypts the invoice data at rest (like a lockbox key)</li>
+  <li><strong>Signing Key</strong> — signs every record to prove it came from that tenant (like a personal stamp)</li>
+</ul>
+<p>In development: keys are generated in software on the local machine.</p>
+<p>In production: keys never leave the <strong>GCP Cloud KMS hardware security module (HSM)</strong> — a tamper-proof chip. Even Zoiko engineers cannot extract the raw key material.</p>
+<p class="italic">Think of it like a safety deposit box where only the bank's chip (not any person) holds the master key.</p>
+
+<hr class="divider">
+
+<h3>Component 2 — OIDC Identity (The Passport System)</h3>
+<p>Every API call into the system must carry a <strong>JWT token</strong> — a signed digital passport that proves:</p>
+<ul>
+  <li>Who you are (your email address)</li>
+  <li>Which company you belong to (tenant ID)</li>
+  <li>What role you have (analyst or manager)</li>
+  <li>When the passport expires (automatically rejected if expired)</li>
+</ul>
+<p>Three things are tested every time:</p>
+<ul>
+  <li>Expired token → <strong>Rejected immediately</strong></li>
+  <li>Tampered token → <strong>Rejected immediately</strong></li>
+  <li>Wrong company → <strong>Rejected immediately</strong></li>
+</ul>
+<p class="italic">Think of it like airport security — no valid boarding pass, no entry. No exceptions.</p>
+
+<hr class="divider">
+
+<h3>Component 3 — OPA Policy Engine (The Rulebook Guard)</h3>
+<p>Even with a valid passport, you still need permission for what you're trying to do. OPA enforces the business rules:</p>
+<ul>
+  <li>Only an <strong>analyst</strong> can propose a recovery</li>
+  <li>Only a <strong>manager</strong> can approve it</li>
+  <li>The person who proposed <strong>cannot</strong> be the same person who approves — this is called <strong>Separation of Duties (SoD)</strong></li>
+  <li>A company's analyst cannot touch another company's data — <strong>Tenant Isolation</strong></li>
+</ul>
+<p><strong>Fail-Closed Rule:</strong> If the policy server is unreachable for any reason, the system returns an error and blocks the request. It never defaults to "allow".</p>
+<p class="italic">Think of it like a bank teller who needs two managers to sign off on large withdrawals — and if the manager's phone is dead, the withdrawal stops, not proceeds.</p>
+
+<hr class="divider">
+
+<h3>Component 4 — Kafka Messaging (The Internal Postal System)</h3>
+<p>Instead of services calling each other directly, every event is published to a message queue. This means:</p>
+<ul>
+  <li>If one service is slow, others keep working</li>
+  <li>Every event is logged with a timestamp and tenant ID</li>
+  <li>No event can be lost — messages persist until consumed</li>
+</ul>
+<p>17 registered event topics cover the full SC-001 lifecycle:</p>
+<ul>
+  <li>invoice.received → invoice.validated → invoice.canonical → case.opened → evidence.bundled → finding.created → proposal.created → decision.made → token.issued → execution.completed → acr.issued → and more</li>
+</ul>
+<p class="italic">Think of it like a postal system inside the building — every department drops messages in a tray, and the right team picks them up. No department shouts across the room.</p>
+
+<hr class="divider">
+
+<h2>What Phase 1 Guarantees</h2>
+<table>
+  <tr><th>Guarantee</th><th>How It's Enforced</th></tr>
+  <tr><td>Only authenticated users can call APIs</td><td>JWT token required on every request</td></tr>
+  <tr><td>Users can only act within their role</td><td>OPA policy checked before every action</td></tr>
+  <tr><td>No one can approve their own proposal</td><td>Separation of Duties rule in OPA</td></tr>
+  <tr><td>Companies cannot see each other's data</td><td>Tenant isolation policy + PostgreSQL RLS</td></tr>
+  <tr><td>Signing keys never leave secure hardware</td><td>GCP Cloud KMS HSM in production</td></tr>
+  <tr><td>System fails safe when policy is unreachable</td><td>Fail-closed — 503 error, never permit</td></tr>
+  <tr><td>All service events are auditable</td><td>17-topic Kafka with per-tenant message tagging</td></tr>
+</table>
+
+<h2>One Line Summary</h2>
+<div class="summary-box">
+  Phase 1 wrapped Phase 0 in a security shell — every request is now checked for identity, permission, and company boundary before any data is touched.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ PHASE 2 -->
+<hr class="phase-divider">
+
+<span class="phase-label">Phase 2</span>
+<h1>The Service Layer Story</h1>
+<hr class="divider">
+
+<h2>What Phase 1 Left to Do</h2>
+<p>After Phase 1, the system knew <em>who</em> was making a request and <em>whether</em> they were allowed. But it still couldn't actually <em>process</em> a DHL invoice from end to end.</p>
+<p>Phase 2 builds the four services that take a raw invoice and turn it into an open dispute case — ready for human review.</p>
+
+<hr class="divider">
+
+<h2>What Phase 2 Built</h2>
+
+<h3>Service 1 — Ingestion Service (The Post Room)</h3>
+<p>When DHL sends an invoice for $220, the ingestion service handles it in 5 exact steps — always in this order, never skipped:</p>
+<ul>
+  <li><strong>Step 1 — Standardize:</strong> The invoice fields are sorted and formatted identically every time (JCS). A $220 invoice will always produce the same bytes regardless of which server processes it.</li>
+  <li><strong>Step 2 — Fingerprint:</strong> A SHA-256 hash of the standardized data is computed. This is the digital DNA of this invoice.</li>
+  <li><strong>Step 3 — Encrypt:</strong> The invoice is encrypted before being stored. Only Zoiko's key can decrypt it.</li>
+  <li><strong>Step 4 — Write to Database:</strong> Two records are saved in a single atomic transaction — the invoice record and an outbox entry. Either both save or neither does. No partial writes.</li>
+  <li><strong>Step 5 — Announce on Kafka:</strong> After the database write is confirmed, the event <em>invoice.received</em> is published. Other services now know there's a new invoice to process.</li>
+</ul>
+<p class="italic">Think of it like a post room that date-stamps every incoming letter, photographs it, seals it in a tamper-evident envelope, files a copy, and puts it in the outbox — all before anyone else touches it.</p>
+
+<hr class="divider">
+
+<h3>Service 2 — Validation Service (The Contract Checker)</h3>
+<p>This service reads the contract rates stored in the database and compares them against the invoice:</p>
+<ul>
+  <li>For DHL shipping Dallas → Atlanta, the contract says: <strong>$120 fuel charge</strong></li>
+  <li>The invoice says: <strong>$220 total</strong></li>
+  <li>The service calculates: <strong>$220 − $120 = $100 overcharge</strong></li>
+  <li>Status: <strong>FAIL</strong> — carrier rate exceeded</li>
+</ul>
+<p>The result is signed and saved. The event <em>invoice.validated</em> is published with the overcharge amount.</p>
+<p>Three possible outcomes:</p>
+<ul>
+  <li><strong>PASS</strong> — invoice matches contract, no problem</li>
+  <li><strong>FAIL</strong> — invoice exceeds contract, overcharge detected</li>
+  <li><strong>WARN</strong> — no contract rate found for this carrier, cannot verify</li>
+</ul>
+<p class="italic">Think of it like a procurement officer who checks every supplier invoice against the signed purchase order before anything gets paid.</p>
+
+<hr class="divider">
+
+<h3>Service 3 — Canonical Truth Service (The Single Source of Truth)</h3>
+<p>After validation, the invoice needs one definitive home in the database — a single row that all future services treat as the ground truth.</p>
+<p>This service writes:</p>
+<ul>
+  <li>A <strong>canonical_invoice</strong> row — the official version of the invoice (carrier, amount, currency, invoice number)</li>
+  <li>A <strong>canonical_shipment</strong> row — the route details (Dallas → Atlanta, 1,200 lbs)</li>
+  <li>A <strong>canonical_hash</strong> — a new fingerprint computed over the canonical form. Every downstream service — evidence gathering, AI reasoning, governance approval, the final audit record — will reference this exact hash.</li>
+</ul>
+<p>If the same invoice is submitted twice, the service returns the same record — no duplicates ever created.</p>
+<p class="italic">Think of it like a court clerk creating the official certified copy of a document — from this point on, everyone references the clerk's copy, not the original fax.</p>
+
+<hr class="divider">
+
+<h3>Service 4 — Case Orchestration Service (The Case Manager)</h3>
+<p>Now that there's a validated, canonical invoice showing a $100 overcharge, a formal dispute case is opened.</p>
+<p>The case follows a strict state machine — it can only move forward in defined steps:</p>
+<table>
+  <tr><th>State</th><th>Meaning</th></tr>
+  <tr><td>OPENED</td><td>Case registered, dispute formally started</td></tr>
+  <tr><td>EVIDENCE GATHERING</td><td>System collects all proof (Phase 3)</td></tr>
+  <tr><td>UNDER REVIEW</td><td>AI reasoning service analyzes the evidence (Phase 3)</td></tr>
+  <tr><td>PENDING APPROVAL</td><td>Waiting for analyst + manager sign-off (Phase 3)</td></tr>
+  <tr><td>APPROVED</td><td>Both humans have signed</td></tr>
+  <tr><td>EXECUTED</td><td>Recovery payment sent to carrier (Phase 4)</td></tr>
+  <tr><td>RECONCILED</td><td>Payment confirmed and matched</td></tr>
+  <tr><td>CLOSED</td><td>Case complete, ACR issued</td></tr>
+</table>
+<p>Every state change is written as an <strong>append-only case event</strong> — nothing is ever updated or deleted. The complete history of who moved the case, when, and why is permanently preserved.</p>
+<p>At the end of Phase 2, the SC-001 case is at <strong>PENDING APPROVAL</strong> — waiting for Alice (analyst) and Bob (manager) to review the $100 overcharge finding.</p>
+<p class="italic">Think of it like a legal case file — every action is stamped, signed, and added to the file. The old entries are never crossed out.</p>
+
+<hr class="divider">
+
+<h2>What Phase 2 Produced for SC-001</h2>
+<table>
+  <tr><th>Step</th><th>Service</th><th>Output</th></tr>
+  <tr><td>1</td><td>Ingestion</td><td>source_record saved · invoice.received published</td></tr>
+  <tr><td>2</td><td>Validation</td><td>Status: FAIL · Overcharge: $100 · invoice.validated published</td></tr>
+  <tr><td>3</td><td>Canonical Truth</td><td>Authoritative invoice record · canonical_hash locked · invoice.canonical published</td></tr>
+  <tr><td>4</td><td>Case Orchestration</td><td>Case opened · State: PENDING APPROVAL · case.opened published</td></tr>
+</table>
+
+<h2>One Line Summary</h2>
+<div class="summary-box">
+  Phase 2 built the processing pipeline — a DHL invoice for $220 enters one end, and a formally opened dispute case ready for human approval comes out the other, with every step signed, logged, and published.
+</div>
+
+<hr class="phase-divider">
+
+<!-- ════════════════════════════════════════════ REAL SCENARIO WALKTHROUGH -->
+<span class="phase-label">Real Scenario</span>
+<h1>Ravi, Ramu, Amazon &amp; Flipkart — Hyderabad to Warangal</h1>
+<p class="italic">Every line below maps to actual code that runs. Field names, table names, Kafka topics, and function calls match the Phase 0–2 codebase exactly.</p>
+<hr class="divider">
+
+<h2>The Setting</h2>
+<table>
+  <tr><th>Who</th><th>Role</th><th>Company</th></tr>
+  <tr><td><strong>Ravi</strong></td><td>Logistics Analyst — raises disputes, gathers evidence</td><td>Amazon India</td></tr>
+  <tr><td><strong>Ramu</strong></td><td>Logistics Manager — reviews and approves recoveries</td><td>Amazon India</td></tr>
+  <tr><td><strong>BlueDart</strong></td><td>Freight carrier contracted by Amazon</td><td>Third-party carrier</td></tr>
+  <tr><td><strong>Flipkart</strong></td><td>Rival company — also on Zoiko, completely isolated</td><td>Separate tenant</td></tr>
+</table>
+
+<p style="margin-top:12px;"><strong>The shipment:</strong> Amazon's Hyderabad distribution centre sends 800 kg of electronics to their Warangal fulfilment hub. BlueDart is under contract to charge <strong>₹8,000</strong> per shipment on this route.</p>
+<p><strong>What actually happened:</strong> BlueDart sent an invoice for <strong>₹12,500</strong> — adding ₹4,500 as an "express handling surcharge" that exists nowhere in the contract.</p>
+<p><strong>Flipkart</strong> is also using Zoiko for their own shipments on a different route. Their data is completely invisible to Amazon — and Amazon's data is completely invisible to Flipkart. The two companies share zero rows, zero keys, zero events.</p>
+
+<hr class="divider">
+
+<h2>Phase 0 Kicks In — The Moment the Invoice Arrives</h2>
+<p>BlueDart uploads invoice <strong>BD-HYD-WGL-20260518</strong> into the Zoiko portal. Before any human sees it, the Phase 0 crypto layer immediately runs three operations.</p>
+
+<h3>Operation 1 — JCS Canonicalization</h3>
+<p>The invoice fields are sorted alphabetically by Unicode code point and serialised into a single deterministic UTF-8 byte string:</p>
+<table>
+  <tr><th>Raw field from BlueDart</th><th>JCS-sorted position</th><th>Value</th></tr>
+  <tr><td>carrier_id</td><td>1st</td><td>"BlueDart"</td></tr>
+  <tr><td>currency</td><td>2nd</td><td>"INR"</td></tr>
+  <tr><td>invoice_number</td><td>3rd</td><td>"BD-HYD-WGL-20260518"</td></tr>
+  <tr><td>route_destination</td><td>4th</td><td>"Warangal"</td></tr>
+  <tr><td>route_origin</td><td>5th</td><td>"Hyderabad"</td></tr>
+  <tr><td>total_amount</td><td>6th</td><td>"12500.0"</td></tr>
+</table>
+<p>Code that runs: <em>zoiko_common.crypto.jcs.canonicalize(payload_dict)</em> — same result every time on any server worldwide.</p>
+
+<h3>Operation 2 — Domain-Tagged SHA-256 Fingerprint</h3>
+<p>The system prepends a domain tag and computes the fingerprint:</p>
+<p style="font-family:monospace; background:#f5f5f5; padding:8px 12px; font-size:10pt;">
+  canonical_hash = SHA-256( b"zoiko.ingestion.invoice.v1:" + canonical_bytes )
+</p>
+<p>This produces a unique 64-character hex string — the digital DNA of BlueDart's ₹12,500 invoice. If BlueDart later claims they sent ₹8,000, the hash will not match. The lie is mathematically impossible to hide.</p>
+
+<h3>Operation 3 — KMS Signing</h3>
+<p>The hash is signed with <strong>Amazon India's dedicated signing key</strong> stored in the KMS key hierarchy. The signing key is tenant-specific — BlueDart's signature cannot be forged using Flipkart's key, and Flipkart's key is never even loaded during this operation.</p>
+<p>Code that runs: <em>shared.signer.sign("amazon-india", canonical_hash)</em></p>
+
+<hr class="divider">
+
+<h2>Phase 1 Kicks In — Ravi Logs In</h2>
+
+<h3>Step 1 — JWT Passport Check</h3>
+<p>Ravi opens Zoiko and clicks "Submit Invoice". His browser sends:</p>
+<table>
+  <tr><th>HTTP Header</th><th>Value</th><th>What it proves</th></tr>
+  <tr><td>Authorization</td><td>Bearer eyJhbGci… (JWT token)</td><td>Ravi is who he claims to be</td></tr>
+  <tr><td>X-Tenant-ID</td><td>amazon-india-uuid</td><td>He belongs to Amazon India</td></tr>
+  <tr><td>Idempotency-Key</td><td>a3f8…e29c (UUID)</td><td>This exact request can be safely retried</td></tr>
+</table>
+<p>The API Gateway's <em>get_claims()</em> dependency runs immediately. It decodes the JWT and checks three things in order:</p>
+<ul>
+  <li>Is the HS256 signature valid? If not → <strong>401 Invalid token</strong></li>
+  <li>Has the token expired? If yes → <strong>401 Token expired</strong></li>
+  <li>Does the X-Tenant-ID header match the tenant_id inside the JWT? If not → <strong>403 Tenant mismatch</strong></li>
+</ul>
+<p>Ravi's token is valid and matches Amazon India's tenant UUID. He gets through. If someone from Flipkart had tried to submit with Ravi's tenant ID in the header but their own JWT — the mismatch check would block them instantly with 403.</p>
+
+<h3>Step 2 — OPA Role Check</h3>
+<p>Ravi's JWT says <em>roles: ["analyst"]</em>. OPA is consulted before every action:</p>
+<ul>
+  <li>Can an analyst submit an invoice? → <strong>Yes</strong></li>
+  <li>Can Ravi approve his own recovery proposal later? → <strong>No — Separation of Duties (SoD)</strong> — only Ramu (manager) can approve</li>
+  <li>If OPA is unreachable? → <strong>503 — Fail-Closed. The request stops. Never permitted by default.</strong></li>
+</ul>
+
+<hr class="divider">
+
+<h2>Phase 2 Service Pipeline — Step by Step</h2>
+
+<h3>Service 1 — Ingestion Service  (IngestionHandler.ingest_invoice)</h3>
+<p>The request reaches the API Gateway's <em>POST /invoices</em> route. Five steps run in this exact order — no exceptions:</p>
+
+<table>
+  <tr><th>#</th><th>Step</th><th>What happens in code</th><th>What it means for the BlueDart invoice</th></tr>
+  <tr>
+    <td>1</td>
+    <td>JCS Canonicalize</td>
+    <td>canonicalize(payload_dict) → canonical_bytes</td>
+    <td>The 6 invoice fields are locked into a single byte sequence. Every server in the world produces identical bytes.</td>
+  </tr>
+  <tr>
+    <td>2</td>
+    <td>SHA-256 Hash</td>
+    <td>SHA-256("zoiko.ingestion.invoice.v1:" + canonical_bytes)</td>
+    <td>The 64-char fingerprint of the ₹12,500 invoice is computed — BEFORE any encryption.</td>
+  </tr>
+  <tr>
+    <td>3</td>
+    <td>Encrypt</td>
+    <td>ciphertext = canonical_bytes (dev) / AES-256-GCM via KMS DEK (prod)</td>
+    <td>Invoice data is locked. Only Amazon India's DEK can unlock it.</td>
+  </tr>
+  <tr>
+    <td>4</td>
+    <td>Single DB Transaction</td>
+    <td>INSERT source_records + lineage_records + outbox — commit or rollback together</td>
+    <td>Three rows written atomically. If the server crashes mid-write, all three roll back together — no partial records.</td>
+  </tr>
+  <tr>
+    <td>5</td>
+    <td>Kafka + Redis</td>
+    <td>ZoikoProducer.publish("invoice.received") → mark_complete(tenant_id, idem_key)</td>
+    <td>All downstream services are notified. Redis records "COMPLETE" so a retry with the same Idempotency-Key returns the same record instantly.</td>
+  </tr>
+</table>
+
+<p><strong>What is written to the database in Step 4:</strong></p>
+<ul>
+  <li><strong>source_records</strong> — one row: source_record_id, tenant_id (Amazon India), canonical_hash, ciphertext, signature, kid, idempotency_key</li>
+  <li><strong>lineage_records</strong> (APPEND-ONLY) — one row: entity_type=INVOICE, event_type=INGESTED, payload_hash. This row is never updated or deleted — ever.</li>
+  <li><strong>outbox</strong> — one row: topic=invoice.received, partition_key=source_record_id, full JSON payload. The outbox relay will republish this to Kafka even if the server crashed after the DB commit.</li>
+</ul>
+
+<p><strong>Idempotency test:</strong> If Ravi's browser double-clicks and sends the same request twice, the second call hits the <em>ON CONFLICT (tenant_id, idempotency_key) DO NOTHING</em> guard in PostgreSQL. The database silently ignores the second write. The API returns the same source_record_id as the first call. No duplicate invoice is ever created.</p>
+
+<p><strong>API Response Ravi sees:</strong></p>
+<table>
+  <tr><th>Field</th><th>Value</th></tr>
+  <tr><td>source_record_id</td><td>ee8ea94a-fd83-4ffd-be89-ee0b13d463eb</td></tr>
+  <tr><td>canonical_hash</td><td>0a1bf336…1b2b2121 (64-char hex)</td></tr>
+  <tr><td>idempotency_key</td><td>a3f8…e29c</td></tr>
+  <tr><td>tenant_id</td><td>amazon-india-uuid</td></tr>
+</table>
+
+<hr class="divider">
+
+<h3>Service 2 — Validation Service  (ValidationHandler.validate)</h3>
+<p>Ravi's portal now calls <em>POST /invoices/{source_record_id}/validate</em>. The service does the following:</p>
+
+<p><strong>1. Fetch contract rates from the database:</strong></p>
+<table>
+  <tr><th>Query</th><th>Result for Amazon + BlueDart</th></tr>
+  <tr><td>SELECT rate_type, rate_value, currency FROM contract_rates WHERE tenant_id=amazon AND carrier_id='BlueDart' AND effective today</td><td>rate_type='FREIGHT', rate_value=8000.0, currency='INR'</td></tr>
+</table>
+
+<p><strong>2. Compare invoice total against contract:</strong></p>
+<table>
+  <tr><th>Check</th><th>Value</th></tr>
+  <tr><td>Invoice total (what BlueDart charged)</td><td>₹12,500</td></tr>
+  <tr><td>Contract rate (what they're allowed to charge)</td><td>₹8,000</td></tr>
+  <tr><td>Overcharge (12500 − 8000)</td><td><strong>₹4,500</strong></td></tr>
+  <tr><td>Tolerance check (12500 &gt; 8000 + 0.005?)</td><td><strong>Yes → FAIL</strong></td></tr>
+  <tr><td>Violation rule triggered</td><td>CARRIER_RATE_EXCEEDED</td></tr>
+</table>
+
+<p><strong>3. Sign the result and write to database:</strong></p>
+<ul>
+  <li>result_blob = SHA-256("zoiko.validation.result.v1:" + JSON of result)</li>
+  <li>Signed with Amazon India's signing key</li>
+  <li>INSERT into <strong>validation_results</strong> — status=FAIL, rule_violations (JSONB), signature, kid</li>
+</ul>
+
+<p><strong>4. Publish to Kafka:</strong> <em>invoice.validated</em> event with overcharge_amount=4500, violations=1, status=FAIL.</p>
+
+<p><strong>What Flipkart's team sees:</strong> Nothing. Their contract_rates query filters by tenant_id. Amazon's ₹4,500 finding never appears in Flipkart's dashboard. PostgreSQL Row-Level Security (RLS) enforces this at the database layer — not just in application code.</p>
+
+<hr class="divider">
+
+<h3>Service 3 — Canonical Truth Service  (CanonicalHandler.canonicalize_invoice)</h3>
+<p>The API Gateway calls <em>POST /invoices/{source_record_id}/canonicalize</em>. This creates the single authoritative copy of the invoice that all Phase 3+ services will reference.</p>
+
+<p><strong>A second canonical hash is computed</strong> — this time using a different domain tag:</p>
+<p style="font-family:monospace; background:#f5f5f5; padding:8px 12px; font-size:10pt;">
+  canonical_hash = SHA-256( b"zoiko.canonical.invoice.v1:" + JCS({carrier_id, currency, invoice_number, source_record_id, tenant_id, total_amount}) )
+</p>
+<p>This canonical hash includes the source_record_id and tenant_id — so the same invoice number from a different tenant produces a completely different hash. BlueDart cannot claim their invoice to Flipkart is the same record as their invoice to Amazon.</p>
+
+<p><strong>Two rows written to the database:</strong></p>
+<ul>
+  <li><strong>canonical_invoices</strong>: id, tenant_id (Amazon India), source_record_id, invoice_number=BD-HYD-WGL-20260518, carrier_id=BlueDart, total_amount=12500.0, currency=INR, canonical_hash, signature, kid
+  <br><em>ON CONFLICT (tenant_id, invoice_number) DO NOTHING</em> — submitting the same invoice twice always returns the same canonical_invoice_id.</li>
+  <li><strong>canonical_shipments</strong>: id, tenant_id, invoice_id, origin_city=Hyderabad, dest_city=Warangal, weight_lbs=800.0</li>
+</ul>
+
+<p><strong>Kafka:</strong> <em>invoice.canonical</em> published — downstream services (evidence, reasoning, governance) subscribe to this topic and will begin their work in Phase 3.</p>
+
+<hr class="divider">
+
+<h3>Service 4 — Case Orchestration Service  (CaseHandler.open_case)</h3>
+<p>With a validated and canonical invoice on record, the API Gateway calls <em>POST /cases</em>. A formal dispute case is opened against BlueDart.</p>
+
+<p><strong>What is written to the database:</strong></p>
+<ul>
+  <li><strong>cases</strong>: case_id, tenant_id (Amazon India), invoice_id (canonical_invoice_id), state=OPENED, opened_at=now
+  <br><em>ON CONFLICT (tenant_id, invoice_id) DO NOTHING</em> — if someone opens the same case twice, they get the same case_id back.</li>
+  <li><strong>case_events</strong> (APPEND-ONLY): id, case_id, event_type=CASE_OPENED, from_state=NULL, to_state=OPENED, actor_sub=ravi@amazon.in, payload={"invoice_id": "…"}, occurred_at=now
+  <br>This row is permanent. It cannot be updated, backdated, or deleted — not even by Zoiko engineers.</li>
+</ul>
+
+<p><strong>Kafka:</strong> <em>case.opened</em> published.</p>
+
+<p><strong>The case is now in state: OPENED.</strong></p>
+<p>Ravi then moves it to EVIDENCE_GATHERING by calling <em>PATCH /cases/{case_id}/state</em>:</p>
+<table>
+  <tr><th>Transition</th><th>Who triggers it</th><th>case_events row appended</th></tr>
+  <tr><td>OPENED → EVIDENCE_GATHERING</td><td>Ravi (analyst)</td><td>event_type=TRANSITION_EVIDENCE_GATHERING</td></tr>
+  <tr><td>EVIDENCE_GATHERING → UNDER_REVIEW</td><td>System (Phase 3 — after evidence bundled)</td><td>event_type=TRANSITION_UNDER_REVIEW</td></tr>
+  <tr><td>UNDER_REVIEW → PENDING_APPROVAL</td><td>System (Phase 3 — after AI reasoning)</td><td>event_type=TRANSITION_PENDING_APPROVAL</td></tr>
+  <tr><td>PENDING_APPROVAL → APPROVED</td><td>Ramu (manager) — Phase 3</td><td>event_type=TRANSITION_APPROVED</td></tr>
+  <tr><td>APPROVED → EXECUTED</td><td>Token Service — Phase 4</td><td>event_type=TRANSITION_EXECUTED</td></tr>
+  <tr><td>EXECUTED → RECONCILED</td><td>Reconciliation — Phase 4</td><td>event_type=TRANSITION_RECONCILED</td></tr>
+  <tr><td>RECONCILED → CLOSED</td><td>ACR issued — Phase 4</td><td>event_type=TRANSITION_CLOSED</td></tr>
+</table>
+
+<p><strong>Invalid transition blocked:</strong> If Ravi tried to jump directly from OPENED to APPROVED, the state machine would return HTTP 422: <em>"Invalid transition: OPENED → APPROVED. Allowed: {'EVIDENCE_GATHERING', 'REJECTED'}"</em>. The shortcut is impossible — this is enforced in code, not just policy.</p>
+
+<hr class="divider">
+
+<h2>The Complete Picture — One Invoice, Every System Touched</h2>
+<table>
+  <tr><th>Phase</th><th>What ran</th><th>What was produced</th></tr>
+  <tr><td>Phase 0</td><td>JCS + SHA-256 + KMS sign</td><td>64-char canonical_hash · signature · kid — all tied to Amazon India's tenant key</td></tr>
+  <tr><td>Phase 1</td><td>JWT check + OPA role check</td><td>Ravi authenticated · analyst role confirmed · Flipkart blocked at tenant boundary</td></tr>
+  <tr><td>Phase 2 — Ingestion</td><td>IngestionHandler.ingest_invoice (5 steps)</td><td>source_records row · lineage_records row (APPEND-ONLY) · outbox row · invoice.received on Kafka · Redis COMPLETE</td></tr>
+  <tr><td>Phase 2 — Validation</td><td>ValidationHandler.validate</td><td>Status: FAIL · Overcharge: ₹4,500 · validation_results row (signed) · invoice.validated on Kafka</td></tr>
+  <tr><td>Phase 2 — Canonical Truth</td><td>CanonicalHandler.canonicalize_invoice</td><td>canonical_invoices row · canonical_shipments row (Hyderabad → Warangal, 800 kg) · invoice.canonical on Kafka</td></tr>
+  <tr><td>Phase 2 — Case</td><td>CaseHandler.open_case + transition_state</td><td>cases row (EVIDENCE_GATHERING) · 2 case_events rows (APPEND-ONLY) · case.opened + case.updated on Kafka</td></tr>
+</table>
+
+<h2>What Ramu Sees (Phase 3 — coming next)</h2>
+<p>The case lands in Ramu's approval queue. He sees:</p>
+<ul>
+  <li>Carrier: <strong>BlueDart</strong></li>
+  <li>Route: <strong>Hyderabad → Warangal</strong></li>
+  <li>Invoice: <strong>₹12,500</strong></li>
+  <li>Contract allows: <strong>₹8,000</strong></li>
+  <li>Overcharge: <strong>₹4,500</strong></li>
+  <li>AI confidence: <strong>96%</strong> (computed by Phase 3 Reasoning Service)</li>
+  <li>Evidence bundle: <strong>Merkle-tree verified</strong> (computed by Phase 3 Evidence Service)</li>
+  <li>Proposed by: <strong>Ravi (analyst)</strong></li>
+</ul>
+<p>Ramu clicks Approve. The OPA policy checks: proposer_sub (ravi@amazon.in) ≠ actor_sub (ramu@amazon.in) → <strong>SoD satisfied</strong>. The approval goes through. A one-time cryptographic EXECUTE token is issued. ₹4,500 is recovered from BlueDart.</p>
+
+<div class="summary-box">
+  One BlueDart invoice, 145 km from Hyderabad to Warangal, ₹4,500 overcharge — caught automatically, proven cryptographically, approved by two humans under Separation of Duties, and closed with a tamper-proof audit record that any court or regulator can verify offline.
+</div>
+
+<hr class="divider">
+
+<h2>Where Things Stand After Phase 2</h2>
+<p>Three phases are complete. The system can now:</p>
+<ul>
+  <li>Receive any freight invoice and fingerprint it cryptographically</li>
+  <li>Verify the identity and permissions of every person who touches it</li>
+  <li>Detect overcharges automatically by comparing to contract rates</li>
+  <li>Open a formal dispute case with a tamper-proof audit trail</li>
+  <li>Walk the case through a controlled state machine step by step</li>
+</ul>
+
+<p style="margin-top:14px;"><strong>What comes next — Phase 3:</strong></p>
+<ul>
+  <li><strong>Evidence Service</strong> — bundles all proof into a Merkle tree</li>
+  <li><strong>Reasoning Service</strong> — AI computes the 0.96 confidence score</li>
+  <li><strong>Governance Service</strong> — analyst proposes, manager approves (SoD enforced)</li>
+  <li><strong>Token Service</strong> — issues a one-time cryptographic EXECUTE token</li>
+</ul>
+
+<div class="summary-box" style="margin-top:18px;">
+  Phases 0–2 built the foundation, security, and pipeline. Phase 3 adds the human decision layer — the point where two people sign off before a single dollar moves.
+</div>
+
+</body>
+</html>
