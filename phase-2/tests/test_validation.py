@@ -66,7 +66,7 @@ class TestValidationIntegration:
         ing = self._ingest(db_url, broker, test_tenant, unique_invoice_number)
         h   = ValidationHandler(db_url, broker, test_tenant["slug"])
         h.validate(test_tenant["id"], ing.source_record_id, unique_invoice_number, "DHL", 220.0)
-        assert broker.message_count("invoice.validated") >= 1
+        assert broker.message_count("zoiko.source.record.validated") >= 1
 
     def test_pass_when_amount_matches_contract(self, db_url, broker, test_tenant):
         import psycopg2

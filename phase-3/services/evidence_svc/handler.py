@@ -1,0 +1,169 @@
+"""
+Evidence Service — adds items to an evidence bundle, maintains the Merkle root.
+
+Every add_item call:
+  1. SHA-256 domain-tagged hash of raw content bytes
+  2. Sign the item hash
+  3. Upsert evidence_bundle for this (tenant_id, case_id)
+  4. INSERT evidence_item (APPEND-ONLY — no UPDATE/DELETE ever)
+  5. Recompute Merkle root over ALL items in bundle → UPDATE bundle
+  6. Publish evidence.added to Kafka
+
+Merkle domain tag: "zoiko/v1/evidence-item"  (matches MerkleTree domain format)
+Item hash domain:  b"zoiko.evidence.item.v1:"
+"""
+import hashlib, uuid, json
+from datetime import datetime, timezone
+
+import paths  # noqa: F401
+import psycopg2
+import psycopg2.extras
+import shared.db  # noqa: F401 — registers UUID adapter
+
+from shared.signer import sign
+from zoiko_common.crypto.merkle import MerkleTree
+
+from services.evidence_svc.models import EvidenceItemResult, EvidenceBundleResult
+
+DOMAIN_TAG    = b"zoiko.evidence.item.v1:"
+MERKLE_DOMAIN = "zoiko/v1/evidence-item"
+
+
+class EvidenceHandler:
+    def __init__(self, db_url: str, kafka_broker, tenant_slug: str = "default"):
+        self.db_url      = db_url
+        self.broker      = kafka_broker
+        self.tenant_slug = tenant_slug
+
+    def add_item(
+        self,
+        tenant_id:     str,
+        case_id:       str,
+        item_type:     str,
+        content_bytes: bytes,
+        entity_id:     uuid.UUID = None,
+        actor_sub:     str = "system",
+    ) -> EvidenceItemResult:
+        tenant_id = str(tenant_id)
+        case_id   = str(case_id)
+        entity_id = uuid.UUID(str(entity_id)) if entity_id else uuid.uuid4()
+        now       = datetime.now(timezone.utc)
+
+        # Step 1 — domain-tagged SHA-256 of content
+        item_hash = hashlib.sha256(DOMAIN_TAG + content_bytes).digest()
+
+        # Step 2 — sign item hash
+        signature, kid = sign(self.tenant_slug, item_hash)
+
+        conn = psycopg2.connect(self.db_url)
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # Step 3 — upsert evidence_bundle (one bundle per case)
+            cur.execute(
+                "SELECT id FROM evidence_bundles WHERE tenant_id=%s AND case_id=%s LIMIT 1",
+                (tenant_id, uuid.UUID(case_id)),
+            )
+            row = cur.fetchone()
+
+            if row:
+                bundle_id = row["id"]
+            else:
+                bundle_id = uuid.uuid4()
+                # Placeholder hash (single-leaf Merkle = item_hash itself via leaf function)
+                placeholder = item_hash
+                cur.execute("""
+                    INSERT INTO evidence_bundles
+                        (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (bundle_id, tenant_id, uuid.UUID(case_id), placeholder, signature, kid, now))
+
+            # Step 4 — APPEND-ONLY insert of evidence_item
+            item_id = uuid.uuid4()
+            cur.execute("""
+                INSERT INTO evidence_items
+                    (id, tenant_id, bundle_id, item_type, entity_id, item_hash, added_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (item_id, tenant_id, bundle_id, item_type, entity_id, item_hash, now))
+
+            # Step 5 — recompute Merkle root over ALL items in bundle
+            cur.execute(
+                "SELECT item_hash FROM evidence_items WHERE bundle_id=%s ORDER BY added_at ASC",
+                (bundle_id,),
+            )
+            all_hashes = [bytes(r["item_hash"]) for r in cur.fetchall()]
+
+            tree = MerkleTree(MERKLE_DOMAIN)
+            for h in all_hashes:
+                tree.append(h)
+            bundle_hash = tree.root()
+
+            bundle_sig, bundle_kid = sign(self.tenant_slug, bundle_hash)
+            cur.execute("""
+                UPDATE evidence_bundles
+                SET bundle_hash=%s, signature=%s, kid=%s
+                WHERE id=%s
+            """, (bundle_hash, bundle_sig, bundle_kid, bundle_id))
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Step 6 — Kafka publish AFTER commit
+        from kafka.producer import ZoikoProducer, KafkaMessage
+        ZoikoProducer(self.broker).publish(KafkaMessage(
+            topic     = "zoiko.evidence.bundled",
+            key       = str(bundle_id),
+            payload   = {
+                "bundle_id": str(bundle_id),
+                "item_id":   str(item_id),
+                "case_id":   case_id,
+                "item_type": item_type,
+                "item_hash": item_hash.hex(),
+            },
+            tenant_id = tenant_id,
+        ))
+
+        return EvidenceItemResult(
+            item_id     = item_id,
+            bundle_id   = bundle_id,
+            tenant_id   = tenant_id,
+            case_id     = case_id,
+            item_type   = item_type,
+            item_hash   = item_hash.hex(),
+            bundle_hash = bundle_hash.hex(),
+            added_at    = now,
+        )
+
+    def get_bundle(self, tenant_id: str, case_id: str) -> EvidenceBundleResult:
+        tenant_id = str(tenant_id)
+        case_id   = str(case_id)
+
+        conn = psycopg2.connect(self.db_url)
+        conn.autocommit = True
+        cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        cur.execute(
+            "SELECT id, bundle_hash, created_at FROM evidence_bundles "
+            "WHERE tenant_id=%s AND case_id=%s LIMIT 1",
+            (tenant_id, uuid.UUID(case_id)),
+        )
+        bundle = cur.fetchone()
+        if not bundle:
+            raise ValueError(f"No evidence bundle found for case {case_id}")
+
+        cur.execute(
+            "SELECT COUNT(*) AS cnt FROM evidence_items WHERE bundle_id=%s",
+            (bundle["id"],),
+        )
+        item_count = cur.fetchone()["cnt"]
+        conn.close()
+
+        return EvidenceBundleResult(
+            bundle_id   = bundle["id"],
+            tenant_id   = tenant_id,
+            case_id     = case_id,
+            bundle_hash = bytes(bundle["bundle_hash"]).hex(),
+            item_count  = item_count,
+            created_at  = bundle["created_at"],
+        )

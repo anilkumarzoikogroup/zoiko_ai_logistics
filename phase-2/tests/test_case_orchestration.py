@@ -38,7 +38,7 @@ class TestCaseOrchestrationIntegration:
         row = cur.fetchone()
         conn.close()
         assert row is not None
-        assert row[0] == "OPENED"
+        assert row[0] == "NEW"
 
     def test_case_event_appended_on_open(self, db_url, broker, test_tenant, unique_invoice_number):
         import psycopg2
@@ -55,20 +55,20 @@ class TestCaseOrchestrationIntegration:
         )
         rows = cur.fetchall()
         conn.close()
-        assert any(r[0] == "CASE_OPENED" and r[1] == "OPENED" for r in rows)
+        assert any(r[0] == "CASE_OPENED" and r[1] == "NEW" for r in rows)
 
     def test_transition_updates_state(self, db_url, broker, test_tenant, unique_invoice_number):
         import psycopg2
         inv_id = _setup_canonical(db_url, broker, test_tenant, unique_invoice_number)
         h      = CaseHandler(db_url, broker)
         result = h.open_case(test_tenant["id"], inv_id)
-        h.transition_state(test_tenant["id"], result.case_id, "EVIDENCE_GATHERING", "system")
+        h.transition_state(test_tenant["id"], result.case_id, "EVIDENCE_PENDING", "system")
 
         conn = psycopg2.connect(db_url)
         conn.autocommit = True
         cur  = conn.cursor()
         cur.execute("SELECT state FROM cases WHERE id=%s", (result.case_id,))
-        assert cur.fetchone()[0] == "EVIDENCE_GATHERING"
+        assert cur.fetchone()[0] == "EVIDENCE_PENDING"
         conn.close()
 
     def test_transition_appends_case_event(self, db_url, broker, test_tenant, unique_invoice_number):
@@ -76,21 +76,21 @@ class TestCaseOrchestrationIntegration:
         inv_id = _setup_canonical(db_url, broker, test_tenant, unique_invoice_number)
         h      = CaseHandler(db_url, broker)
         result = h.open_case(test_tenant["id"], inv_id)
-        h.transition_state(test_tenant["id"], result.case_id, "EVIDENCE_GATHERING", "alice@zoikotech.com")
+        h.transition_state(test_tenant["id"], result.case_id, "EVIDENCE_PENDING", "alice@zoikotech.com")
 
         conn = psycopg2.connect(db_url)
         conn.autocommit = True
         cur  = conn.cursor()
         cur.execute(
             "SELECT from_state, to_state, actor_sub FROM case_events "
-            "WHERE case_id=%s AND event_type='TRANSITION_EVIDENCE_GATHERING'",
+            "WHERE case_id=%s AND event_type='TRANSITION_EVIDENCE_PENDING'",
             (result.case_id,),
         )
         row = cur.fetchone()
         conn.close()
         assert row is not None
-        assert row[0] == "OPENED"
-        assert row[1] == "EVIDENCE_GATHERING"
+        assert row[0] == "NEW"
+        assert row[1] == "EVIDENCE_PENDING"
         assert row[2] == "alice@zoikotech.com"
 
     def test_invalid_transition_raises(self, db_url, broker, test_tenant, unique_invoice_number):
@@ -123,4 +123,4 @@ class TestCaseOrchestrationIntegration:
         inv_id = _setup_canonical(db_url, broker, test_tenant, unique_invoice_number)
         h      = CaseHandler(db_url, broker)
         h.open_case(test_tenant["id"], inv_id)
-        assert broker.message_count("case.opened") >= 1
+        assert broker.message_count("zoiko.case.opened") >= 1

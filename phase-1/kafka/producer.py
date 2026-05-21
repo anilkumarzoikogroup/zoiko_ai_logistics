@@ -7,13 +7,13 @@ Wraps kafka-python (or mock) with:
 - JSON serialization with JCS canonicalization
 - Outbox pattern: messages are persisted to DB outbox before Kafka publish
 
-17 registered topics (from phase-0/kafka/schemas/topics.yaml):
-  invoice.received, invoice.validated, invoice.canonical,
-  case.opened, case.updated, case.closed,
-  evidence.bundled, finding.created, proposal.created,
-  decision.made, token.issued, token.consumed,
-  execution.started, execution.completed,
-  reconciliation.done, acr.issued, audit.locked
+17 registered topics (zoiko. prefix, spec-aligned):
+  zoiko.source.record.received, zoiko.source.record.validated, zoiko.canonical.invoice.created,
+  zoiko.case.opened, zoiko.case.updated, zoiko.case.closed,
+  zoiko.evidence.bundled, zoiko.finding.generated, zoiko.proposal.created,
+  zoiko.governance.decision.issued, zoiko.governance.token.issued, zoiko.governance.token.consumed,
+  zoiko.execution.dispatched, zoiko.execution.completed,
+  zoiko.reconciliation.updated, zoiko.acr.generated, zoiko.audit.artifact.written
 """
 from __future__ import annotations
 
@@ -24,14 +24,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
-# All 17 registered Kafka topics
+# All 17 registered Kafka topics (zoiko. namespace prefix, spec §9.1)
 REGISTERED_TOPICS = {
-    "invoice.received", "invoice.validated", "invoice.canonical",
-    "case.opened",      "case.updated",      "case.closed",
-    "evidence.bundled", "finding.created",   "proposal.created",
-    "decision.made",    "token.issued",      "token.consumed",
-    "execution.started","execution.completed",
-    "reconciliation.done", "acr.issued",     "audit.locked",
+    "zoiko.source.record.received",    "zoiko.source.record.validated",   "zoiko.canonical.invoice.created",
+    "zoiko.case.opened",               "zoiko.case.updated",              "zoiko.case.closed",
+    "zoiko.evidence.bundled",          "zoiko.finding.generated",         "zoiko.proposal.created",
+    "zoiko.governance.decision.issued","zoiko.governance.token.issued",   "zoiko.governance.token.consumed",
+    "zoiko.execution.dispatched",      "zoiko.execution.completed",
+    "zoiko.reconciliation.updated",    "zoiko.acr.generated",             "zoiko.audit.artifact.written",
 }
 
 

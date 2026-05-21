@@ -80,3 +80,32 @@ class HealthResponse(BaseModel):
     status:  str
     service: str
     version: str
+
+
+# ── Frontend UI request models ─────────────────────────────────────────────────
+
+class SubmitCaseRequest(BaseModel):
+    carrier:  str
+    route:    str
+    amount:   float
+    currency: str = "INR"
+
+
+class UIProposalRequest(BaseModel):
+    action:   str   = "EXECUTE_CREDIT_MEMO"
+    amount:   float
+    currency: str   = "INR"
+
+
+class UIDecideRequest(BaseModel):
+    decision: str        # "APPROVED" | "REJECTED"
+    note:     str = ""
+
+
+class ContractRateRequest(BaseModel):
+    carrier_id:   str
+    rate_type:    str   = "FUEL_CHARGE"
+    rate_value:   float
+    currency:     str   = "INR"
+    effective_on: str   = "2025-01-01"   # ISO date string
+    expires_on:   str | None = None

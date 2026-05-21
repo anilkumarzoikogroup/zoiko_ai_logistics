@@ -1,4 +1,4 @@
-import os
+﻿import os
 import psycopg2
 import psycopg2.extras
 import psycopg2.extensions
@@ -6,7 +6,7 @@ import psycopg2.extensions
 # Register UUID adapter once so uuid.UUID objects pass transparently to psycopg2
 psycopg2.extras.register_uuid()
 
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:zoiko123@localhost/zoiko")
+DB_URL = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
 
 
 def get_conn(db_url: str = None) -> psycopg2.extensions.connection:

@@ -117,7 +117,7 @@ class IngestionHandler:
                 INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (
-                uuid.uuid4(), tenant_id, "invoice.received",
+                uuid.uuid4(), tenant_id, "zoiko.source.record.received",
                 str(source_id), json.dumps(outbox_payload), now,
             ))
             conn.commit()
@@ -127,7 +127,7 @@ class IngestionHandler:
         # Step 5 — Kafka publish AFTER commit (crash here is safe — outbox relay recovers)
         from kafka.producer import ZoikoProducer, KafkaMessage
         ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic           = "invoice.received",
+            topic           = "zoiko.source.record.received",
             key             = str(source_id),
             payload         = outbox_payload,
             tenant_id       = tenant_id,

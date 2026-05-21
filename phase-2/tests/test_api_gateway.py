@@ -54,8 +54,12 @@ class TestHealth:
         assert body["service"] == "api-gateway"
 
 
-# ── Auth guard unit tests — no DB needed ──────────────────────────────────────
+# ── Auth guard unit tests — only meaningful when DEV_MODE is off ──────────────
 
+_DEV_MODE = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
+
+
+@pytest.mark.skipif(_DEV_MODE, reason="Auth guard is bypassed in ZOIKO_DEV_MODE=true")
 class TestAuthGuard:
     _fake_tid = str(uuid.uuid4())
 
@@ -254,7 +258,7 @@ class TestPipelineIntegration:
         )
         assert r3.status_code == 201, r3.text
         body = r3.json()
-        assert body["state"] == "OPENED"
+        assert body["state"] == "NEW"
         assert body["tenant_id"] == tid
 
     def test_transition_case_state(self, client, db_url, test_tenant):
@@ -295,12 +299,12 @@ class TestPipelineIntegration:
         # transition OPENED → EVIDENCE_GATHERING
         r4 = client.patch(
             f"/cases/{case_id}/state",
-            json={"new_state": "EVIDENCE_GATHERING", "actor_sub": "test-user", "payload": {}},
+            json={"new_state": "EVIDENCE_PENDING", "actor_sub": "test-user", "payload": {}},
             headers=_auth_headers(tid),
         )
         assert r4.status_code == 200, r4.text
         body = r4.json()
-        assert body["new_state"] == "EVIDENCE_GATHERING"
+        assert body["new_state"] == "EVIDENCE_PENDING"
         assert body["case_id"] == case_id
 
     def test_invalid_transition_returns_422(self, client, db_url, test_tenant):
@@ -340,7 +344,7 @@ class TestPipelineIntegration:
         # Try to jump OPENED → APPROVED (invalid)
         r4 = client.patch(
             f"/cases/{case_id}/state",
-            json={"new_state": "APPROVED", "actor_sub": "test-user", "payload": {}},
+            json={"new_state": "EXECUTION_READY", "actor_sub": "test-user", "payload": {}},
             headers=_auth_headers(tid),
         )
         assert r4.status_code == 422

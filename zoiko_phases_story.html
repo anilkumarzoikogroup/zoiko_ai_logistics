@@ -636,7 +636,180 @@
 </ul>
 
 <div class="summary-box" style="margin-top:18px;">
-  Phases 0–2 built the foundation, security, and pipeline. Phase 3 adds the human decision layer — the point where two people sign off before a single dollar moves.
+  Phases 0–2 built the foundation, security, and pipeline. Phase 3 adds the human decision layer — the point where two people sign off before a single rupee moves.
+</div>
+
+<!-- ═══════════════════════════════════════════════════════ PHASE 3 -->
+<hr class="phase-divider">
+
+<span class="phase-label">Phase 3</span>
+<h1>The Human Decision Layer Story</h1>
+<hr class="divider">
+
+<h2>Where Phase 2 Left Off</h2>
+<p>After Phase 2, the system had a formally opened dispute case with a clear finding: BlueDart charged Amazon India ₹12,500 but the contract only allows ₹8,000 — a ₹4,500 overcharge. The case was sitting in state <strong>PENDING_APPROVAL</strong>.</p>
+<p>But no money had moved. No human had reviewed the evidence. No one had signed off. Phase 3 fixes all of that.</p>
+<p>Phase 3 answers four questions:</p>
+<ul>
+  <li><strong>What proof exists?</strong> — Evidence Service collects and locks all supporting documents</li>
+  <li><strong>How confident is the system?</strong> — Reasoning Service computes a deterministic 96% confidence score</li>
+  <li><strong>Did two different humans approve?</strong> — Governance Service enforces Separation of Duties</li>
+  <li><strong>What unlocks execution?</strong> — Token Service mints a one-time cryptographic key tied to this exact decision</li>
+</ul>
+
+<hr class="divider">
+
+<h2>What Phase 3 Built</h2>
+
+<h3>Service 1 — Evidence Service (The Evidence Locker)</h3>
+<p>Ravi uploads three documents to prove the overcharge:</p>
+<table>
+  <tr><th>Document</th><th>What it contains</th></tr>
+  <tr><td>Bill of Lading (BOL)</td><td>800 kg electronics, Hyderabad depot, 15 May 2026</td></tr>
+  <tr><td>Rate Sheet</td><td>Signed contract: BlueDart to charge ₹8,000 for Hyderabad→Warangal 800 kg</td></tr>
+  <tr><td>Invoice</td><td>BlueDart invoice BD-2026-0512: ₹12,500 charged for the same shipment</td></tr>
+</table>
+
+<p>For each document, the service runs two operations:</p>
+<ul>
+  <li><strong>Domain-tagged hash:</strong> SHA-256("zoiko.evidence.item.v1:" + document_bytes) — the domain prefix means a tampered invoice cannot be passed off as a Bill of Lading</li>
+  <li><strong>Merkle tree update:</strong> After each item is added, the Merkle root over all items is recomputed and stored in the evidence bundle</li>
+</ul>
+
+<p>After 3 items, the bundle holds a single <strong>Merkle root</strong> — a 64-character hash that represents all three documents simultaneously. If anyone changes even one byte in any document, the root changes, and the tampering is immediately visible.</p>
+
+<p class="italic">Think of it like a sealed evidence box in a court case. Once the lid is sealed and stamped, you can see exactly which items are inside — and if anything is added or removed, the seal breaks.</p>
+
+<hr class="divider">
+
+<h3>Service 2 — Reasoning Service (The AI Analyst)</h3>
+<p>With the evidence bundle locked, the Reasoning Service computes a confidence score for the overcharge finding. The formula is <strong>deterministic</strong> — it always produces the same answer for the same inputs, with no randomness and no model variation:</p>
+
+<table>
+  <tr><th>Rule</th><th>Confidence</th><th>Weight</th><th>Contribution</th></tr>
+  <tr><td>Fuel charge check</td><td>1.00 (exact contract match)</td><td>50%</td><td>0.50</td></tr>
+  <tr><td>Accessorial charge check</td><td>0.92 (surcharge not in contract)</td><td>50%</td><td>0.46</td></tr>
+  <tr><td><strong>Total confidence</strong></td><td><strong>0.96</strong></td><td>100%</td><td><strong>0.96</strong></td></tr>
+</table>
+
+<p>The service then creates two records:</p>
+<ul>
+  <li><strong>Finding</strong> — a signed record of the confidence score and rule trace, anchored to the evidence bundle hash</li>
+  <li><strong>Decision Proposal</strong> — Ravi's formal request: "Issue a CREDIT_MEMO for ₹4,500 to recover the overcharge"</li>
+</ul>
+
+<p>Both records are JCS-canonicalized, domain-tagged SHA-256 hashed, and Ed25519-signed — so the finding cannot be altered after Ravi submits it, and Ramu knows the 0.96 score he's seeing is exactly what the system computed.</p>
+
+<p class="italic">Think of it like a forensic accountant's report — a numbered, signed document that says "I examined the evidence, and I am 96% confident this is an overcharge."</p>
+
+<hr class="divider">
+
+<h3>Service 3 — Governance Service (The Two-Key Safe)</h3>
+<p>Now the proposal needs human approval. Phase 3 enforces a rule that cannot be bypassed in code: <strong>the person who proposed the recovery cannot be the same person who approves it.</strong></p>
+
+<p>This is called <strong>Separation of Duties (SoD)</strong>.</p>
+
+<p><strong>Step 1 — Ravi creates an approval task:</strong></p>
+<ul>
+  <li>An approval_task record is created: status=PENDING, proposer_sub=ravi@amazon.in</li>
+  <li>The task is published on Kafka. Ramu's notification queue lights up.</li>
+</ul>
+
+<p><strong>Step 2 — Ravi tries to approve his own proposal:</strong></p>
+<ul>
+  <li>Ravi submits himself as the approver</li>
+  <li>The service checks: actor_sub ('ravi@amazon.in') == proposer_sub ('ravi@amazon.in')</li>
+  <li>Result: <strong>ValueError raised before any database write occurs</strong> — "Separation of Duties violation: actor_sub 'ravi@amazon.in' cannot be the same as proposer_sub 'ravi@amazon.in'"</li>
+  <li>Nothing is written. Nothing is published. The attempt leaves no trace.</li>
+</ul>
+
+<p><strong>Step 3 — Ramu approves (SoD passes):</strong></p>
+<ul>
+  <li>Ramu submits his approval: actor_sub=ramu@amazon.in</li>
+  <li>SoD check passes (ramu ≠ ravi)</li>
+  <li>The decision payload is JCS-canonicalized and signed: SHA-256("zoiko.governance.decision.v1:" + decision_bytes)</li>
+  <li>A governance_decision record is written with outcome=APPROVED</li>
+  <li>The case state machine transitions: <strong>PENDING_APPROVAL → APPROVED</strong></li>
+  <li>An APPEND-ONLY case_event is written: "GOVERNANCE_APPROVED — ramu@amazon.in"</li>
+  <li>Kafka: decision.made published</li>
+</ul>
+
+<p class="italic">Think of it like a nuclear launch: two keys, in two different hands, both must turn — and neither person can use both keys.</p>
+
+<hr class="divider">
+
+<h3>Service 4 — Token Service (The One-Time Key)</h3>
+<p>With the governance decision recorded and the case in APPROVED state, the Token Service mints a cryptographic execution token. This token is the only key that can unlock the Phase 4 Execution Gateway — and it can only be used once.</p>
+
+<p><strong>What makes the token secure:</strong></p>
+<table>
+  <tr><th>Field</th><th>How it's computed</th><th>What it prevents</th></tr>
+  <tr><td>tenant_binding</td><td>SHA-256(tenant_id_bytes + decision_id_bytes)</td><td>A token for Amazon India cannot be used by anyone else, or for any other decision</td></tr>
+  <tr><td>token_hash</td><td>SHA-256("zoiko.token.v1:" + JCS(payload))</td><td>Token payload cannot be altered after minting</td></tr>
+  <tr><td>signature</td><td>Ed25519 sign(token_hash) using tenant's signing key</td><td>Forgery is mathematically impossible</td></tr>
+  <tr><td>expires_at</td><td>now + 24 hours</td><td>Stolen tokens expire automatically</td></tr>
+  <tr><td>status</td><td>ACTIVE → CONSUMED (Phase 4 sets this atomically)</td><td>No replay attacks — token cannot be reused after execution</td></tr>
+</table>
+
+<p>The scope field is set to <strong>EXECUTE_CREDIT_MEMO</strong> — the token can only be used to issue a credit memo. It cannot be used to execute a wire transfer or any other action.</p>
+
+<p class="italic">Think of it like a time-limited, single-use key card that opens one specific door — and burns itself the moment it's used.</p>
+
+<hr class="divider">
+
+<h2>What Phase 3 Produced for SC-001</h2>
+<table>
+  <tr><th>Service</th><th>What ran</th><th>What was produced</th></tr>
+  <tr><td>Evidence Service</td><td>3 items hashed + Merkle root computed</td><td>evidence_bundle (3 items) · Merkle root: f0c2db94… · evidence.bundled × 3 on Kafka</td></tr>
+  <tr><td>Reasoning Service</td><td>SC-001 confidence formula applied</td><td>finding (confidence=0.96, signed) · proposal (CREDIT_MEMO ₹4,500 by ravi) · finding.created on Kafka</td></tr>
+  <tr><td>Governance Service</td><td>SoD check + Ramu approves</td><td>approval_task (PENDING → APPROVED) · governance_decision (signed) · case: PENDING_APPROVAL → APPROVED · decision.made on Kafka</td></tr>
+  <tr><td>Token Service</td><td>Mint EXECUTE token</td><td>governance_token (ACTIVE, 24h TTL) · tenant_binding SHA-256 · token_hash SHA-256 · token.issued on Kafka</td></tr>
+</table>
+
+<h2>The Full Kafka Event Trail After Phase 3</h2>
+<table>
+  <tr><th>Event</th><th>Published by</th><th>Consumed by (next)</th></tr>
+  <tr><td>invoice.received</td><td>Ingestion Service</td><td>Validation Service</td></tr>
+  <tr><td>invoice.validated</td><td>Validation Service</td><td>Canonical Truth Service</td></tr>
+  <tr><td>invoice.canonical</td><td>Canonical Truth Service</td><td>Case Orchestration</td></tr>
+  <tr><td>case.opened</td><td>Case Orchestration</td><td>Evidence Service</td></tr>
+  <tr><td>case.updated</td><td>Case Orchestration / Governance</td><td>All listeners</td></tr>
+  <tr><td>evidence.bundled</td><td>Evidence Service (×3)</td><td>Reasoning Service</td></tr>
+  <tr><td>finding.created</td><td>Reasoning Service</td><td>Governance Service</td></tr>
+  <tr><td>decision.made</td><td>Governance Service</td><td>Token Service</td></tr>
+  <tr><td>token.issued</td><td>Token Service</td><td>Phase 4 Execution Gateway</td></tr>
+</table>
+
+<h2>One Line Summary</h2>
+<div class="summary-box">
+  Phase 3 took BlueDart's ₹4,500 overcharge from "detected" to "authorized" — evidence locked in a Merkle tree, confidence scored at 96%, two different humans signed off under Separation of Duties, and a one-time cryptographic token issued to authorize the recovery. Phase 4 picks up from here to move the money.
+</div>
+
+<hr class="divider">
+
+<h2>Where Things Stand After Phase 3</h2>
+<p>Four phases are complete. The system can now:</p>
+<ul>
+  <li>Receive any freight invoice and fingerprint it cryptographically</li>
+  <li>Verify the identity and permissions of every person who touches it</li>
+  <li>Detect overcharges automatically against contract rates</li>
+  <li>Open a formal dispute case with a tamper-proof state machine</li>
+  <li>Bundle evidence with a Merkle root — any tampering breaks the root</li>
+  <li>Score confidence deterministically (0.96 for SC-001)</li>
+  <li>Enforce two-human approval with Separation of Duties — self-approval is mathematically blocked</li>
+  <li>Issue a cryptographic execution token scoped to one action, one decision, one tenant, 24-hour expiry</li>
+</ul>
+
+<p style="margin-top:14px;"><strong>What comes next — Phase 4:</strong></p>
+<ul>
+  <li><strong>Execution Gateway</strong> — 8 security gates all pass before the token is consumed</li>
+  <li><strong>Connector Hub</strong> — BlueDart-CONNECTOR receives the credit instruction</li>
+  <li><strong>Reconciliation</strong> — Payment confirmed, delta recorded</li>
+  <li><strong>ACR</strong> — 8-artifact Merkle tree WORM-locked, offline verifiable by any auditor</li>
+</ul>
+
+<div class="summary-box" style="margin-top:18px;">
+  After Phase 4, the ₹4,500 will be recovered, the case closed, and the tamper-proof audit record issued — a complete chain from invoice to recovery that no one, not even Zoiko itself, can alter after the fact.
 </div>
 
 </body>

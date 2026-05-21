@@ -1,7 +1,7 @@
-"""
+﻿"""
 Phase 2 — Live Demo
 Run (from phase-2/ directory):
-    set DB_URL=postgresql://postgres:zoiko123@localhost/zoiko
+    set DB_URL=postgresql://postgres:1234@localhost/zoiko
     py -3.13 demo_phase2.py
 
 SC-001: DHL bills $220.  Contract allows $120.  Overcharge = $100.

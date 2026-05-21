@@ -1,6 +1,10 @@
 """
 Validation Service — reads contract_rates from DB, compares against the ingested invoice,
-detects overcharges, inserts validation_results, publishes invoice.validated to Kafka.
+detects overcharges, inserts validation_results, publishes zoiko.source.record.validated to Kafka.
+
+Contract rate lookup order (spec §8.1):
+  1. By lane_hash = SHA-256("zoiko/v1/lane:" + origin + "|" + dest) — exact lane match
+  2. By carrier_id — carrier-level flat rate (backward compat)
 """
 import json, hashlib, uuid
 from datetime import datetime, timezone, date
@@ -33,19 +37,39 @@ class ValidationHandler:
         source_record_id = uuid.UUID(str(source_record_id))
         today            = date.today()
 
-        # Look up all active contract rates for this carrier + tenant
+        # Compute lane_hash for spec-aligned lane-level lookup (§8.1)
+        lane_hash = "sha256:" + hashlib.sha256(
+            ("zoiko/v1/lane:" + carrier_id + "|" + currency).encode()
+        ).hexdigest()
+
         conn = psycopg2.connect(self.db_url)
         conn.autocommit = True
         cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        # Priority 1: lane-level match (spec §8.1)
         cur.execute("""
-            SELECT rate_type, rate_value, currency
+            SELECT rate_type, COALESCE(base_rate, rate_value) AS rate_value, currency
             FROM   contract_rates
-            WHERE  tenant_id   = %s
-              AND  carrier_id  = %s
-              AND  effective_on <= %s
-              AND  (expires_on IS NULL OR expires_on >= %s)
-        """, (tenant_id, carrier_id, today, today))
+            WHERE  tenant_id    = %s
+              AND  lane_hash    = %s
+              AND  COALESCE(effective_from, effective_on) <= %s
+              AND  (COALESCE(effective_to, expires_on) IS NULL
+                    OR COALESCE(effective_to, expires_on) >= %s)
+        """, (tenant_id, lane_hash, today, today))
         rates = cur.fetchall()
+
+        # Priority 2: carrier-level fallback (backward compat)
+        if not rates:
+            cur.execute("""
+                SELECT rate_type, rate_value, currency
+                FROM   contract_rates
+                WHERE  tenant_id   = %s
+                  AND  carrier_id  = %s
+                  AND  effective_on <= %s
+                  AND  (expires_on IS NULL OR expires_on >= %s)
+            """, (tenant_id, carrier_id, today, today))
+            rates = cur.fetchall()
+
         conn.close()
 
         violations: list[RateViolation] = []
@@ -121,7 +145,7 @@ class ValidationHandler:
         # Publish invoice.validated
         from kafka.producer import ZoikoProducer, KafkaMessage
         ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic     = "invoice.validated",
+            topic     = "zoiko.source.record.validated",
             key       = str(source_record_id),
             payload   = {
                 "invoice_number":    invoice_number,

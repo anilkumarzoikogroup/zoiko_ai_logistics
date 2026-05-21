@@ -64,7 +64,7 @@ class TestCanonicalIntegration:
         ing = _ingest(db_url, broker, test_tenant, unique_invoice_number)
         h   = CanonicalHandler(db_url, broker, test_tenant["slug"])
         h.canonicalize_invoice(**_canonical_args(test_tenant["id"], ing.source_record_id, unique_invoice_number))
-        assert broker.message_count("invoice.canonical") >= 1
+        assert broker.message_count("zoiko.canonical.invoice.created") >= 1
 
     def test_duplicate_invoice_number_is_idempotent(self, db_url, broker, test_tenant, unique_invoice_number):
         import psycopg2

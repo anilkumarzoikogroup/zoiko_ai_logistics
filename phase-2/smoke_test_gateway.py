@@ -1,4 +1,4 @@
-"""
+﻿"""
 API Gateway smoke test — run directly:  python smoke_test_gateway.py
 
 Hits all 6 routes in sequence and prints a pass/fail summary.
@@ -15,7 +15,7 @@ from middleware.oidc.token_verifier import TokenVerifier
 
 DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET", "zoiko-dev-secret-for-testing-only").encode()
 ISSUER     = os.getenv("ZOIKO_ISSUER",     "https://auth.zoikotech.com")
-DB_URL     = os.getenv("DB_URL",           "postgresql://postgres:zoiko123@localhost/zoiko")
+DB_URL     = os.getenv("DB_URL",           "postgresql://postgres:1234@localhost/zoiko")
 
 _minter    = TokenVerifier(dev_secret=DEV_SECRET, issuer=ISSUER)
 

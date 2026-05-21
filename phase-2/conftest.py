@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for Phase 2."""
+﻿"""Shared pytest fixtures for Phase 2."""
 import pytest
 import os
 import uuid
@@ -6,7 +6,7 @@ import uuid
 import paths  # noqa: F401 — sets up sys.path for Phase 0 + Phase 1
 
 
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:zoiko123@localhost/zoiko")
+DB_URL = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
 
 
 def _db_available() -> bool:

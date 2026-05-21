@@ -2,10 +2,10 @@
 Case Orchestration Service — opens a dispute case, manages the state machine,
 and appends APPEND-ONLY case_events for every transition.
 
-State machine:
-  OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL
-  → APPROVED → EXECUTED → RECONCILED → CLOSED
-  (any state) → REJECTED
+State machine (spec-aligned §7.5):
+  NEW → EVIDENCE_PENDING → FINDING_GENERATED → APPROVAL_PENDING
+  → EXECUTION_READY → DISPATCHED → OUTCOME_RECORDED → CLOSED
+  (any state) → ABORTED
 """
 import json, uuid
 from datetime import datetime, timezone
@@ -18,13 +18,13 @@ import shared.db  # noqa: F401 — registers UUID adapter
 from services.case_orchestration.models import CaseResult
 
 VALID_TRANSITIONS = {
-    "OPENED":            {"EVIDENCE_GATHERING", "REJECTED"},
-    "EVIDENCE_GATHERING":{"UNDER_REVIEW",       "REJECTED"},
-    "UNDER_REVIEW":      {"PENDING_APPROVAL",   "REJECTED"},
-    "PENDING_APPROVAL":  {"APPROVED",            "REJECTED"},
-    "APPROVED":          {"EXECUTED",            "REJECTED"},
-    "EXECUTED":          {"RECONCILED"},
-    "RECONCILED":        {"CLOSED"},
+    "NEW":               {"EVIDENCE_PENDING",  "ABORTED"},
+    "EVIDENCE_PENDING":  {"FINDING_GENERATED", "ABORTED"},
+    "FINDING_GENERATED": {"APPROVAL_PENDING",  "ABORTED"},
+    "APPROVAL_PENDING":  {"EXECUTION_READY",   "ABORTED"},
+    "EXECUTION_READY":   {"DISPATCHED",        "ABORTED"},
+    "DISPATCHED":        {"OUTCOME_RECORDED"},
+    "OUTCOME_RECORDED":  {"CLOSED"},
 }
 
 
@@ -51,7 +51,7 @@ class CaseHandler:
             case_id = uuid.uuid4()
             cur.execute("""
                 INSERT INTO cases (id, tenant_id, invoice_id, state, opened_at)
-                VALUES (%s, %s, %s, 'OPENED', %s)
+                VALUES (%s, %s, %s, 'NEW', %s)
                 ON CONFLICT (tenant_id, invoice_id) DO NOTHING
                 RETURNING id, state, opened_at
             """, (case_id, tenant_id, canonical_invoice_id, now))
@@ -72,7 +72,7 @@ class CaseHandler:
                     INSERT INTO case_events
                         (id, tenant_id, case_id, event_type, from_state, to_state,
                          actor_sub, payload, occurred_at)
-                    VALUES (%s, %s, %s, 'CASE_OPENED', NULL, 'OPENED', %s, %s::jsonb, %s)
+                    VALUES (%s, %s, %s, 'CASE_OPENED', NULL, 'NEW', %s, %s::jsonb, %s)
                 """, (
                     uuid.uuid4(), tenant_id, case_id,
                     actor_sub,
@@ -85,15 +85,14 @@ class CaseHandler:
             conn.close()
 
         if is_new:
-            # Publish case.opened
             from kafka.producer import ZoikoProducer, KafkaMessage
             ZoikoProducer(self.broker).publish(KafkaMessage(
-                topic     = "case.opened",
+                topic     = "zoiko.case.opened",
                 key       = str(case_id),
                 payload   = {
                     "case_id":    str(case_id),
                     "invoice_id": str(canonical_invoice_id),
-                    "state":      "OPENED",
+                    "state":      "NEW",
                 },
                 tenant_id = tenant_id,
             ))
@@ -102,7 +101,7 @@ class CaseHandler:
             case_id    = case_id,
             tenant_id  = tenant_id,
             invoice_id = canonical_invoice_id,
-            state      = "OPENED" if is_new else row["state"],
+            state      = "NEW" if is_new else row["state"],
             opened_at  = now if is_new else row["opened_at"],
             is_new     = is_new,
         )
@@ -159,10 +158,9 @@ class CaseHandler:
         finally:
             conn.close()
 
-        # Publish case.updated
         from kafka.producer import ZoikoProducer, KafkaMessage
         ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic     = "case.updated",
+            topic     = "zoiko.case.updated",
             key       = str(case_id),
             payload   = {"case_id": str(case_id), "from_state": current, "to_state": new_state},
             tenant_id = tenant_id,

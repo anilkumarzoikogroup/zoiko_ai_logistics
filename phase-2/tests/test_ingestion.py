@@ -91,7 +91,7 @@ class TestIngestionIntegration:
         conn.autocommit = True
         cur  = conn.cursor()
         cur.execute(
-            "SELECT id FROM outbox WHERE tenant_id=%s AND topic='invoice.received' "
+            "SELECT id FROM outbox WHERE tenant_id=%s AND topic='zoiko.source.record.received' "
             "AND payload->>'source_record_id' = %s",
             (test_tenant["id"], str(result.source_record_id)),
         )
@@ -103,7 +103,7 @@ class TestIngestionIntegration:
         handler = IngestionHandler(db_url, broker, test_tenant["slug"])
         inv     = _sample_invoice(unique_invoice_number)
         handler.ingest_invoice(test_tenant["id"], inv)
-        assert broker.message_count("invoice.received") >= 1
+        assert broker.message_count("zoiko.source.record.received") >= 1
 
     def test_ingest_result_has_64char_hex_hash(self, db_url, broker, test_tenant, unique_invoice_number):
         handler = IngestionHandler(db_url, broker, test_tenant["slug"])

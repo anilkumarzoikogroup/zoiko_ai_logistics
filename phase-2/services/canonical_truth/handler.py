@@ -94,7 +94,7 @@ class CanonicalHandler:
         # Publish invoice.canonical
         from kafka.producer import ZoikoProducer, KafkaMessage
         ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic     = "invoice.canonical",
+            topic     = "zoiko.canonical.invoice.created",
             key       = str(inv_id),
             payload   = {
                 "canonical_invoice_id": str(inv_id),
