@@ -17,7 +17,7 @@ const STATE_STAGE: Record<CaseState, number> = {
   NEW:               4,
   EVIDENCE_PENDING:  5,
   FINDING_GENERATED: 6,
-  APPROVAL_PENDING:  6,
+  APPROVAL_PENDING:  7,
   EXECUTION_READY:   7,
   DISPATCHED:        8,
   OUTCOME_RECORDED:  8,

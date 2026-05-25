@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { StateBadge, LoadingSpinner, EmptyState } from "@/components/shared";
+import { StateBadge, EmptyState } from "@/components/shared";
 import { formatCurrency, formatDate } from "@/utils/cn";
 import { Link } from "react-router-dom";
 import { Search } from "lucide-react";
@@ -63,7 +63,28 @@ export default function Cases() {
             </div>
           </div>
 
-          {isLoading ? <LoadingSpinner /> : filtered.length === 0 ? (
+          {isLoading ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {["Case ID","Carrier","Shipment","Amount","Overcharge","Confidence","State","Updated"].map(h => (
+                    <TableHead key={h}>{h}</TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[0,1,2,3,4].map(i => (
+                  <TableRow key={i}>
+                    {Array(8).fill(null).map((_, j) => (
+                      <TableCell key={j}>
+                        <div className="h-3 rounded-full bg-muted animate-pulse" style={{ width: j === 0 ? "80px" : j === 2 ? "120px" : "60px" }} />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : filtered.length === 0 ? (
             <EmptyState title="No cases match your filters" />
           ) : (
             <Table>

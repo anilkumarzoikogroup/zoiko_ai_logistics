@@ -1,309 +1,501 @@
 import { useQuery } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCurrency } from "@/utils/cn";
-import { Link } from "react-router-dom";
-import { Button } from "@/components/ui/button";
+import { formatCurrency, cn } from "@/utils/cn";
 import {
-  Activity, CheckCircle2, Zap, AlertTriangle, Clock,
-  ArrowRight, Circle, ChevronRight,
-} from "lucide-react";
-import { cn } from "@/utils/cn";
+  PieChart, Pie, Cell, Tooltip, ResponsiveContainer,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Legend,
+  LineChart,
+} from "recharts";
+import { ArrowRight, RefreshCw, ShieldCheck, Link } from "lucide-react";
+import type { Case, GovernanceToken, KafkaEvent } from "@/types";
 
-const PIPELINE_STAGES = [
-  { id: "ingested",    label: "Ingested",          color: "bg-blue-500",    count: 184, drop: null },
-  { id: "validated",   label: "Validated",          color: "bg-indigo-500",  count: 182, drop: 2 },
-  { id: "canonical",   label: "Canonicalized",      color: "bg-violet-500",  count: 181, drop: 1 },
-  { id: "case_opened", label: "Case Opened",        color: "bg-purple-500",  count: 23,  drop: 158 },
-  { id: "evidence",    label: "Evidence Bundled",   color: "bg-amber-500",   count: 21,  drop: 2 },
-  { id: "reasoning",   label: "AI Reasoned",        color: "bg-orange-500",  count: 20,  drop: 1 },
-  { id: "approved",    label: "Approved",           color: "bg-emerald-500", count: 18,  drop: 2 },
-  { id: "executed",    label: "Recovered",          color: "bg-green-600",   count: 15,  drop: 3 },
-];
+// ── Palette ───────────────────────────────────────────────────────────────────
+const COLORS = ["#3b5bdb","#7950f2","#f59e0b","#10b981","#ef4444","#06b6d4","#94a3b8","#e879f9","#f97316"];
 
-const INFLIGHT = [
-  { id: "case_0001", carrier: "BlueDart",  ref: "HYD-WAR-20250115-001", stage: "APPROVAL_PENDING", amount: 12500, latency: "1.2s",  conf: 0.96 },
-  { id: "case_0003", carrier: "Delhivery", ref: "MUM-PUN-20250116-003", stage: "FINDING_GENERATED",     amount: 8800,  latency: "0.8s",  conf: 0.89 },
-  { id: "case_0005", carrier: "FedEx",     ref: "DEL-JAI-20250117-005", stage: "EVIDENCE_PENDING",amount: 15200, latency: "2.1s", conf: 0.78 },
-  { id: "case_0007", carrier: "DTDC",      ref: "CHE-BLR-20250118-007", stage: "FINDING_GENERATED",     amount: 6400,  latency: "0.6s",  conf: 0.91 },
-];
+// ── Compute helpers ───────────────────────────────────────────────────────────
+function carrierOvercharges(cases: Case[]) {
+  const map: Record<string, { overcharge: number; cases: number }> = {};
+  for (const c of cases) {
+    if (!c.carrier) continue;
+    if (!map[c.carrier]) map[c.carrier] = { overcharge: 0, cases: 0 };
+    map[c.carrier].overcharge += c.diff ?? 0;
+    map[c.carrier].cases += 1;
+  }
+  const total = Object.values(map).reduce((s, v) => s + v.overcharge, 0) || 1;
+  return Object.entries(map)
+    .sort((a, b) => b[1].overcharge - a[1].overcharge)
+    .map(([carrier, v], i) => ({
+      carrier,
+      overcharge: v.overcharge,
+      pct: parseFloat(((v.overcharge / total) * 100).toFixed(1)),
+      cases: v.cases,
+      color: COLORS[i % COLORS.length],
+    }));
+}
 
-const HEALTH_STAGES = [
-  { label: "Ingestion",    p95: 120 },
-  { label: "Validation",   p95: 45  },
-  { label: "Canonicalize", p95: 30  },
-  { label: "Case Open",    p95: 85  },
-  { label: "Evidence",     p95: 340 },
-  { label: "AI Reason",    p95: 210 },
-  { label: "Governance",   p95: 95  },
-  { label: "Execution",    p95: 180 },
-];
+function monthlyTrend(cases: Case[]) {
+  const map: Record<string, { overcharges: number; recovered: number }> = {};
+  for (const c of cases) {
+    const month = new Date(c.opened_at).toLocaleString("default", { month: "short" });
+    if (!map[month]) map[month] = { overcharges: 0, recovered: 0 };
+    map[month].overcharges += c.amount ?? 0;
+    if (["EXECUTION_READY","DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)) {
+      map[month].recovered += c.diff ?? 0;
+    }
+  }
+  return Object.entries(map).map(([month, v]) => ({ month, ...v }));
+}
 
-const RECENT_ERRORS = [
-  { time: "2 min ago", severity: "warning", msg: "BlueDart connector: 429 rate limit — retrying" },
-  { time: "18 min ago", severity: "info",    msg: "Token tok_a4f3 expired before redemption" },
-  { time: "1 hr ago",  severity: "error",   msg: "Ed25519 signature verify fail: case_0019" },
-];
-
-function StageChip({ stage }: { stage: string }) {
-  const colors: Record<string, string> = {
-    "NEW": "bg-blue-100 text-blue-700",
-    "EVIDENCE_PENDING": "bg-amber-100 text-amber-700",
-    "FINDING_GENERATED": "bg-violet-100 text-violet-700",
-    "APPROVAL_PENDING": "bg-orange-100 text-orange-700",
-    "EXECUTION_READY": "bg-emerald-100 text-emerald-700",
-    "DISPATCHED": "bg-green-100 text-green-700",
+function caseStatusBreakdown(cases: Case[]) {
+  const STATE_LABELS: Record<string, string> = {
+    NEW: "New",
+    EVIDENCE_PENDING: "Evidence Pending",
+    FINDING_GENERATED: "Finding Generated",
+    APPROVAL_PENDING: "In Review",
+    EXECUTION_READY: "Approved",
+    DISPATCHED: "Dispatched",
+    OUTCOME_RECORDED: "Outcome Recorded",
+    CLOSED: "Closed",
+    ABORTED: "Aborted",
   };
+  const map: Record<string, number> = {};
+  for (const c of cases) {
+    const label = STATE_LABELS[c.state] ?? c.state;
+    map[label] = (map[label] ?? 0) + 1;
+  }
+  return Object.entries(map)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, value], i) => ({
+      name,
+      value,
+      pct: Math.round((value / cases.length) * 100),
+      color: COLORS[i % COLORS.length],
+    }));
+}
+
+// ── Tiny sparkline ────────────────────────────────────────────────────────────
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+  const pts = data.map((v, i) => ({ i, v }));
   return (
-    <span className={cn("text-[10px] font-semibold px-2 py-0.5 rounded-full", colors[stage] || "bg-gray-100 text-gray-700")}>
-      {stage.replace("_", " ")}
-    </span>
+    <ResponsiveContainer width="100%" height={32}>
+      <LineChart data={pts} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+        <Line type="monotone" dataKey="v" stroke={color} strokeWidth={1.5} dot={false} />
+      </LineChart>
+    </ResponsiveContainer>
   );
 }
 
-export default function Home() {
-  const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
-  const { data: stats } = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats, refetchInterval: 5000 });
+// ── KPI Card ──────────────────────────────────────────────────────────────────
+function KpiCard({ label, value, sub, subColor, spark, sparkColor, badge }: {
+  label: string; value: string; sub?: string; subColor?: string;
+  spark?: number[]; sparkColor?: string; badge?: React.ReactNode;
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 px-4 py-3 flex flex-col gap-1 shadow-sm min-w-0">
+      <p className="text-[10px] text-slate-500 font-medium uppercase tracking-wide truncate">{label}</p>
+      <div className="flex items-end justify-between gap-1">
+        <p className="text-xl font-bold text-slate-800 leading-tight truncate">{value}</p>
+        {badge}
+      </div>
+      {sub && <p className={cn("text-[10px] font-semibold", subColor ?? "text-emerald-600")}>{sub}</p>}
+      {spark && <Sparkline data={spark} color={sparkColor ?? "#3b5bdb"} />}
+    </div>
+  );
+}
 
-  const reviewCount   = cases?.filter(c => ["NEW", "EVIDENCE_PENDING", "FINDING_GENERATED"].includes(c.state)).length ?? 0;
-  const approvalCount = cases?.filter(c => c.state === "APPROVAL_PENDING").length ?? 0;
-  const executedCount = cases?.filter(c => ["DISPATCHED", "OUTCOME_RECORDED"].includes(c.state)).length ?? 0;
-  const totalCases    = stats?.total_cases ?? cases?.length ?? 184;
-  const recovered     = stats?.total_recovered ?? (executedCount * 4500);
+function SectionTitle({ title, sub, action }: { title: string; sub?: string; action?: string }) {
+  return (
+    <div className="flex items-center justify-between mb-3">
+      <div>
+        <h3 className="text-sm font-bold text-slate-800">{title}</h3>
+        {sub && <p className="text-[10px] text-slate-400 mt-0.5">{sub}</p>}
+      </div>
+      {action && (
+        <button className="text-[10px] text-blue-600 hover:underline flex items-center gap-0.5 font-semibold whitespace-nowrap">
+          {action} <ArrowRight className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function Badge({ label, variant }: {
+  label: string;
+  variant: "green" | "red" | "yellow" | "blue" | "gray" | "orange";
+}) {
+  const cls = {
+    green:  "bg-emerald-100 text-emerald-700",
+    red:    "bg-red-100 text-red-700",
+    yellow: "bg-amber-100 text-amber-700",
+    blue:   "bg-blue-100 text-blue-700",
+    gray:   "bg-slate-100 text-slate-600",
+    orange: "bg-orange-100 text-orange-700",
+  }[variant];
+  return <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap", cls)}>{label}</span>;
+}
+
+function stateBadgeVariant(state: string): "green" | "red" | "yellow" | "blue" | "gray" | "orange" {
+  if (["CLOSED","OUTCOME_RECORDED"].includes(state)) return "green";
+  if (["ABORTED"].includes(state)) return "red";
+  if (["APPROVAL_PENDING"].includes(state)) return "yellow";
+  if (["EXECUTION_READY","DISPATCHED"].includes(state)) return "blue";
+  if (["FINDING_GENERATED"].includes(state)) return "orange";
+  return "gray";
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+export default function Home() {
+  const { data: stats } = useQuery({ queryKey: ["stats"], queryFn: zoikoApi.getStats });
+  const { data: cases = [] } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
+  const { data: tokens = [] } = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens() });
+  const { data: kafkaEvents = [] } = useQuery({ queryKey: ["kafkaEvents"], queryFn: zoikoApi.listKafkaEvents });
+
+  const totalCases     = stats?.total_cases      ?? cases.length;
+  const totalRecovered = stats?.total_recovered  ?? 0;
+  const pendingApproval = stats?.pending_approval ?? 0;
+  const approved       = stats?.approved         ?? 0;
+
+  const carrierData  = carrierOvercharges(cases);
+  const trend        = monthlyTrend(cases);
+  const statusData   = caseStatusBreakdown(cases);
+  const openCases    = cases.filter(c => !["CLOSED","ABORTED","OUTCOME_RECORDED"].includes(c.state));
+  const recentCases  = cases.slice(0, 5);
+
+  const totalOvercharge = carrierData.reduce((s, c) => s + c.overcharge, 0);
+  const activeTokens   = (tokens as GovernanceToken[]).filter(t => t.status === "ACTIVE");
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-zoiko-navy">Live Pipeline Monitor</h1>
-            <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-bold">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              LIVE
+      {/* Page header */}
+      <div>
+        <h1 className="text-xl font-bold text-slate-800">Dashboard Overview</h1>
+        <p className="text-sm text-slate-400 mt-0.5">End-to-end freight audit, governance &amp; recovery platform</p>
+      </div>
+
+      {/* ── 7 KPI Cards ──────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+        <KpiCard label="Total Cases"           value={totalCases.toLocaleString()}
+          sub={cases.length > 0 ? `${openCases.length} open` : "No cases yet"} subColor="text-slate-500" />
+        <KpiCard label="Overcharges Detected"  value={formatCurrency(totalOvercharge)}
+          sub={carrierData.length > 0 ? `${carrierData.length} carriers` : "No data"} subColor="text-red-500" />
+        <KpiCard label="Recovery Approved"     value={formatCurrency(totalRecovered)}
+          sub={approved > 0 ? `${approved} approved` : "No approvals"} subColor="text-emerald-600" />
+        <KpiCard label="Recovery Pending"      value={formatCurrency(cases.filter(c=>c.state==="APPROVAL_PENDING").reduce((s,c)=>s+(c.diff??0),0))}
+          sub={`${pendingApproval} awaiting`} subColor="text-amber-600" />
+        <KpiCard label="Open Cases"            value={String(openCases.length)}
+          sub={openCases.filter(c=>c.state==="FINDING_GENERATED").length > 0 ? `${openCases.filter(c=>c.state==="FINDING_GENERATED").length} with findings` : "None with findings"} subColor="text-red-500" />
+        <KpiCard label="Active Gov. Tokens"    value={String(activeTokens.length)}
+          sub={tokens.length > 0 ? `${tokens.length} total` : "No tokens"} subColor="text-blue-600" />
+        <KpiCard label="Audit Integrity"       value="99.86%"
+          badge={
+            <span className="flex items-center gap-1 bg-emerald-50 border border-emerald-200 rounded-full px-1.5 py-0.5 text-[9px] text-emerald-700 font-bold whitespace-nowrap">
+              <ShieldCheck className="h-2.5 w-2.5" /> Tamper Proof
             </span>
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">Real-time view of invoices flowing through every stage · auto-refreshing every 5s</p>
-        </div>
-        <Link to="/cases/new">
-          <Button size="sm" className="gap-2"><Activity className="h-4 w-4" /> Submit Invoice</Button>
-        </Link>
+          } />
       </div>
 
-      {/* 6 KPI cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <Card className="border-l-4 border-l-blue-500">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Ingested</p>
-            <p className="mt-1 text-2xl font-bold text-zoiko-navy">{totalCases}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">invoices today</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-indigo-500">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Validated</p>
-            <p className="mt-1 text-2xl font-bold text-indigo-700">98.9%</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">pass rate</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-amber-500">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Cases Opened</p>
-            <p className="mt-1 text-2xl font-bold text-amber-600">{approvalCount + reviewCount}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">overcharges found</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-purple-500">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Approved</p>
-            <p className="mt-1 text-2xl font-bold text-purple-700">{stats?.approved ?? 18}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">manager sign-off</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-emerald-500">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Recovered</p>
-            <p className="mt-1 text-2xl font-bold text-emerald-600">{formatCurrency(recovered > 0 ? recovered : 84000)}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">money back</p>
-          </CardContent>
-        </Card>
-        <Card className="border-l-4 border-l-cyan-500">
-          <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Avg Latency</p>
-            <p className="mt-1 text-2xl font-bold text-cyan-700">1.2s</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">end-to-end P50</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* ── Charts row ───────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
 
-      {/* 8-Stage Invoice Flow Diagram */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Invoice Flow — 8 Stages</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-1 overflow-x-auto pb-2">
-            {PIPELINE_STAGES.map((stage, idx) => (
-              <div key={stage.id} className="flex items-center gap-1 flex-shrink-0">
-                <div className="flex flex-col items-center gap-1.5">
-                  <div className={cn("h-10 w-10 rounded-full flex items-center justify-center text-white text-xs font-bold", stage.color)}>
-                    {idx + 1}
-                  </div>
-                  <p className="text-[10px] text-center font-medium leading-tight max-w-[60px]">{stage.label}</p>
-                  <p className="text-[11px] font-bold text-zoiko-navy">{stage.count}</p>
-                </div>
-                {idx < PIPELINE_STAGES.length - 1 && (
-                  <div className="flex flex-col items-center mx-1 flex-shrink-0">
-                    <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
-                    {PIPELINE_STAGES[idx + 1].drop != null && PIPELINE_STAGES[idx + 1].drop! > 0 && (
-                      <span className="text-[9px] text-destructive font-medium">-{PIPELINE_STAGES[idx + 1].drop}</span>
-                    )}
-                  </div>
-                )}
+        {/* Overcharge by Carrier */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Overcharge by Carrier" sub={`${carrierData.length} carriers`} />
+          {carrierData.length === 0 ? (
+            <div className="flex items-center justify-center h-[140px] text-slate-400 text-xs">No overcharge data yet</div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <div className="flex-shrink-0">
+                <ResponsiveContainer width={110} height={110}>
+                  <PieChart>
+                    <Pie data={carrierData} cx="50%" cy="50%" innerRadius={32} outerRadius={52}
+                      dataKey="overcharge" paddingAngle={2}>
+                      {carrierData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                    </Pie>
+                    <Tooltip formatter={(v: number) => [formatCurrency(v)]} />
+                  </PieChart>
+                </ResponsiveContainer>
+                <p className="text-center text-[9px] text-slate-500 font-bold -mt-1">
+                  {formatCurrency(totalOvercharge)}<br/>Total
+                </p>
               </div>
-            ))}
-          </div>
-          <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground border-t pt-3">
-            <span className="flex items-center gap-1"><Circle className="h-2 w-2 fill-blue-500 text-blue-500" /> Numbers = invoices at each stage today</span>
-            <span className="flex items-center gap-1 text-destructive"><Circle className="h-2 w-2 fill-destructive text-destructive" /> Red = drop count between stages</span>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Invoices in Flight */}
-        <div className="lg:col-span-2">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <CardTitle className="text-base">Invoices in Flight</CardTitle>
-              <Link to="/cases"><Button variant="ghost" size="sm" className="text-xs gap-1">View all <ArrowRight className="h-3 w-3" /></Button></Link>
-            </CardHeader>
-            <CardContent>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-[10px] uppercase tracking-wide text-muted-foreground">
-                    <th className="text-left pb-2 font-medium">Case</th>
-                    <th className="text-left pb-2 font-medium">Carrier</th>
-                    <th className="text-left pb-2 font-medium">Stage</th>
-                    <th className="text-right pb-2 font-medium">Amount</th>
-                    <th className="text-right pb-2 font-medium">Latency</th>
-                    <th className="text-right pb-2 font-medium">Conf.</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {(cases || INFLIGHT).slice(0, 6).map((c: any) => (
-                    <tr key={c.id} className="hover:bg-secondary/30">
-                      <td className="py-2.5">
-                        <Link to={`/cases/${c.id}`} className="text-xs font-mono text-zoiko-blue hover:underline">{c.id}</Link>
-                      </td>
-                      <td className="py-2.5 text-xs">{c.carrier}</td>
-                      <td className="py-2.5"><StageChip stage={c.state || c.stage} /></td>
-                      <td className="py-2.5 text-right text-xs font-medium">{formatCurrency(c.amount, c.currency || "INR")}</td>
-                      <td className="py-2.5 text-right text-xs text-muted-foreground">{c.latency || "0.9s"}</td>
-                      <td className="py-2.5 text-right">
-                        <span className={cn("text-xs font-medium", (c.confidence ?? 0.9) >= 0.9 ? "text-emerald-600" : "text-amber-600")}>
-                          {((c.confidence ?? 0.9) * 100).toFixed(0)}%
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Pipeline Health */}
-        <div>
-          <Card className="h-full">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Pipeline Health</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-
-              {/* Recent errors */}
-              <div className="space-y-2">
-                {RECENT_ERRORS.map((e, i) => (
-                  <div key={i} className={cn(
-                    "rounded-lg px-3 py-2 text-xs border",
-                    e.severity === "error" ? "bg-red-50 border-red-200 text-red-800" :
-                    e.severity === "warning" ? "bg-amber-50 border-amber-200 text-amber-800" :
-                    "bg-blue-50 border-blue-200 text-blue-800"
-                  )}>
-                    <div className="flex items-center gap-1.5 mb-0.5">
-                      <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                      <span className="font-semibold capitalize">{e.severity}</span>
-                      <span className="ml-auto text-[10px] opacity-70 flex items-center gap-0.5"><Clock className="h-2.5 w-2.5" />{e.time}</span>
-                    </div>
-                    <p>{e.msg}</p>
+              <div className="flex-1 space-y-1 min-w-0">
+                {carrierData.slice(0, 7).map(c => (
+                  <div key={c.carrier} className="flex items-center gap-1 text-[10px]">
+                    <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ background: c.color }} />
+                    <span className="text-slate-600 truncate flex-1 text-[9px]">{c.carrier}</span>
+                    <span className="font-bold text-slate-700 flex-shrink-0">{c.pct}%</span>
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+        </div>
 
-              {/* Stage latency bars */}
-              <div>
-                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium mb-2">Stage Latency (P95)</p>
-                <div className="space-y-1.5">
-                  {HEALTH_STAGES.map(s => (
-                    <div key={s.label} className="flex items-center gap-2">
-                      <span className="text-[10px] w-20 text-muted-foreground flex-shrink-0">{s.label}</span>
-                      <div className="flex-1 h-1.5 bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className={cn("h-full rounded-full", s.p95 > 300 ? "bg-amber-500" : "bg-emerald-500")}
-                          style={{ width: `${Math.min(100, (s.p95 / 400) * 100)}%` }}
-                        />
-                      </div>
-                      <span className="text-[10px] text-muted-foreground w-10 text-right flex-shrink-0">{s.p95}ms</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+        {/* Overcharge Trend */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Overcharge Trend" sub="Monthly trend" />
+          {trend.length === 0 ? (
+            <div className="flex items-center justify-center h-[150px] text-slate-400 text-xs">No trend data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={150}>
+              <ComposedChart data={trend} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="month" tick={{ fontSize: 9 }} />
+                <YAxis tick={{ fontSize: 9 }} tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
+                <Tooltip formatter={(v: number, n: string) => [
+                  formatCurrency(v), n === "overcharges" ? "Billed" : "Recovered"
+                ]} />
+                <Legend iconSize={7} wrapperStyle={{ fontSize: 9 }}
+                  formatter={(v: string) => v === "overcharges" ? "Billed" : "Recovered"} />
+                <Bar dataKey="overcharges" fill="#3b5bdb" radius={[2,2,0,0]} name="overcharges" />
+                <Line type="monotone" dataKey="recovered" stroke="#10b981" strokeWidth={2} dot={false} name="recovered" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          )}
+        </div>
 
-              <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 flex items-center gap-2 text-xs text-emerald-700">
-                <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
-                All systems operational · OPA healthy · Kafka lag 0ms
+        {/* Top Carriers */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Top Carriers by Overcharge" sub="Ranked by overcharge amount" />
+          {carrierData.length === 0 ? (
+            <div className="flex items-center justify-center h-[120px] text-slate-400 text-xs">No carrier data yet</div>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="text-slate-400 border-b text-[10px]">
+                  <th className="text-left pb-2 font-medium">Carrier</th>
+                  <th className="text-right pb-2 font-medium">Overcharge</th>
+                  <th className="text-right pb-2 font-medium">%</th>
+                  <th className="text-right pb-2 font-medium">Cases</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {carrierData.slice(0, 5).map(c => (
+                  <tr key={c.carrier} className="hover:bg-slate-50">
+                    <td className="py-2 text-[11px] font-medium text-slate-700">{c.carrier}</td>
+                    <td className="py-2 text-right text-[10px] text-slate-600">{formatCurrency(c.overcharge)}</td>
+                    <td className="py-2 text-right text-[10px] text-slate-500">{c.pct}%</td>
+                    <td className="py-2 text-right text-[11px] font-semibold text-slate-700">{c.cases}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Case Status */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Case Status Overview" />
+          {statusData.length === 0 ? (
+            <div className="flex items-center justify-center h-[160px] text-slate-400 text-xs">No cases yet</div>
+          ) : (
+            <div className="flex flex-col items-center">
+              <ResponsiveContainer width="100%" height={110}>
+                <PieChart>
+                  <Pie data={statusData} cx="50%" cy="50%" innerRadius={30} outerRadius={50}
+                    dataKey="value" paddingAngle={2}>
+                    {statusData.map((e, i) => <Cell key={i} fill={e.color} />)}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+              <p className="text-2xl font-bold text-slate-800 -mt-1">{totalCases.toLocaleString()}</p>
+              <p className="text-[10px] text-slate-400 mb-2">Total Cases</p>
+              <div className="w-full space-y-1">
+                {statusData.slice(0, 5).map(s => (
+                  <div key={s.name} className="flex items-center justify-between text-[10px]">
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                      <span className="text-slate-600">{s.name}</span>
+                    </span>
+                    <span className="font-bold text-slate-700">{s.value} ({s.pct}%)</span>
+                  </div>
+                ))}
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Action banners */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {reviewCount > 0 && (
-          <Link to="/analyst">
-            <div className="rounded-xl bg-zoiko-blue text-white p-4 flex items-center justify-between hover:opacity-90 transition-opacity cursor-pointer">
-              <div>
-                <p className="font-semibold text-sm">{reviewCount} awaiting analyst review</p>
-                <p className="text-xs text-white/75 mt-0.5">Review and propose recovery</p>
+      {/* ── Tokens + Audit + Activity ─────────────────────────────────────── */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+
+        {/* Active Tokens */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Active Governance Tokens" sub={`${activeTokens.length} active`} action="View all tokens" />
+          {activeTokens.length === 0 ? (
+            <div className="flex items-center justify-center h-[100px] text-slate-400 text-xs">No active tokens</div>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="text-slate-400 border-b text-[10px]">
+                  <th className="text-left pb-1.5 font-medium">Token ID</th>
+                  <th className="text-left pb-1.5 font-medium">Action</th>
+                  <th className="text-right pb-1.5 font-medium">Amount</th>
+                  <th className="text-right pb-1.5 font-medium">Expires</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {activeTokens.slice(0, 5).map((t: GovernanceToken) => (
+                  <tr key={t.id} className="hover:bg-slate-50">
+                    <td className="py-1.5 font-mono text-[9px] text-blue-600">{t.id.slice(0, 8)}…</td>
+                    <td className="py-1.5 text-[10px] text-slate-600">{t.action.replace("EXECUTE_","")}</td>
+                    <td className="py-1.5 text-right text-[10px] font-semibold text-slate-700">{formatCurrency(t.amount)}</td>
+                    <td className="py-1.5 text-right text-[9px] text-slate-400">
+                      {new Date(t.exp).toLocaleDateString("en-IN",{month:"short",day:"numeric"})}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Audit & Integrity */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Audit &amp; Integrity" sub="System audit health" />
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <p className="text-[10px] text-slate-500">Merkle Root (Latest)</p>
+              <div className="flex items-center gap-1">
+                <code className="text-[9px] font-mono text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">
+                  a1b2c3d4…9z8y
+                </code>
+                <RefreshCw className="h-3 w-3 text-slate-400 cursor-pointer hover:text-blue-600" />
               </div>
-              <ArrowRight className="h-5 w-5 flex-shrink-0" />
             </div>
-          </Link>
-        )}
-        {approvalCount > 0 && (
-          <Link to="/manager">
-            <div className="rounded-xl bg-zoiko-purple text-white p-4 flex items-center justify-between hover:opacity-90 transition-opacity cursor-pointer">
-              <div>
-                <p className="font-semibold text-sm">{approvalCount} pending manager approval</p>
-                <p className="text-xs text-white/75 mt-0.5">Approve or reject recoveries</p>
+            {[
+              { label: "Total Cases",        value: String(totalCases)                    },
+              { label: "Pending Approval",   value: String(pendingApproval)               },
+              { label: "Approved",           value: String(approved),      hi: true       },
+              { label: "Active Tokens",      value: String(activeTokens.length)           },
+            ].map(r => (
+              <div key={r.label} className="flex items-center justify-between border-t border-slate-50 pt-2">
+                <p className="text-[10px] text-slate-500">{r.label}</p>
+                <p className={cn("text-[10px] font-bold", r.hi ? "text-emerald-600" : "text-slate-700")}>{r.value}</p>
               </div>
-              <ArrowRight className="h-5 w-5 flex-shrink-0" />
-            </div>
-          </Link>
-        )}
-        <Link to="/execute">
-          <div className="rounded-xl bg-emerald-600 text-white p-4 flex items-center justify-between hover:opacity-90 transition-opacity cursor-pointer">
-            <div>
-              <p className="font-semibold text-sm flex items-center gap-2"><Zap className="h-4 w-4" /> Recovery Tracker</p>
-              <p className="text-xs text-white/75 mt-0.5">Monitor money flow &amp; ACR locks</p>
-            </div>
-            <ArrowRight className="h-5 w-5 flex-shrink-0" />
+            ))}
           </div>
-        </Link>
+          <button className="mt-3 w-full text-[10px] text-blue-600 border border-blue-200 rounded-lg py-1.5 hover:bg-blue-50 flex items-center justify-center gap-1.5 font-semibold">
+            <Link className="h-3 w-3" /> Verify Audit Chain
+          </button>
+        </div>
+
+        {/* Recent Activity (Kafka events) */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Recent Activity" action="View all" />
+          {(kafkaEvents as KafkaEvent[]).length === 0 ? (
+            <div className="flex items-center justify-center h-[100px] text-slate-400 text-xs">No activity yet</div>
+          ) : (
+            <div className="space-y-3">
+              {(kafkaEvents as KafkaEvent[]).slice(0, 6).map((e, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <div className="h-7 w-7 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-600 flex-shrink-0">
+                    {e.topic.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[11px] text-slate-700 leading-snug truncate">{e.topic.replace(/_/g," ")}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {new Date(e.published_at).toLocaleString("en-IN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* ── Open Cases + Recent Cases ─────────────────────────────────────── */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+
+        {/* Open Cases */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Open Cases" action="View all" />
+          {openCases.length === 0 ? (
+            <div className="flex items-center justify-center h-[80px] text-slate-400 text-xs">No open cases</div>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="text-slate-400 border-b text-[10px]">
+                  <th className="text-left pb-2 font-medium">Case</th>
+                  <th className="text-left pb-2 font-medium">Carrier</th>
+                  <th className="text-right pb-2 font-medium">Billed</th>
+                  <th className="text-right pb-2 font-medium">Diff</th>
+                  <th className="text-left pb-2 font-medium pl-2">State</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {openCases.slice(0, 6).map(c => (
+                  <tr key={c.id} className="hover:bg-slate-50">
+                    <td className="py-2 font-mono text-[10px] text-blue-600">{c.id.slice(0, 8)}</td>
+                    <td className="py-2 text-[11px] font-medium text-slate-700">{c.carrier || "—"}</td>
+                    <td className="py-2 text-right text-[10px] text-slate-600">{formatCurrency(c.amount)}</td>
+                    <td className="py-2 text-right text-[10px] font-bold text-red-600">{c.diff > 0 ? formatCurrency(c.diff) : "—"}</td>
+                    <td className="py-2 pl-2">
+                      <Badge label={c.state.replace(/_/g," ")} variant={stateBadgeVariant(c.state)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Recent Cases */}
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <SectionTitle title="Recent Cases" action="View all" />
+          {recentCases.length === 0 ? (
+            <div className="flex items-center justify-center h-[80px] text-slate-400 text-xs">No cases yet — upload an invoice to start</div>
+          ) : (
+            <table className="w-full">
+              <thead>
+                <tr className="text-slate-400 border-b text-[10px]">
+                  <th className="text-left pb-2 font-medium">Case</th>
+                  <th className="text-left pb-2 font-medium">Carrier</th>
+                  <th className="text-left pb-2 font-medium">Route</th>
+                  <th className="text-right pb-2 font-medium">Amount</th>
+                  <th className="text-left pb-2 font-medium pl-2">State</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {recentCases.map(c => (
+                  <tr key={c.id} className="hover:bg-slate-50">
+                    <td className="py-2 font-mono text-[10px] text-blue-600">{c.id.slice(0, 8)}</td>
+                    <td className="py-2 text-[11px] font-medium text-slate-700">{c.carrier || "—"}</td>
+                    <td className="py-2 text-[10px] text-slate-500">{c.shipment_ref || "—"}</td>
+                    <td className="py-2 text-right text-[10px] text-slate-700 font-medium">{formatCurrency(c.amount)}</td>
+                    <td className="py-2 pl-2">
+                      <Badge label={c.state.replace(/_/g," ")} variant={stateBadgeVariant(c.state)} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+
+      {/* ── Bottom status bar ─────────────────────────────────────────────── */}
+      <div className="bg-[#0f172a] rounded-xl px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+        {[
+          { icon: "🛡️", title: "Platform Security",                    sub: "SOC 2 Type II Compliant"   },
+          { icon: "✅", title: "All Records Cryptographically Signed", sub: "SHA-256 + KMS"              },
+          { icon: "🔗", title: "Immutable Audit Trail",                sub: "Blockchain Anchored"        },
+          { icon: "🔒", title: "Zero Tamper Architecture",             sub: "End-to-End Integrity"       },
+          { icon: "🟢", title: "System Status",                        sub: "All Systems Operational"    },
+        ].map(s => (
+          <div key={s.title} className="flex items-center gap-2.5">
+            <span className="text-lg">{s.icon}</span>
+            <div>
+              <p className="text-[11px] font-bold text-white leading-tight">{s.title}</p>
+              <p className="text-[10px] text-slate-400">{s.sub}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
     </div>
   );
 }

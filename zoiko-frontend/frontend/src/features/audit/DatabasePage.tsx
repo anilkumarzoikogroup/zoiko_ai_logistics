@@ -1,35 +1,37 @@
+import { useQuery } from "@tanstack/react-query";
+import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/utils/cn";
-import { Database, Lock, Shield } from "lucide-react";
+import { Database, Lock, Shield, RefreshCw } from "lucide-react";
 
-const TABLES = [
-  { name: "tenants",                      group: "Tenant",          append: false, rls: true,  rows: 3   },
-  { name: "tenant_keys",                  group: "Tenant",          append: false, rls: true,  rows: 9   },
-  { name: "source_records",               group: "Ingestion",       append: false, rls: true,  rows: 47  },
-  { name: "lineage_records",              group: "Ingestion",       append: true,  rls: true,  rows: 184 },
-  { name: "validation_results",           group: "Validation",      append: false, rls: true,  rows: 47  },
-  { name: "canonical_invoices",           group: "Canonical",       append: false, rls: true,  rows: 47  },
-  { name: "canonical_shipments",          group: "Canonical",       append: false, rls: true,  rows: 47  },
-  { name: "contract_rates",               group: "Canonical",       append: false, rls: true,  rows: 25  },
-  { name: "cases",                        group: "Case",            append: false, rls: true,  rows: 47  },
-  { name: "case_events",                  group: "Case",            append: true,  rls: true,  rows: 312 },
-  { name: "evidence_bundles",             group: "Evidence",        append: false, rls: true,  rows: 31  },
-  { name: "evidence_items",               group: "Evidence",        append: true,  rls: true,  rows: 94  },
-  { name: "findings",                     group: "Reasoning",       append: false, rls: true,  rows: 28  },
-  { name: "decision_proposals",           group: "Reasoning",       append: false, rls: true,  rows: 28  },
-  { name: "policy_bundles",               group: "Governance",      append: false, rls: false, rows: 4   },
-  { name: "governance_decisions",         group: "Governance",      append: false, rls: true,  rows: 26  },
-  { name: "approval_tasks",               group: "Governance",      append: false, rls: true,  rows: 28  },
-  { name: "governance_tokens",            group: "Token",           append: false, rls: true,  rows: 26  },
-  { name: "idempotency_keys",             group: "Infrastructure",  append: false, rls: true,  rows: 412 },
-  { name: "execution_envelopes",          group: "Execution",       append: false, rls: true,  rows: 0   },
-  { name: "connector_responses",          group: "Execution",       append: false, rls: true,  rows: 0   },
-  { name: "reconciliations",              group: "Reconciliation",  append: false, rls: true,  rows: 0   },
-  { name: "outcomes",                     group: "Reconciliation",  append: false, rls: true,  rows: 0   },
-  { name: "action_certification_records", group: "Audit",           append: false, rls: true,  rows: 0   },
-  { name: "outbox",                       group: "Infrastructure",  append: false, rls: false, rows: 528 },
-  { name: "audit_worm_index",             group: "Audit",           append: true,  rls: false, rows: 0   },
-];
+const TABLE_META: Record<string, { group: string; append: boolean; rls: boolean }> = {
+  tenants:                      { group: "Tenant",         append: false, rls: true  },
+  tenant_keys:                  { group: "Tenant",         append: false, rls: true  },
+  source_records:               { group: "Ingestion",      append: false, rls: true  },
+  lineage_records:              { group: "Ingestion",      append: true,  rls: true  },
+  validation_results:           { group: "Validation",     append: false, rls: true  },
+  canonical_invoices:           { group: "Canonical",      append: false, rls: true  },
+  canonical_shipments:          { group: "Canonical",      append: false, rls: true  },
+  contract_rates:               { group: "Canonical",      append: false, rls: true  },
+  cases:                        { group: "Case",           append: false, rls: true  },
+  case_events:                  { group: "Case",           append: true,  rls: true  },
+  evidence_bundles:             { group: "Evidence",       append: false, rls: true  },
+  evidence_items:               { group: "Evidence",       append: true,  rls: true  },
+  findings:                     { group: "Reasoning",      append: false, rls: true  },
+  decision_proposals:           { group: "Reasoning",      append: false, rls: true  },
+  policy_bundles:               { group: "Governance",     append: false, rls: false },
+  governance_decisions:         { group: "Governance",     append: false, rls: true  },
+  approval_tasks:               { group: "Governance",     append: false, rls: true  },
+  governance_tokens:            { group: "Token",          append: false, rls: true  },
+  idempotency_keys:             { group: "Infrastructure", append: false, rls: true  },
+  execution_envelopes:          { group: "Execution",      append: false, rls: true  },
+  connector_responses:          { group: "Execution",      append: false, rls: true  },
+  reconciliations:              { group: "Reconciliation", append: false, rls: true  },
+  outcomes:                     { group: "Reconciliation", append: false, rls: true  },
+  action_certification_records: { group: "Audit",          append: false, rls: true  },
+  outbox:                       { group: "Infrastructure", append: false, rls: false },
+  audit_worm_index:             { group: "Audit",          append: true,  rls: false },
+};
 
 const GROUP_COLORS: Record<string, string> = {
   "Tenant":          "bg-slate-100 text-slate-700",
@@ -47,39 +49,69 @@ const GROUP_COLORS: Record<string, string> = {
   "Audit":           "bg-rose-100 text-rose-700",
 };
 
-const groups = [...new Set(TABLES.map(t => t.group))];
-
 export default function DatabasePage() {
-  const totalRows = TABLES.reduce((s, t) => s + t.rows, 0);
-  const appendOnly = TABLES.filter(t => t.append).length;
-  const rlsEnabled = TABLES.filter(t => t.rls).length;
+  const { data: dbStats = [], isLoading, refetch, isFetching } = useQuery({
+    queryKey: ["db-stats"],
+    queryFn: zoikoApi.getDbStats,
+    refetchInterval: 60_000,
+  });
+
+  const rowMap: Record<string, number> = {};
+  for (const s of dbStats) rowMap[s.table] = s.rows;
+
+  const tables = Object.entries(TABLE_META).map(([name, meta]) => ({
+    name,
+    ...meta,
+    rows: rowMap[name] ?? 0,
+  }));
+
+  const groups = [...new Set(tables.map(t => t.group))];
+  const totalRows  = tables.reduce((s, t) => s + t.rows, 0);
+  const appendOnly = tables.filter(t => t.append).length;
+  const rlsEnabled = tables.filter(t => t.rls).length;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-zoiko-navy">Database Schema</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          PostgreSQL · 26 tables · Row-Level Security · Append-only audit tables.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-zoiko-navy">Database Schema</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            PostgreSQL · {tables.length} tables · Row-Level Security · Append-only audit tables · Live row counts
+          </p>
+        </div>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground border rounded-lg px-3 py-1.5 bg-white transition-colors"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", isFetching && "animate-spin")} />
+          Refresh
+        </button>
       </div>
 
       {/* Summary KPIs */}
       <div className="grid grid-cols-3 gap-4">
         <Card className="border-l-4 border-l-zoiko-navy">
           <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Total Rows</p>
-            <p className="text-2xl font-bold mt-1">{totalRows.toLocaleString()}</p>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Total Rows (Live)</p>
+            <p className="text-2xl font-bold mt-1">
+              {isLoading ? <span className="text-muted-foreground text-base">Loading…</span> : totalRows.toLocaleString()}
+            </p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-amber-500">
           <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium flex items-center gap-1"><Lock className="h-3 w-3" />Append-Only</p>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium flex items-center gap-1">
+              <Lock className="h-3 w-3" />Append-Only
+            </p>
             <p className="text-2xl font-bold mt-1">{appendOnly} tables</p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-emerald-500">
           <CardContent className="pt-4 pb-4">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium flex items-center gap-1"><Shield className="h-3 w-3" />RLS Enabled</p>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium flex items-center gap-1">
+              <Shield className="h-3 w-3" />RLS Enabled
+            </p>
             <p className="text-2xl font-bold mt-1">{rlsEnabled} tables</p>
           </CardContent>
         </Card>
@@ -88,7 +120,7 @@ export default function DatabasePage() {
       {/* Tables by group */}
       <div className="space-y-4">
         {groups.map(group => {
-          const groupTables = TABLES.filter(t => t.group === group);
+          const groupTables = tables.filter(t => t.group === group);
           const chipClass = GROUP_COLORS[group] ?? "bg-gray-100 text-gray-600";
           return (
             <Card key={group}>
@@ -96,7 +128,9 @@ export default function DatabasePage() {
                 <CardTitle className="text-sm flex items-center gap-2">
                   <Database className="h-4 w-4 text-muted-foreground" />
                   <span className={cn("px-2 py-0.5 rounded text-xs font-bold", chipClass)}>{group}</span>
-                  <span className="text-muted-foreground font-normal text-xs">({groupTables.length} table{groupTables.length > 1 ? "s" : ""})</span>
+                  <span className="text-muted-foreground font-normal text-xs">
+                    ({groupTables.length} table{groupTables.length > 1 ? "s" : ""})
+                  </span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
@@ -106,7 +140,7 @@ export default function DatabasePage() {
                       <th className="text-left py-2 font-medium">Table</th>
                       <th className="text-center py-2 font-medium">RLS</th>
                       <th className="text-center py-2 font-medium">Mode</th>
-                      <th className="text-right py-2 font-medium">Rows</th>
+                      <th className="text-right py-2 font-medium">Live Rows</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -128,9 +162,13 @@ export default function DatabasePage() {
                           }
                         </td>
                         <td className="py-2 text-right font-mono text-xs">
-                          <span className={t.rows === 0 ? "text-muted-foreground" : "text-foreground font-medium"}>
-                            {t.rows.toLocaleString()}
-                          </span>
+                          {isLoading ? (
+                            <span className="text-muted-foreground">…</span>
+                          ) : (
+                            <span className={t.rows === 0 ? "text-muted-foreground" : "text-foreground font-medium"}>
+                              {t.rows.toLocaleString()}
+                            </span>
+                          )}
                         </td>
                       </tr>
                     ))}

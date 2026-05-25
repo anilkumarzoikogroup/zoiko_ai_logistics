@@ -14,12 +14,12 @@ Zoiko detects freight overcharges automatically and recovers money through a cry
 
 | Phase | Built | Tests | What it is |
 |-------|-------|-------|-----------|
-| Phase 0 | ✅ | 86/86 | JCS + SHA-256 + Ed25519 + 26 DB tables + Streamlit dashboard |
+| Phase 0 | ✅ | 86/86 | JCS + SHA-256 + Ed25519 + 25 DB tables + Streamlit dashboard |
 | Phase 1 | ✅ | 54/54 | KMS key hierarchy + OIDC/JWT + Kafka (17 topics) + OPA policies |
-| Phase 2 | ✅ | 38/38 | Ingestion → Validation → Canonical Truth → Case Orchestration · OPA fail-closed wired · 15-min token TTL |
-| Phase 3 | ✅ | 46/46 | Evidence → Reasoning → Governance → Token · OPA wired · DEV_MODE · Redis CONSUMED lock ready |
+| Phase 2 | ✅ | 38/38 | Ingestion → Validation → Canonical Truth → Case Orchestration · OPA fail-closed · 24 API routes |
+| Phase 3 | ✅ | 46/46 | Evidence → Reasoning → Governance → Token · OPA wired · DEV_MODE · Redis CONSUMED lock |
+| Phase 5 | ✅ | — | React 18 + TypeScript + Vite frontend · fully wired to live backend · no mock data · real DB |
 | Phase 4 | ⏳ next | — | 8-gate Execution Gateway → Connector → Reconciliation → ACR |
-| Phase 5 | ⏳ | — | React/TypeScript frontend + hardening + load test |
 
 ---
 
@@ -33,6 +33,7 @@ Phase 3 reads  → case_id, writes evidence_bundles / findings / governance_toke
 Phase 4 reads  → token_id, writes execution_envelopes / reconciliations / ACR
 ```
 
+Frontend (Phase 5) talks to the Phase 2 API gateway on port 8000 via Vite proxy.
 In production each phase is a separate container communicating via Kafka events.
 In dev/tests each phase runs in the same Python process using MockKafkaBroker.
 
@@ -42,27 +43,29 @@ In dev/tests each phase runs in the same Python process using MockKafkaBroker.
 
 ```
 zoiko-logistics/
-├── dashboard.py                     ← Streamlit, all phases, 20 pages
+├── dashboard.py                     ← Streamlit, all phases
 ├── requirements.txt                 ← Single combined requirements file
+├── launch.bat                       ← One-click: DB check → backend → frontend → browser
+├── setup.bat                        ← One-time setup (venv + pip + npm install)
 ├── EXECUTION_GUIDE.md               ← Step-by-step run commands
 ├── README.md                        ← Project overview
 ├── CLAUDE.md                        ← This file
-├── zoiko_phases_story.html          ← Phase story document
 │
 ├── phase-0/packages/zoiko-common/   ← zoiko_common: jcs.py, merkle.py, signing.py
-├── phase-0/db/migrations/           ← Alembic: 0001_p0_all_tables.py (26 tables)
+├── phase-0/db/migrations/           ← Alembic: 0001_p0_all_tables.py (25 tables)
 ├── phase-0/scripts/                 ← seed_dummy_data.py, demo_sc001.py
 │
 ├── phase-1/packages/zoiko-kms/      ← zoiko_kms: hierarchy.py, local_backend.py
 ├── phase-1/middleware/oidc/         ← token_verifier.py, claims.py
-├── phase-1/middleware/opa/          ← client.py (fail-closed)
+├── phase-1/middleware/opa/          ← client.py (fail-closed), MockOPAClient
 ├── phase-1/kafka/                   ← producer.py, consumer.py, mock_kafka.py
 │
-├── phase-2/services/api_gateway/    ← app.py (6 routes), auth.py (OPA wired), models.py
+├── phase-2/services/api_gateway/    ← app.py (24 routes), auth.py (OPA wired), models.py
 ├── phase-2/services/ingestion_svc/  ← handler.py (5-step write pattern)
 ├── phase-2/services/validation_svc/ ← handler.py (contract rate engine)
 ├── phase-2/services/canonical_truth/← handler.py (authoritative row)
 ├── phase-2/services/case_orchestration/ ← handler.py (FSM)
+├── phase-2/shared/db.py             ← DB helpers (q, q1) — default DB_URL fallback
 ├── phase-2/shared/redis_idem.py     ← Redis idempotency (graceful degradation)
 ├── phase-2/demo_phase2.py           ← Full Phase 2 end-to-end demo
 ├── phase-2/smoke_test_gateway.py    ← 28-check API gateway smoke test
@@ -77,7 +80,56 @@ zoiko-logistics/
 ├── phase-3/shared/redis_idem.py     ← Redis idempotency (graceful degradation)
 ├── phase-3/shared/redis_token.py    ← Redis CONSUMED lock (Phase 4 uses this)
 ├── phase-3/demo_phase3.py           ← Full Phase 3 end-to-end demo
-└── phase-3/paths.py                 ← sys.path bootstrap for Phase 3
+│
+└── zoiko-frontend/frontend/
+    ├── src/api/client.ts            ← Axios instance · auth headers · idempotency key
+    ├── src/api/zoiko.ts             ← API service layer (USE_MOCK gate on every method)
+    ├── src/features/dashboard/      ← Home.tsx, Performance.tsx (live data)
+    ├── src/features/cases/          ← NewCase.tsx, CaseDetail.tsx, RateControl.tsx, PaymentControl.tsx
+    ├── src/features/governance/     ← AnalystReview.tsx, ManagerApproval.tsx
+    ├── src/features/analytics/      ← AuditConditions.tsx
+    ├── src/features/audit/          ← Alerts.tsx, DatabasePage.tsx
+    ├── src/mocks/fixtures.ts        ← Fallback mock data (used only when VITE_USE_MOCK=true)
+    ├── src/types/index.ts           ← TypeScript types matching backend schema
+    ├── vite.config.ts               ← Dev proxy: /api → http://localhost:8000
+    └── .env.local                   ← VITE_USE_MOCK=false · VITE_API_BASE=/api
+```
+
+---
+
+## Frontend Environment Variables (.env.local)
+
+```
+VITE_USE_MOCK=false
+VITE_API_BASE=/api
+VITE_DEV_JWT=<HS256 JWT signed with zoiko-dev-secret-for-testing-only>
+VITE_DEV_TENANT=11111111-1111-1111-1111-111111111111
+```
+
+- `VITE_USE_MOCK=false` — all API calls hit the real backend (never use mock fixtures)
+- `VITE_API_BASE=/api` — routes through the Vite proxy (avoids CORS, same-origin)
+- `VITE_DEV_JWT` — injected as `Authorization: Bearer <token>` on every request
+- `VITE_DEV_TENANT` — injected as `X-Tenant-ID` on every request
+
+The Vite proxy in `vite.config.ts` rewrites `/api/*` → `http://localhost:8000/*`.
+
+**To switch back to mock mode** (no backend needed):
+```
+VITE_USE_MOCK=true
+```
+Then restart `npm run dev`.
+
+---
+
+## Backend Environment Variables (Phase 2)
+
+```
+DB_URL=postgresql://postgres:1234@localhost/zoiko
+ZOIKO_DEV_MODE=true        # bypasses JWT verification, auto-resolves tenant from X-Tenant-ID
+ZOIKO_DEV_SECRET=zoiko-dev-secret-for-testing-only   # HS256 signing secret
+ZOIKO_ISSUER=https://auth.zoikotech.com
+OPA_URL=                   # empty = MockOPAClient (allow=True); set to real OPA URL for prod
+PYTHONIOENCODING=utf-8     # required on Windows to handle ₹ and → characters
 ```
 
 ---
@@ -104,7 +156,7 @@ Phase 3 mapping:
 
 ---
 
-## DB Password and Connection
+## DB Connection
 
 ```
 DB_URL = postgresql://postgres:1234@localhost/zoiko
@@ -112,9 +164,34 @@ DB_URL = postgresql://postgres:1234@localhost/zoiko
 
 Set via: `$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"`
 
+The `shared/db.py` in both phase-2 and phase-3 defaults to this URL if `DB_URL` env var is unset.
+
 ---
 
 ## Running Commands
+
+### Start everything (recommended)
+```powershell
+.\launch.bat
+```
+
+### Backend only
+```powershell
+cd phase-2
+..\..\.venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Frontend only
+```powershell
+cd zoiko-frontend\frontend
+$env:VITE_USE_MOCK = "false"
+npm run dev
+# http://localhost:5173
+```
 
 ### Tests (each phase independently)
 ```powershell
@@ -132,11 +209,52 @@ cd phase-2; py demo_phase2.py; cd ..   # produces a case in PENDING_APPROVAL
 cd phase-3; py demo_phase3.py; cd ..   # consumes that case, produces ACTIVE token
 ```
 
-### Dashboard
+### Streamlit dashboard
 ```powershell
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 streamlit run dashboard.py
 ```
+
+### Check live API
+```powershell
+curl http://localhost:8000/health
+curl http://localhost:8000/docs         # Swagger UI with all 24 routes
+curl http://localhost:5173/api/health   # same, through Vite proxy
+```
+
+---
+
+## Phase 2 API Routes (24 total)
+
+| Route | Notes |
+|-------|-------|
+| `POST /cases/submit` | Full pipeline in one call: ingest → validate → canonical → case → evidence → finding |
+| `GET /cases` | All cases for tenant, sorted by opened_at DESC |
+| `GET /cases/{id}` | Single case with carrier/amount/diff/confidence from JOIN |
+| `GET /cases/{id}/events` | Append-only case_events audit trail |
+| `POST /cases/{id}/propose` | Analyst proposes recovery (requires role=analyst) |
+| `POST /cases/{id}/decide` | Manager approves/rejects (SoD: actor ≠ proposer) |
+| `GET /cases/{id}/validation` | Overcharge amount and rule trace |
+| `GET /cases/{id}/canonical-invoice` | Authoritative invoice row |
+| `GET /cases/{id}/finding` | AI confidence score and rule breakdown |
+| `GET /cases/{id}/proposal` | Recovery proposal details |
+| `GET /cases/{id}/acr` | Action Certification Record (post-Phase 4) |
+| `GET /tokens` | Governance tokens for tenant |
+| `GET /tokens/{id}` | Single token with status/expiry |
+| `POST /contract-rates` | Create a new contract rate |
+| `GET /contract-rates` | List all contract rates |
+| `DELETE /contract-rates/{id}` | Delete a contract rate |
+| `POST /ingestion/parse-invoice` | Upload PDF/image, extract carrier/route/amount |
+| `GET /ingestion/source-records` | Raw ingested records |
+| `GET /kafka/events` | Last N Kafka events (for Alerts page) |
+| `GET /stats` | Aggregated stats: total cases, overcharge sum, by-carrier |
+| `GET /admin/db-stats` | Live row counts from pg_stat_user_tables |
+| `GET /health` | `{"status":"ok","service":"api-gateway","version":"2.0.0"}` |
+
+Required headers on every request:
+- `Authorization: Bearer <JWT>`
+- `X-Tenant-ID: <tenant-uuid>`
+- `Idempotency-Key: <unique-string>` (mutations only)
 
 ---
 
@@ -206,7 +324,8 @@ OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL → APPROVED
                                                                           ↘ REJECTED (from any state)
 ```
 
-Phase 3 `governance_svc` transitions `PENDING_APPROVAL → APPROVED` (or `REJECTED`).
+When using `POST /cases/submit`, the case returns as `EVIDENCE_PENDING` (Phase 3 pipeline runs async).
+Phase 3 demo advances it to `FINDING_GENERATED` → `PENDING_APPROVAL`.
 
 ---
 
@@ -245,12 +364,15 @@ audit_worm_index
 | Changing SC001_CONFIDENCE | This value is deterministic — never change it |
 | Using `psycopg2.extras.register_uuid()` late | Call it before any psycopg2 connection that handles UUIDs |
 | UPDATE/DELETE on append-only tables | Only INSERT is permitted |
+| Frontend showing 47 mock cases | `VITE_USE_MOCK=false` in .env.local, then restart `npm run dev` + hard refresh browser |
+| "Submission failed" in UI | Check backend is running on port 8000: `curl http://localhost:8000/health` |
+| Backend not picking up .py changes | Kill Python process and restart uvicorn — `--reload` watches files but can miss them |
 
 ---
 
 ## OPA Wiring (Phase 2 & 3)
 
-Both gateways now call OPA after JWT verification. Behaviour by env:
+Both gateways call OPA after JWT verification. Behaviour by env:
 
 | `OPA_URL` set? | `ZOIKO_DEV_MODE` | OPA client used | Effect |
 |---------------|-----------------|-----------------|--------|
@@ -303,3 +425,4 @@ Gracefully no-ops if Redis unavailable — DB `status=CONSUMED` update is author
 - 8-gate check logic (token sig, expiry, tenant_binding, scope, sanctions, FX, connector, idempotency)
 - `token.consumed` Kafka event after execution
 - Merkle tree over 8 artifacts → ACR row → `audit_worm_index` row (APPEND-ONLY)
+- Frontend: `GET /cases/{id}/acr` already wired in zoiko.ts, page in `CaseDetail.tsx`

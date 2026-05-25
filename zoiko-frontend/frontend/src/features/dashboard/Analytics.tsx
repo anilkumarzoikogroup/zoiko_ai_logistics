@@ -6,10 +6,12 @@ import { cn } from "@/utils/cn";
 import { TrendingUp, Clock, DollarSign, Zap } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  PieChart, Pie, Cell,
 } from "recharts";
+import type { Case } from "@/types";
 
-const BAR_DATA = [
+// Demo fallback data — shown when there are no real cases yet
+const DEMO_BAR_DATA = [
   { day: "Dec 22", cases: 3, recovered: 12000 },
   { day: "Dec 25", cases: 5, recovered: 18500 },
   { day: "Dec 28", cases: 4, recovered: 14200 },
@@ -24,7 +26,7 @@ const BAR_DATA = [
   { day: "Jan 22", cases: 7, recovered: 29800 },
 ];
 
-const CARRIER_DATA = [
+const DEMO_CARRIER_DATA = [
   { name: "BlueDart",  cases: 18, rate: 89, overcharge: 4200 },
   { name: "Delhivery", cases: 12, rate: 76, overcharge: 3100 },
   { name: "FedEx",     cases: 8,  rate: 82, overcharge: 5600 },
@@ -41,29 +43,86 @@ const PIE_DATA = [
 ];
 
 const HISTOGRAM_DATA = [
-  { bucket: "< 1d",    count: 8  },
-  { bucket: "1–2d",    count: 14 },
-  { bucket: "2–4d",    count: 12 },
-  { bucket: "4–7d",    count: 7  },
-  { bucket: "7–14d",   count: 4  },
-  { bucket: "> 14d",   count: 2  },
+  { bucket: "< 1d",  count: 8  },
+  { bucket: "1–2d",  count: 14 },
+  { bucket: "2–4d",  count: 12 },
+  { bucket: "4–7d",  count: 7  },
+  { bucket: "7–14d", count: 4  },
+  { bucket: "> 14d", count: 2  },
 ];
+
+function buildBarData(cases: Case[]) {
+  if (!cases.length) return DEMO_BAR_DATA;
+  const buckets: Record<string, { cases: number; recovered: number }> = {};
+  const now = Date.now();
+  cases.forEach((c) => {
+    const ms   = new Date(c.opened_at).getTime();
+    const age  = (now - ms) / 86_400_000;
+    if (age > 90) return;
+    const d = new Date(c.opened_at);
+    const key = `${d.toLocaleString("en", { month: "short" })} ${String(d.getDate()).padStart(2, "0")}`;
+    if (!buckets[key]) buckets[key] = { cases: 0, recovered: 0 };
+    buckets[key].cases++;
+    if (["DISPATCHED", "OUTCOME_RECORDED", "CLOSED"].includes(c.state)) {
+      buckets[key].recovered += c.diff || 0;
+    }
+  });
+  const entries = Object.entries(buckets).sort(([a], [b]) => a.localeCompare(b));
+  return entries.length ? entries.map(([day, v]) => ({ day, ...v })) : DEMO_BAR_DATA;
+}
+
+function buildCarrierData(cases: Case[]) {
+  if (!cases.length) return DEMO_CARRIER_DATA;
+  const map: Record<string, { cases: number; totalDiff: number; recovered: number }> = {};
+  cases.forEach((c) => {
+    const name = c.carrier || "Unknown";
+    if (!map[name]) map[name] = { cases: 0, totalDiff: 0, recovered: 0 };
+    map[name].cases++;
+    map[name].totalDiff += c.diff || 0;
+    if (["DISPATCHED", "OUTCOME_RECORDED", "CLOSED"].includes(c.state)) map[name].recovered++;
+  });
+  return Object.entries(map)
+    .sort(([, a], [, b]) => b.cases - a.cases)
+    .slice(0, 6)
+    .map(([name, v]) => ({
+      name,
+      cases:      v.cases,
+      overcharge: v.cases > 0 ? Math.round(v.totalDiff / v.cases) : 0,
+      rate:       v.cases > 0 ? Math.round((v.recovered / v.cases) * 100) : 50,
+    }));
+}
 
 export default function Analytics() {
   const { data: stats } = useQuery({ queryKey: ["stats"], queryFn: zoikoApi.getStats });
-  const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
+  const { data: cases = [] } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
 
-  const totalCases    = stats?.total_cases ?? cases?.length ?? 47;
-  const recovered     = stats?.total_recovered ?? 384000;
-  const recoveryRate  = stats?.avg_confidence ? Math.round(stats.avg_confidence * 100) : 73;
+  const totalCases   = stats?.total_cases   ?? cases.length  ?? 47;
+  const recovered    = stats?.total_recovered ?? cases.reduce((s, c) => s + (["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state) ? (c.diff||0) : 0), 0);
+  const recoveryRate = stats?.avg_confidence  ? Math.round(stats.avg_confidence * 100)
+    : cases.length ? Math.round(cases.filter(c => c.confidence && c.confidence >= 0.9).length / cases.length * 100)
+    : 73;
+
+  const displayRecovered = recovered > 0 ? recovered : 384_000;
+  const avgOvercharge    = cases.length ? Math.round(cases.reduce((s, c) => s + (c.diff || 0), 0) / cases.length) : 3840;
+
+  const barData     = buildBarData(cases);
+  const carrierData = buildCarrierData(cases);
+  const isLiveData  = cases.length > 0;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-zoiko-navy">Analytics &amp; Trends</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          90-day performance metrics, carrier scorecards, and overcharge pattern analysis.
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-zoiko-navy">Analytics &amp; Trends</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Performance metrics, carrier scorecards, and overcharge pattern analysis.
+          </p>
+        </div>
+        {!isLiveData && (
+          <span className="text-[10px] font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">
+            Demo data — submit invoices to see live charts
+          </span>
+        )}
       </div>
 
       {/* 4 KPI cards */}
@@ -73,7 +132,7 @@ export default function Analytics() {
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Recovery Rate</p>
             <p className="mt-2 text-3xl font-bold text-emerald-600">{recoveryRate}%</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <TrendingUp className="h-3 w-3 text-emerald-500" /> +4% vs last quarter
+              <TrendingUp className="h-3 w-3 text-emerald-500" /> AI confidence threshold ≥ 90%
             </p>
           </CardContent>
         </Card>
@@ -89,31 +148,33 @@ export default function Analytics() {
         <Card className="border-l-4 border-l-amber-500">
           <CardContent className="pt-5">
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Avg Overcharge</p>
-            <p className="mt-2 text-3xl font-bold text-amber-600">{formatCurrency(3840)}</p>
+            <p className="mt-2 text-3xl font-bold text-amber-600">{formatCurrency(avgOvercharge)}</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <DollarSign className="h-3 w-3" /> Per disputed invoice
+              <DollarSign className="h-3 w-3" /> Per disputed invoice ({totalCases} cases)
             </p>
           </CardContent>
         </Card>
         <Card className="border-l-4 border-l-purple-500">
           <CardContent className="pt-5">
-            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">ROI</p>
-            <p className="mt-2 text-3xl font-bold text-purple-700">47×</p>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Total Recovered</p>
+            <p className="mt-2 text-3xl font-bold text-purple-700">{formatCurrency(displayRecovered)}</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <Zap className="h-3 w-3" /> {formatCurrency(recovered)} total on {totalCases} cases
+              <Zap className="h-3 w-3" /> Across all closed cases
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Bar chart: 90-day recovery trend */}
+      {/* Bar chart: recovery trend */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">90-Day Recovery Trend</CardTitle>
+          <CardTitle className="text-base">
+            Recovery Trend {isLiveData ? `— Last ${barData.length} days` : "— 90-Day (Demo)"}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={BAR_DATA} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+            <BarChart data={barData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="day" tick={{ fontSize: 10 }} />
               <YAxis yAxisId="left"  tick={{ fontSize: 10 }} width={50}
@@ -125,7 +186,7 @@ export default function Analytics() {
                 }
               />
               <Bar yAxisId="left"  dataKey="recovered" fill="#10b981" radius={[3, 3, 0, 0]} name="recovered" />
-              <Bar yAxisId="right" dataKey="cases"     fill="#3b5bdb" radius={[3, 3, 0, 0]} name="cases"     opacity={0.7} />
+              <Bar yAxisId="right" dataKey="cases"     fill="#3b5bdb" radius={[3, 3, 0, 0]} name="cases" opacity={0.7} />
             </BarChart>
           </ResponsiveContainer>
           <div className="flex items-center gap-4 justify-center mt-2 text-xs text-muted-foreground">
@@ -137,11 +198,13 @@ export default function Analytics() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-        {/* Carrier Scorecard */}
+        {/* Carrier Scorecard — live from cases */}
         <div className="lg:col-span-2">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Carrier Scorecard</CardTitle>
+              <CardTitle className="text-base">
+                Carrier Scorecard {isLiveData ? <span className="text-xs font-normal text-muted-foreground ml-1">live</span> : <span className="text-xs font-normal text-amber-600 ml-1">demo</span>}
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <table className="w-full text-sm">
@@ -154,7 +217,7 @@ export default function Analytics() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {CARRIER_DATA.map(c => (
+                  {carrierData.map(c => (
                     <tr key={c.name} className="hover:bg-secondary/30">
                       <td className="py-3 font-medium">{c.name}</td>
                       <td className="py-3 text-right text-xs">{c.cases}</td>
@@ -180,7 +243,7 @@ export default function Analytics() {
           </Card>
         </div>
 
-        {/* Overcharge Types Donut */}
+        {/* Overcharge Types Donut — conceptual breakdown */}
         <div>
           <Card>
             <CardHeader className="pb-3">

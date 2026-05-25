@@ -55,7 +55,7 @@ export const zoikoApi = {
       // Calculate realistic diff based on carrier contract rates
       const CONTRACT_BASE: Record<string, number> = {
         "BlueDart": 8000, "Delhivery": 7500, "FedEx India": 9200,
-        "DTDC": 6500, "Ekart": 7000, "UPS India": 10500, "Other": 7000,
+        "DTDC": 6500, "Ekart": 7000, "UPS India": 10500, "V Express": 50000, "Other": 7000,
       };
       const contractAmt = CONTRACT_BASE[payload.carrier] ?? Math.round(payload.amount * 0.72);
       const diff = Math.max(200, payload.amount - contractAmt);
@@ -70,7 +70,7 @@ export const zoikoApi = {
         currency: payload.currency,
         diff,
         confidence,
-        state: "NEW",
+        state: "FINDING_GENERATED",
         opened_at: now,
         updated_at: now,
       };
@@ -143,6 +143,26 @@ export const zoikoApi = {
         c.state = payload.decision === "EXECUTION_READY" ? "EXECUTION_READY" : "ABORTED";
         c.updated_at = new Date().toISOString();
       }
+      // Issue a governance token for approved cases so Stage 7 shows in CaseDetail
+      if (payload.decision === "EXECUTION_READY") {
+        const existing = mocks.mockTokens.find(t => t.case_id === caseId);
+        if (!existing) {
+          mocks.mockTokens.push({
+            id: `tok_${Date.now()}`,
+            case_id: caseId,
+            tenant_id: "amazon-india",
+            action: "EXECUTE_CREDIT_MEMO",
+            amount: c?.diff ?? 4500,
+            currency: c?.currency ?? "INR",
+            tenant_binding: mocks.rndHash(),
+            exp: new Date(Date.now() + 15 * 60_000).toISOString(),
+            status: "ACTIVE",
+            signature: mocks.rndHash(128),
+            key_id: "amazon-india-signing-2025-01",
+            issued_at: new Date().toISOString(),
+          });
+        }
+      }
       return {
         id: `dec_${Date.now()}`,
         case_id: caseId,
@@ -211,6 +231,13 @@ export const zoikoApi = {
   async listKafkaEvents(): Promise<KafkaEvent[]> {
     if (USE_MOCK) { await delay(); return mocks.mockKafkaEvents; }
     const { data } = await api.get<KafkaEvent[]>("/kafka/events");
+    return data;
+  },
+
+  // ---------- Admin ----------
+  async getDbStats(): Promise<{ table: string; rows: number }[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api.get<{ table: string; rows: number }[]>("/admin/db-stats");
     return data;
   },
 };

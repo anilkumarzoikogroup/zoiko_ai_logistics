@@ -42,19 +42,43 @@ def test_tenant(db_url):
 
 @pytest.fixture(scope="session")
 def test_case(db_url, test_tenant):
-    """Returns a case in EVIDENCE_GATHERING state (creates one from a canonical invoice)."""
+    """Returns any open case for the tenant, or creates a fresh one via Phase 2 pipeline."""
     import psycopg2, psycopg2.extras
     conn = psycopg2.connect(db_url)
     conn.autocommit = True
     cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    # Prefer cases that Phase 3 hasn't fully processed yet
     cur.execute(
-        "SELECT id FROM cases WHERE tenant_id=%s AND state='EVIDENCE_GATHERING' LIMIT 1",
+        """SELECT id FROM cases WHERE tenant_id=%s
+           AND state IN ('NEW','EVIDENCE_PENDING','FINDING_GENERATED','APPROVAL_PENDING')
+           ORDER BY opened_at DESC LIMIT 1""",
         (test_tenant["id"],),
     )
     row = cur.fetchone()
-    conn.close()
     if not row:
-        pytest.skip("No EVIDENCE_GATHERING case found — run Phase 2 pipeline first")
+        # No usable case — create one via Phase 2 pipeline
+        import sys, os, uuid as _uuid
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "phase-2"))
+        from services.ingestion_svc.handler   import IngestionHandler
+        from services.ingestion_svc.models    import InvoiceInput
+        from services.canonical_truth.handler import CanonicalHandler
+        from services.case_orchestration.handler import CaseHandler
+        from kafka.mock_kafka import MockKafkaBroker
+        broker = MockKafkaBroker()
+        slug   = test_tenant["slug"]
+        tid    = test_tenant["id"]
+        inv    = InvoiceInput(carrier_id="TestCarrier", invoice_number=f"TEST-{_uuid.uuid4().hex[:6].upper()}",
+                              total_amount=10000.0, currency="INR",
+                              route_origin="Test City", route_destination="Other City", weight_lbs=0.0)
+        ing_r  = IngestionHandler(db_url, broker, slug).ingest_invoice(tid, inv, str(_uuid.uuid4()))
+        can_r  = CanonicalHandler(db_url, broker, slug).canonicalize_invoice(
+                     tid, ing_r.source_record_id, inv.invoice_number,
+                     inv.carrier_id, inv.total_amount, inv.currency,
+                     inv.route_origin, inv.route_destination, 0.0)
+        case_r = CaseHandler(db_url, broker).open_case(tid, can_r.canonical_invoice_id, "test-setup")
+        conn.close()
+        return {"id": str(case_r.case_id), "tenant_id": tid}
+    conn.close()
     return {"id": str(row["id"]), "tenant_id": test_tenant["id"]}
 
 

@@ -72,6 +72,30 @@ export function LoadingSpinner({ label = "Loading…" }: { label?: string }) {
   );
 }
 
+export function SkeletonLine({ className }: { className?: string }) {
+  return <div className={cn("h-3 rounded-full bg-muted animate-pulse", className)} />;
+}
+
+export function SkeletonCard() {
+  return (
+    <div className="rounded-xl border bg-white p-5 space-y-3 shadow-sm">
+      <div className="flex items-start justify-between">
+        <div className="space-y-2 flex-1">
+          <SkeletonLine className="w-1/3" />
+          <SkeletonLine className="w-1/2 h-4" />
+        </div>
+        <SkeletonLine className="w-16 h-5 rounded-full ml-4" />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <SkeletonLine className="h-8 rounded-lg" />
+        <SkeletonLine className="h-8 rounded-lg" />
+        <SkeletonLine className="h-8 rounded-lg" />
+      </div>
+      <SkeletonLine className="w-3/4" />
+    </div>
+  );
+}
+
 export function EmptyState({ title, description }: { title: string; description?: string }) {
   return (
     <div className="text-center py-12 text-muted-foreground">

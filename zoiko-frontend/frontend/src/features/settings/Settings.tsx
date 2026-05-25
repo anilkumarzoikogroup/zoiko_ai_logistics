@@ -5,6 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LoadingSpinner } from "@/components/shared";
+import { useToast } from "@/hooks/useToast";
 import { formatCurrency } from "@/utils/cn";
 import { cn } from "@/utils/cn";
 import {
@@ -140,7 +141,8 @@ function TeamTab() {
 const CARRIERS = ["BlueDart","Delhivery","FedEx","DTDC","Ekart","Gati","UPS India","Other"];
 
 function ContractsTab() {
-  const qc = useQueryClient();
+  const qc    = useQueryClient();
+  const toast = useToast();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ carrier_id: "", rate_value: "", currency: "INR", effective_on: "2025-01-01" });
 
@@ -160,12 +162,22 @@ function ContractsTab() {
       qc.invalidateQueries({ queryKey: ["contract-rates"] });
       setShowForm(false);
       setForm({ carrier_id: "", rate_value: "", currency: "INR", effective_on: "2025-01-01" });
+      toast.success("Rate saved", `${form.carrier_id} contract rate added — overcharge detection active`);
+    },
+    onError: () => {
+      toast.error("Save failed", "Check that the backend is running on port 8000");
     },
   });
 
   const delMutation = useMutation({
     mutationFn: (id: string) => zoikoApi.deleteContractRate(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["contract-rates"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["contract-rates"] });
+      toast.info("Rate deleted", "Contract rate removed");
+    },
+    onError: () => {
+      toast.error("Delete failed", "Check that the backend is running on port 8000");
+    },
   });
 
   const canAdd = form.carrier_id && Number(form.rate_value) > 0;

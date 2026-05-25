@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, UserCheck, CheckCircle2, ArrowRight } from "lucide-react";
+import { ShieldCheck, CheckCircle2, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/utils/cn";
+
+const TENANT_ID = "11111111-1111-1111-1111-111111111111";
 
 const ROLES = [
   {
@@ -15,6 +17,7 @@ const ROLES = [
     description: "Reviews flagged invoices, runs AI analysis, proposes recovery actions.",
     capabilities: ["View all cases", "Propose recovery", "Add evidence", "View findings"],
     jwt_sub: "ravi@amazon.com",
+    jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyYXZpQGFtYXpvbi5jb20iLCJpc3MiOiJodHRwczovL2F1dGguem9pa290ZWNoLmNvbSIsImF1ZCI6InpvaWtvLWRldiIsImlhdCI6MTc3OTcwMzIxNSwiZXhwIjoxNzgyMjk1MjE1LCJ0ZW5hbnRfaWQiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJyb2xlcyI6WyJhbmFseXN0Il0sInpvaWtvX2VudiI6ImRldiJ9.9peP5gzIdeZI2dYnzFVn0kfaUSGk8NW3U_PJxqaeB7A",
   },
   {
     id: "manager",
@@ -26,6 +29,7 @@ const ROLES = [
     description: "Final approver for recovery decisions. Cannot approve own proposals (SoD).",
     capabilities: ["Approve / Reject proposals", "View audit trail", "View tokens", "Execute recovery"],
     jwt_sub: "ramu@amazon.com",
+    jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJyYW11QGFtYXpvbi5jb20iLCJpc3MiOiJodHRwczovL2F1dGguem9pa290ZWNoLmNvbSIsImF1ZCI6InpvaWtvLWRldiIsImlhdCI6MTc3OTcwMzIxNSwiZXhwIjoxNzgyMjk1MjE1LCJ0ZW5hbnRfaWQiOiIxMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiLCJyb2xlcyI6WyJtYW5hZ2VyIl0sInpvaWtvX2VudiI6ImRldiJ9.IrjkVX-8X-72kH2z8xjVJ4KBAmzdvxs5bEC3LjoGcW8",
   },
   {
     id: "admin",
@@ -37,6 +41,7 @@ const ROLES = [
     description: "Full access to all phases, crypto audit, database, and infrastructure.",
     capabilities: ["All analyst + manager rights", "Crypto & audit", "KMS / OIDC / OPA", "Database viewer"],
     jwt_sub: "admin@zoikotech.com",
+    jwt: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkB6b2lrb3RlY2guY29tIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLnpvaWtvdGVjaC5jb20iLCJhdWQiOiJ6b2lrby1kZXYiLCJpYXQiOjE3Nzk3MDMyMTUsImV4cCI6MTc4MjI5NTIxNSwidGVuYW50X2lkIjoiMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIiwicm9sZXMiOlsiYW5hbHlzdCIsIm1hbmFnZXIiLCJhZG1pbiJdLCJ6b2lrb19lbnYiOiJkZXYifQ.F6moZNwZTZXbHHTgXuK4ZVT3zKevEAeP7wF7gOCbdqc",
   },
 ];
 
@@ -52,7 +57,8 @@ export default function Login() {
     localStorage.setItem("zoiko_role", role.id);
     localStorage.setItem("zoiko_user", role.name);
     localStorage.setItem("zoiko_sub", role.jwt_sub);
-    localStorage.setItem("zoiko_tenant", "amazon-india");
+    localStorage.setItem("zoiko_tenant", TENANT_ID);
+    localStorage.setItem("zoiko_jwt", role.jwt);
     setTimeout(() => nav("/"), 600);
   }
 
@@ -132,7 +138,7 @@ export default function Login() {
 
         {/* Footer note */}
         <p className="text-center text-white/40 text-xs mt-6">
-          Demo environment · Tenant: amazon-india · {import.meta.env.VITE_USE_MOCK !== "false" ? "Mock data" : "Live DB"}
+          Live environment · Tenant: zoiko-demo · {import.meta.env.VITE_USE_MOCK !== "false" ? "Mock data" : "Live DB"}
         </p>
       </div>
     </div>

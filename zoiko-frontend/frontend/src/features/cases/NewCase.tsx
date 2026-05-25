@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import { useToast } from "@/hooks/useToast";
 import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
@@ -12,7 +13,7 @@ import { USE_MOCK, api } from "@/api/client";
 type Mode = "choose" | "upload" | "manual";
 type ParseState = "idle" | "parsing" | "done" | "error";
 
-const CARRIERS = ["BlueDart", "DTDC", "Delhivery", "Ekart", "FedEx India", "UPS India", "Other"];
+const CARRIERS = ["BlueDart", "DTDC", "Delhivery", "Ekart", "FedEx India", "UPS India", "V Express", "Other"];
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED"];
 
 const INDIAN_CITIES = [
@@ -42,8 +43,9 @@ function splitRoute(route: string): { from_city: string; to_city: string } {
 }
 
 export default function NewCase() {
-  const nav = useNavigate();
-  const qc  = useQueryClient();
+  const nav   = useNavigate();
+  const qc    = useQueryClient();
+  const toast = useToast();
 
   const [mode, setMode]             = useState<Mode>("choose");
   const [form, setForm]             = useState<FormState>({ carrier: "", from_city: "", to_city: "", amount: "", currency: "INR" });
@@ -61,7 +63,11 @@ export default function NewCase() {
     }),
     onSuccess: (c) => {
       qc.invalidateQueries({ queryKey: ["cases"] });
+      toast.success("Case submitted", `Overcharge detection pipeline started for ${form.carrier}`);
       nav(`/cases/${c.id}`);
+    },
+    onError: () => {
+      toast.error("Submission failed", "Make sure the backend is running on port 8000");
     },
   });
 

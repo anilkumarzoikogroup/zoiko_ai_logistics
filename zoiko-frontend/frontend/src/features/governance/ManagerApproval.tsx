@@ -1,15 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { StateBadge, LoadingSpinner } from "@/components/shared";
+import { StateBadge, SkeletonCard } from "@/components/shared";
 import { formatCurrency, formatDate } from "@/utils/cn";
 import { Link } from "react-router-dom";
 import { ArrowRight, CheckCircle2, XCircle, ShieldAlert } from "lucide-react";
 import { useState } from "react";
+import { useToast } from "@/hooks/useToast";
 
 export default function ManagerApproval() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
   const [decided, setDecided] = useState<Record<string, "EXECUTION_READY" | "ABORTED">>({});
 
@@ -21,6 +23,14 @@ export default function ManagerApproval() {
     onSuccess: (_d, vars) => {
       setDecided(prev => ({ ...prev, [vars.id]: vars.decision }));
       qc.invalidateQueries({ queryKey: ["cases"] });
+      if (vars.decision === "EXECUTION_READY") {
+        toast.success("Case approved", "Governance token issued — 15-min execution window open");
+      } else {
+        toast.info("Case rejected", "Case has been marked ABORTED");
+      }
+    },
+    onError: () => {
+      toast.error("Decision failed", "Check SoD rule — you cannot approve your own proposal");
     },
   });
 
@@ -47,7 +57,9 @@ export default function ManagerApproval() {
         </CardContent>
       </Card>
 
-      {isLoading ? <LoadingSpinner /> : queue.length === 0 ? (
+      {isLoading ? (
+        <div className="space-y-3">{[0,1,2].map(i => <SkeletonCard key={i} />)}</div>
+      ) : queue.length === 0 ? (
         <Card><CardContent className="pt-6 text-sm text-muted-foreground">No cases waiting for approval.</CardContent></Card>
       ) : (
         <div className="space-y-3">

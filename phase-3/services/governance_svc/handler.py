@@ -152,11 +152,13 @@ class GovernanceHandler:
             ))
 
             # Update the approval task
+            # approval_tasks.status constraint: PENDING | APPROVED | REJECTED
+            task_status = "APPROVED" if outcome == "EXECUTION_READY" else "REJECTED"
             cur.execute("""
                 UPDATE approval_tasks
                 SET status=%s, actor_sub=%s, actioned_at=%s
                 WHERE id=%s AND tenant_id=%s
-            """, (outcome, actor_sub, now, uuid.UUID(task_id), tenant_id))
+            """, (task_status, actor_sub, now, uuid.UUID(task_id), tenant_id))
 
             # Case FSM transition: APPROVAL_PENDING → EXECUTION_READY or ABORTED
             # Find the case via proposal → finding → case_id

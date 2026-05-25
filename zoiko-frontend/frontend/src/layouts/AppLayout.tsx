@@ -1,188 +1,233 @@
-/// <reference types="vite/client" />
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import { zoikoApi } from "@/api/zoiko";
 import { cn } from "@/utils/cn";
 import {
-  LayoutDashboard, FolderOpen, PlusCircle, ClipboardList,
-  CheckSquare, Zap, ShieldCheck, Database, MessageSquare,
-  LogOut, ChevronDown, ChevronRight, Bell, BarChart2, Settings,
+  LayoutDashboard, FileText, CheckSquare, FolderOpen,
+  FileClock, Truck, Package, ShieldCheck, BookOpen,
+  Key, Archive, ClipboardList, CreditCard, RefreshCw,
+  Send, BarChart3, TrendingUp, FileBarChart,
+  Users, Settings, Building2, Bell, Search, Download,
+  ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
 } from "lucide-react";
-import { useState, useEffect } from "react";
-import { useLocation } from "react-router-dom";
+import { useState } from "react";
 
 const ROLE_COLORS: Record<string, string> = {
-  analyst: "bg-zoiko-blue",
-  manager: "bg-zoiko-purple",
-  admin:   "bg-zoiko-navy",
+  analyst: "bg-blue-600",
+  manager: "bg-purple-600",
+  admin:   "bg-slate-700",
 };
 
-function NavItem({ to, label, icon: Icon, badge, end }: {
-  to: string; label: string; icon: React.ElementType; badge?: number; end?: boolean;
+type NavEntry = { label: string; icon: React.ElementType; to?: string; children?: NavEntry[] };
+
+const NAV: { group: string; items: NavEntry[] }[] = [
+  {
+    group: "OPERATIONS",
+    items: [
+      { label: "Overview",          icon: LayoutDashboard, to: "/"            },
+      { label: "Invoices",          icon: FileText,        to: "/invoices"    },
+      { label: "Validation",        icon: CheckSquare,     to: "/cases"       },
+      { label: "Cases",             icon: FolderOpen,      to: "/cases"       },
+      { label: "Contracts & Rates", icon: FileClock,       to: "/rate-control"},
+      { label: "Carriers",          icon: Truck,           to: "/audit-conditions" },
+      { label: "Shipments",         icon: Package,         to: "/analytics"   },
+    ],
+  },
+  {
+    group: "GOVERNANCE",
+    items: [
+      { label: "Approvals",       icon: ShieldCheck,    to: "/manager"     },
+      { label: "Policies",        icon: BookOpen,       to: "/analyst"     },
+      { label: "Tokens",          icon: Key,            to: "/execute"     },
+      { label: "Evidence & Audit",icon: Archive,        to: "/crypto"      },
+      { label: "Audit Trail",     icon: ClipboardList,  to: "/alerts"      },
+    ],
+  },
+  {
+    group: "FINANCIALS",
+    items: [
+      { label: "Recovery & Payments", icon: CreditCard,  to: "/payment-control" },
+      { label: "Reconciliation",      icon: RefreshCw,   to: "/payment-control" },
+      { label: "Remittances",         icon: Send,        to: "/payment-control" },
+      { label: "Statements",          icon: FileText,    to: "/analytics"       },
+    ],
+  },
+  {
+    group: "ANALYTICS",
+    items: [
+      { label: "Performance",   icon: BarChart3,   to: "/performance"   },
+      { label: "Savings & ROI", icon: TrendingUp,  to: "/analytics"     },
+      { label: "Reports",       icon: FileBarChart,to: "/analytics"     },
+    ],
+  },
+  {
+    group: "ADMIN",
+    items: [
+      { label: "Tenants",      icon: Building2, to: "/database"  },
+      { label: "Users & Roles",icon: Users,     to: "/settings"  },
+      { label: "Settings",     icon: Settings,  to: "/settings"  },
+    ],
+  },
+];
+
+function NavItem({ to, label, icon: Icon, collapsed }: {
+  to: string; label: string; icon: React.ElementType; collapsed: boolean;
 }) {
   return (
     <NavLink
       to={to}
-      end={end}
+      end={to === "/"}
+      title={collapsed ? label : undefined}
       className={({ isActive }) => cn(
-        "flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors",
+        "flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-all duration-150",
+        collapsed ? "justify-center px-2" : "",
         isActive
-          ? "bg-zoiko-navy text-white shadow-sm"
-          : "text-foreground/70 hover:bg-secondary hover:text-foreground"
+          ? "bg-blue-600 text-white font-semibold shadow-sm"
+          : "text-slate-300 hover:bg-slate-700 hover:text-white"
       )}
     >
-      <div className="flex items-center gap-2.5">
-        <Icon className="h-4 w-4 flex-shrink-0" />
-        <span className="truncate font-medium">{label}</span>
-      </div>
-      {badge != null && badge > 0 && (
-        <span className="ml-2 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-white px-1 flex-shrink-0">
-          {badge > 9 ? "9+" : badge}
-        </span>
-      )}
+      <Icon className="h-4 w-4 flex-shrink-0" />
+      {!collapsed && <span className="truncate">{label}</span>}
     </NavLink>
   );
 }
 
 export default function AppLayout() {
-  const nav2     = useNavigate();
-  const location = useLocation();
-  const user     = localStorage.getItem("zoiko_user")   || "User";
-  const role     = localStorage.getItem("zoiko_role")   || "analyst";
-  const isLive   = import.meta.env.VITE_USE_MOCK === "false";
-  const [systemOpen,   setSystemOpen]   = useState(false);
-  const [alertBadge,   setAlertBadge]   = useState<number>(() => {
-    const seen = localStorage.getItem("zoiko_alerts_seen_date");
-    return seen === new Date().toDateString() ? 0 : 3;
-  });
-
-  useEffect(() => {
-    if (location.pathname === "/alerts") {
-      localStorage.setItem("zoiko_alerts_seen_date", new Date().toDateString());
-      setAlertBadge(0);
-    }
-  }, [location.pathname]);
-
-  const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
-  const reviewCount   = cases?.filter(c => ["NEW", "EVIDENCE_PENDING", "FINDING_GENERATED"].includes(c.state)).length ?? 0;
-  const approvalCount = cases?.filter(c => c.state === "APPROVAL_PENDING").length ?? 0;
+  const nav  = useNavigate();
+  const user = localStorage.getItem("zoiko_user") || "Leah Brooks";
+  const role     = localStorage.getItem("zoiko_role") || "admin";
+  const [collapsed, setCollapsed] = useState(false);
 
   function handleLogout() {
     localStorage.removeItem("zoiko_role");
     localStorage.removeItem("zoiko_user");
     localStorage.removeItem("zoiko_sub");
     localStorage.removeItem("zoiko_tenant");
-    nav2("/login");
+    nav("/login");
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
-      <aside className="w-60 bg-white border-r flex-shrink-0 flex flex-col shadow-sm">
+    <div className="flex h-screen bg-[#f1f5f9] overflow-hidden">
+
+      {/* ── Sidebar ─────────────────────────────────────────────────────── */}
+      <aside className={cn(
+        "flex flex-col bg-[#0f172a] border-r border-slate-700/50 transition-all duration-200 flex-shrink-0",
+        collapsed ? "w-14" : "w-56"
+      )}>
 
         {/* Logo */}
-        <div className="px-5 py-4 border-b flex-shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="h-9 w-9 rounded-xl bg-zoiko-navy flex items-center justify-center text-white font-bold text-base shadow">Z</div>
+        <div className={cn("flex items-center gap-2.5 px-4 py-4 border-b border-slate-700/50 flex-shrink-0",
+          collapsed && "justify-center px-2")}>
+          <div className="h-8 w-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">Z</div>
+          {!collapsed && (
             <div>
-              <p className="font-bold text-zoiko-navy text-sm leading-tight">Zoiko AI</p>
-              <p className="text-[10px] text-muted-foreground tracking-wide">Freight Audit Platform</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Navigation */}
-        <nav className="px-3 py-4 flex-1 overflow-y-auto space-y-5">
-
-          {/* Overview */}
-          <div>
-            <p className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Overview</p>
-            <div className="space-y-0.5">
-              <NavItem to="/"      label="Live Monitor"  icon={LayoutDashboard} end />
-              <NavItem to="/cases" label="All Cases"     icon={FolderOpen} />
-              {(role === "analyst" || role === "admin") && (
-                <NavItem to="/cases/new" label="New Case" icon={PlusCircle} />
-              )}
-            </div>
-          </div>
-
-          {/* Workflow */}
-          <div>
-            <p className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Workflow</p>
-            <div className="space-y-0.5">
-              {(role === "analyst" || role === "admin") && (
-                <NavItem to="/analyst" label="Analyst Review"   icon={ClipboardList} badge={reviewCount} />
-              )}
-              {(role === "manager" || role === "admin") && (
-                <NavItem to="/manager" label="Manager Approval" icon={CheckSquare} badge={approvalCount} />
-              )}
-              {(role === "manager" || role === "admin") && (
-                <NavItem to="/execute" label="Recovery Tracker" icon={Zap} />
-              )}
-            </div>
-          </div>
-
-          {/* Insights */}
-          <div>
-            <p className="px-3 mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Insights</p>
-            <div className="space-y-0.5">
-              <NavItem to="/alerts"    label="Alerts"           icon={Bell} badge={alertBadge} />
-              <NavItem to="/analytics" label="Analytics"        icon={BarChart2} />
-            </div>
-          </div>
-
-          {/* System — admin only */}
-          {role === "admin" && (
-            <div>
-              <button
-                onClick={() => setSystemOpen(s => !s)}
-                className="flex items-center justify-between w-full px-3 mb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold hover:text-foreground transition-colors"
-              >
-                System
-                {systemOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              </button>
-              {systemOpen && (
-                <div className="space-y-0.5">
-                  <NavItem to="/crypto"   label="Audit Reports"  icon={ShieldCheck} />
-                  <NavItem to="/settings" label="Settings"       icon={Settings} />
-                  <NavItem to="/database" label="Database"       icon={Database} />
-                  <NavItem to="/kafka"    label="Event Log"      icon={MessageSquare} />
-                </div>
-              )}
+              <p className="font-bold text-white text-sm leading-tight">ZOIKO</p>
+              <p className="text-[10px] text-slate-400 tracking-wide">Logistics</p>
             </div>
           )}
-        </nav>
-
-        {/* Mode pill */}
-        <div className={cn(
-          "mx-3 mb-2 rounded-lg px-3 py-1.5 text-[10px] font-semibold flex items-center gap-1.5",
-          isLive ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
-        )}>
-          <span className={cn("h-1.5 w-1.5 rounded-full flex-shrink-0 animate-pulse", isLive ? "bg-emerald-500" : "bg-amber-500")} />
-          {isLive ? "Connected · Live" : "Mock mode · Demo data"}
         </div>
 
-        {/* User + logout */}
-        <div className="px-4 py-3 border-t flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <div className={cn("h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0", ROLE_COLORS[role] || "bg-zoiko-navy")}>
-              {user.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto py-3 space-y-4 px-2">
+          {NAV.map(({ group, items }) => (
+            <div key={group}>
+              {!collapsed && (
+                <p className="px-3 mb-1 text-[10px] font-semibold tracking-widest text-slate-500 uppercase">
+                  {group}
+                </p>
+              )}
+              <div className="space-y-0.5">
+                {items.map(item => (
+                  <NavItem key={item.label} to={item.to!} label={item.label} icon={item.icon} collapsed={collapsed} />
+                ))}
+              </div>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold truncate">{user}</p>
-              <p className="text-[10px] text-muted-foreground capitalize">{role} · amazon-india</p>
+          ))}
+        </nav>
+
+        {/* Collapse toggle + logout */}
+        <div className="border-t border-slate-700/50 px-2 py-3 space-y-1 flex-shrink-0">
+          {!collapsed && (
+            <div className="flex items-center gap-2 px-3 py-2 mb-1">
+              <div className={cn("h-7 w-7 rounded-full flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0", ROLE_COLORS[role] || "bg-slate-600")}>
+                {user.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{user}</p>
+                <p className="text-[10px] text-slate-400 capitalize">Global {role}</p>
+              </div>
+              <button onClick={handleLogout} title="Sign out" className="text-slate-400 hover:text-red-400 transition-colors">
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
             </div>
-            <button onClick={handleLogout} title="Sign out" className="text-muted-foreground hover:text-destructive transition-colors flex-shrink-0">
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
+          )}
+          <button
+            onClick={() => setCollapsed(c => !c)}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-slate-400 hover:bg-slate-700 hover:text-white transition-colors text-[13px]"
+          >
+            {collapsed ? <ChevronRight className="h-4 w-4" /> : <><ChevronLeft className="h-4 w-4" /><span>Collapse</span></>}
+          </button>
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
-        <div className="px-8 py-6 max-w-7xl mx-auto">
-          <Outlet />
-        </div>
-      </main>
+      {/* ── Main area ───────────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+
+        {/* Top bar */}
+        <header className="h-14 bg-white border-b border-slate-200 flex items-center gap-4 px-6 flex-shrink-0 shadow-sm">
+          <div className="flex-1 flex items-center gap-3">
+            <div className="relative">
+              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search invoices, cases, carriers, contracts..."
+                className="pl-9 pr-12 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-80"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-mono bg-slate-100 px-1 rounded">⌘K</span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* Date range */}
+            <button className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+              <span>Jul 01 – Jul 24, 2025</span>
+              <Calendar className="h-4 w-4 text-slate-400" />
+            </button>
+
+            {/* Actions */}
+            <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+              Actions <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+            </button>
+
+            {/* Export */}
+            <button className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+              <Download className="h-4 w-4" /> Export
+            </button>
+
+            {/* Notifications */}
+            <button className="relative p-2 rounded-lg hover:bg-slate-50">
+              <Bell className="h-4.5 w-4.5 text-slate-500" />
+              <span className="absolute top-1 right-1 h-4 w-4 bg-red-500 rounded-full text-[9px] text-white flex items-center justify-center font-bold">12</span>
+            </button>
+
+            {/* User avatar */}
+            <div className="flex items-center gap-2">
+              <div className={cn("h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold", ROLE_COLORS[role] || "bg-slate-600")}>
+                {user.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+              <div className="hidden md:block">
+                <p className="text-sm font-semibold text-slate-700 leading-tight">{user}</p>
+                <p className="text-[10px] text-slate-400 capitalize">Global {role}</p>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        {/* Page content */}
+        <main className="flex-1 overflow-y-auto">
+          <div className="px-6 py-5 max-w-[1600px] mx-auto">
+            <Outlet />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

@@ -3,14 +3,16 @@ import { useLocation } from "react-router-dom";
 import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { StateBadge, LoadingSpinner, PipelineBanner } from "@/components/shared";
+import { StateBadge, SkeletonCard, PipelineBanner } from "@/components/shared";
 import { formatCurrency } from "@/utils/cn";
 import { Link } from "react-router-dom";
 import { ArrowRight, ThumbsUp, CheckCircle2 } from "lucide-react";
 import { useState } from "react";
+import { useToast } from "@/hooks/useToast";
 
 export default function AnalystReview() {
   const qc = useQueryClient();
+  const toast = useToast();
   const { pathname } = useLocation();
   const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
   const [proposed, setProposed] = useState<Set<string>>(new Set());
@@ -29,6 +31,10 @@ export default function AnalystReview() {
     onSuccess: (_d, vars) => {
       setProposed(prev => new Set(prev).add(vars.id));
       qc.invalidateQueries({ queryKey: ["cases"] });
+      toast.success("Recovery proposed", `${formatCurrency(vars.diff, vars.currency)} sent to manager approval`);
+    },
+    onError: () => {
+      toast.error("Proposal failed", "Check that the backend is running on port 8000");
     },
   });
 
@@ -46,7 +52,9 @@ export default function AnalystReview() {
         </p>
       </div>
 
-      {isLoading ? <LoadingSpinner /> : queue.length === 0 ? (
+      {isLoading ? (
+        <div className="space-y-3">{[0,1,2].map(i => <SkeletonCard key={i} />)}</div>
+      ) : queue.length === 0 ? (
         <Card>
           <CardContent className="pt-6 text-center py-12">
             <CheckCircle2 className="h-10 w-10 text-emerald-600 mx-auto mb-3" />

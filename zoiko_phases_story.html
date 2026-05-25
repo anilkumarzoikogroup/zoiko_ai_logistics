@@ -812,5 +812,122 @@
   After Phase 4, the ₹4,500 will be recovered, the case closed, and the tamper-proof audit record issued — a complete chain from invoice to recovery that no one, not even Zoiko itself, can alter after the fact.
 </div>
 
+<!-- ═══════════════════════════════════════════════════════ PHASE 5 -->
+<hr class="phase-divider">
+
+<span class="phase-label">Phase 5</span>
+<h1>The Frontend Story — Putting a Human Face on the Pipeline</h1>
+<hr class="divider">
+
+<h2>The Problem Phases 0–3 Left Open</h2>
+<p>After Phase 3, the entire overcharge detection and recovery pipeline existed — but only as APIs and command-line demos. Ravi (analyst) and Ramu (manager) had no screen to look at. There was no way to submit an invoice from a browser, no queue showing which cases needed review, and no dashboard showing how much money had been recovered.</p>
+<p><strong>Phase 5 builds the React + TypeScript frontend that makes the entire system usable by real humans — without changing a single line of backend code.</strong></p>
+
+<hr class="divider">
+
+<h2>What Phase 5 Built</h2>
+
+<h3>The Live Pipeline Monitor (Home)</h3>
+<p>The first screen any user sees shows the pipeline as it runs in real time:</p>
+<ul>
+  <li>How many invoices were ingested today, how many are in each stage</li>
+  <li>KPI cards: total recovered, cases pending approval, avg latency</li>
+  <li>A live table of "invoices in flight" — each one linked to its case detail page</li>
+  <li>Action banners: "3 cases awaiting analyst review" with a direct link</li>
+</ul>
+<p class="italic">Think of it like an air traffic control screen — every invoice is a plane, and the controller can see exactly where each one is in the sky.</p>
+
+<hr class="divider">
+
+<h3>Submit Invoice (New Case)</h3>
+<p>Ravi can submit a new invoice in two ways:</p>
+<ul>
+  <li><strong>Upload a PDF</strong> — the backend parses it with pdfplumber, extracts carrier name, amount, currency, and route automatically. Fields appear pre-filled.</li>
+  <li><strong>Enter manually</strong> — pick carrier, origin city, destination city, amount, currency from dropdowns.</li>
+</ul>
+<p>When Ravi clicks "Submit for Audit", the frontend calls the Phase 2 API which runs the full pipeline — ingestion, validation, canonical truth, case open, evidence bundling, and AI reasoning — all in one request. A green toast notification confirms: "Case submitted — overcharge detection pipeline started."</p>
+<p>Ravi is immediately redirected to the new case's detail page, already showing the AI confidence score and which pipeline stages have completed.</p>
+
+<hr class="divider">
+
+<h3>Case Detail — Where Is This Case?</h3>
+<p>Every case has a detail page with an 8-stage pipeline stepper:</p>
+<table>
+  <tr><th>Stage</th><th>What it shows</th></tr>
+  <tr><td>1. Invoice Ingested</td><td>SHA-256 domain-tagged hash, source record ID</td></tr>
+  <tr><td>2. Validated</td><td>Invoice amount vs contract rate, FAIL/WARN/PASS</td></tr>
+  <tr><td>3. Canonicalized</td><td>JCS canonical form, Ed25519 signature</td></tr>
+  <tr><td>4. Case Opened</td><td>Case ID, state badge, opened timestamp</td></tr>
+  <tr><td>5. Evidence Bundled</td><td>BOL, RATE_SHEET, INVOICE items + Merkle root hash</td></tr>
+  <tr><td>6. AI Reasoned</td><td>Confidence gauge (0.96), rule trace, finding hash</td></tr>
+  <tr><td>7. Governance</td><td>ACTIVE token, Ed25519 signature, 15-min expiry</td></tr>
+  <tr><td>8. Executed &amp; ACR</td><td>8 gates passed, credit memo issued, WORM-locked</td></tr>
+</table>
+<p>The current stage is highlighted. Completed stages show a green checkmark. The card below the stepper shows exactly what to do next: "Analyst Review →" or "Manager Approval →".</p>
+<p>At the bottom, a full event timeline shows every state transition: who made it, when, and why — in chronological order.</p>
+
+<hr class="divider">
+
+<h3>Analyst Review Queue</h3>
+<p>Ravi opens the Analyst Review page and sees all cases in NEW, EVIDENCE_PENDING, or FINDING_GENERATED state — sorted by AI confidence, highest first. For each case he sees:</p>
+<ul>
+  <li>The AI confidence score (96%, colour-coded green if ≥ 90%)</li>
+  <li>Carrier name and shipment reference</li>
+  <li>Invoice amount and overcharge amount</li>
+  <li>A "Propose ₹4,500" button</li>
+</ul>
+<p>When Ravi clicks Propose, the frontend calls <code>POST /cases/{id}/proposal</code>. The case moves to APPROVAL_PENDING. The sidebar badge on "Manager Approval" increments by 1 — updated automatically every 30 seconds by background polling.</p>
+<p>A green toast confirms: "Recovery proposed — ₹4,500 sent to manager approval."</p>
+
+<hr class="divider">
+
+<h3>Manager Approval Queue</h3>
+<p>Ramu opens the Manager Approval page and sees one card for the BlueDart case. He reads the AI confidence, the proposed amount, and the analyst's name. He has two buttons: <strong>Approve</strong> and <strong>Reject</strong>.</p>
+<p>If Ramu tries to approve a case he himself proposed, the API rejects it before any DB write — and the frontend shows a red toast: "Decision failed — check SoD rule, you cannot approve your own proposal."</p>
+<p>When Ramu approves legitimately, the case moves to EXECUTION_READY, a governance token is issued, and a green toast confirms: "Case approved — governance token issued, 15-min execution window open."</p>
+
+<hr class="divider">
+
+<h3>Analytics &amp; Trends</h3>
+<p>The Analytics page connects to real data from the cases API:</p>
+<ul>
+  <li><strong>KPI cards</strong> — recovery rate, avg overcharge, total recovered — computed live from the cases array</li>
+  <li><strong>Recovery trend bar chart</strong> — groups real cases by date opened, shows cases and amounts recovered day by day</li>
+  <li><strong>Carrier scorecard</strong> — counts cases per carrier from live data, computes avg overcharge per carrier</li>
+</ul>
+<p>When the database is empty (fresh install), all charts fall back to demo data with a yellow badge: "Demo data — submit invoices to see live charts."</p>
+
+<hr class="divider">
+
+<h3>The Technical Choices</h3>
+<table>
+  <tr><th>Requirement</th><th>Solution</th></tr>
+  <tr><td>Connect to real backend without CORS errors</td><td>Vite proxy: /api → localhost:8000 in dev; CORSMiddleware added to FastAPI for production</td></tr>
+  <tr><td>Auth without a real identity provider</td><td>DEV_MODE on backend uses X-Tenant-ID header; frontend sends tenant slug from localStorage</td></tr>
+  <tr><td>Toast notifications across all pages</td><td>Zustand store (useToast hook) + fixed Toaster component in App.tsx root</td></tr>
+  <tr><td>Badge counts stay current</td><td>AppLayout re-fetches cases list every 30 seconds; sidebar badges update automatically</td></tr>
+  <tr><td>Fast page loads in production</td><td>Vite manualChunks splits vendor-react (164KB), vendor-charts (399KB), vendor-query (42KB) separately — app code is 141KB</td></tr>
+  <tr><td>Real PDF parsing</td><td>pdfplumber on backend extracts carrier, amount, currency, route — fields pre-filled on upload</td></tr>
+</table>
+
+<hr class="divider">
+
+<h2>What Phase 5 Produced for SC-001</h2>
+<p>The complete end-to-end user journey from a browser:</p>
+<ul>
+  <li>Ravi opens <strong>http://localhost:5173</strong>, logs in as analyst</li>
+  <li>Clicks "Submit Invoice", uploads <code>bluedart_invoice.pdf</code> — carrier, amount, route auto-filled</li>
+  <li>Clicks "Submit for Audit" — backend runs Phases 2+3 inline, toast confirms success</li>
+  <li>Case detail page shows: confidence 96%, Evidence Bundled ✓, AI Reasoned ✓</li>
+  <li>Ravi goes to Analyst Review, clicks "Propose ₹4,500" — toast confirms, badge on manager tab increments</li>
+  <li>Ramu logs in as manager, sees the pending case, clicks Approve — governance token issued, toast confirms</li>
+  <li>Case is now in EXECUTION_READY — Phase 4 picks up from here</li>
+</ul>
+
+<h2>One Line Summary</h2>
+<div class="summary-box">
+  Phase 5 put a production-grade React frontend on top of the entire backend pipeline — Ravi and Ramu can now submit invoices, review AI findings, propose and approve recoveries, and watch the money flow in real time, all from a browser, without writing a single command.
+</div>
+
 </body>
 </html>

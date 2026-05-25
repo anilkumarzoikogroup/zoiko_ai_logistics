@@ -129,7 +129,7 @@ class TestTokenIntegration:
         assert token.status == "ACTIVE"
         assert token.token_hash != ""
         assert token.tenant_binding != ""
-        assert token.expires_at > zoiko.governance.token.issued_at
+        assert token.expires_at > token.issued_at
 
     def test_mint_rejected_decision_raises(self, db_url, test_case, broker):
         from services.evidence_svc.handler   import EvidenceHandler

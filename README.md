@@ -26,39 +26,57 @@ When a carrier overcharges a shipper, this system detects it, gets two humans to
 
 | Phase | What It Builds | Tests | Status |
 |-------|---------------|-------|--------|
-| **Phase 0** | Crypto foundation (JCS, Merkle, Ed25519), 26 DB tables, Streamlit dashboard | 86/86 | ✅ DONE |
+| **Phase 0** | Crypto foundation (JCS, Merkle, Ed25519), 25 DB tables, Streamlit dashboard | 86/86 | ✅ DONE |
 | **Phase 1** | KMS key hierarchy, OIDC/JWT middleware, Kafka (17 topics), OPA policies | 54/54 | ✅ DONE |
-| **Phase 2** | Ingestion → Validation → Canonical Truth → Case Orchestration (5 microservices) · OPA wired · 15-min token TTL | 38/38 | ✅ DONE |
+| **Phase 2** | Ingestion → Validation → Canonical Truth → Case Orchestration (5 microservices) · OPA wired · 24 API routes | 38/38 | ✅ DONE |
 | **Phase 3** | Evidence → Reasoning → Governance → Token (5 microservices) · OPA wired · DEV_MODE · Redis CONSUMED lock | 46/46 | ✅ DONE |
+| **Phase 5** | React 18 + TypeScript + Vite frontend · fully wired to live backend · real DB data · analyst/manager workflow · PDF parsing · toast notifications · code-split production build | — | ✅ DONE |
 | **Phase 4** | 8-gate Execution Gateway, Connector Hub, Reconciliation, ACR | — | ⏳ NEXT |
-| **Phase 5** | React + TypeScript frontend, 30-test hardening, load test, release | — | ⏳ |
 
 ---
 
 ## Quick Start
 
-### One-time setup
+### One-time setup (run once)
 ```powershell
-# From zoiko-logistics/ root
-pip install -r requirements.txt
-pip install -e phase-0/packages/zoiko-common
-pip install -e phase-1/packages/zoiko-kms
-
-# Create DB and run migrations
-psql -U postgres -c "CREATE DATABASE zoiko;"
-cd phase-0/db
-$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
-py -m alembic -c alembic.ini upgrade head
-cd ../..
-
-# Seed demo data
-cd phase-0
-$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
-py scripts/seed_dummy_data.py
-cd ..
+# From zoiko-logistics/ root — installs Python deps + frontend npm packages
+.\setup.bat
 ```
 
-### Launch the dashboard (all phases)
+### Daily launch — backend + frontend together
+```powershell
+.\launch.bat
+# Checks PostgreSQL, starts backend on port 8000, starts frontend on port 5173
+# Opens browser automatically at http://localhost:5173
+```
+
+### Manual start (if launch.bat windows are already open)
+```powershell
+# Terminal 1 — Backend
+cd phase-2
+..\..\.venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8000
+
+# Terminal 2 — Frontend
+cd zoiko-frontend\frontend
+$env:VITE_USE_MOCK = "false"
+npm run dev
+# Opens at http://localhost:5173
+```
+
+### Frontend environment (.env.local)
+```
+VITE_USE_MOCK=false
+VITE_API_BASE=/api
+VITE_DEV_JWT=<see .env.local>
+VITE_DEV_TENANT=11111111-1111-1111-1111-111111111111
+```
+All API calls go through the Vite proxy (`/api` → `localhost:8000`). No CORS issues.
+
+### Streamlit dashboard (Phase 0–3 deep-dive)
 ```powershell
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 streamlit run dashboard.py
@@ -109,7 +127,7 @@ BlueDart Invoice ₹12,500 arrives
          │   → Token (EXECUTE_CREDIT_MEMO, 24h TTL, tenant-bound)
          │
          ▼
-  Phase 4 — 8-gate Execution Gateway
+  Phase 4 — 8-gate Execution Gateway (NEXT)
          │   Gate 1: Token signature valid
          │   Gate 2: Token not expired
          │   Gate 3: Tenant binding matches
@@ -135,7 +153,8 @@ Phases are designed to be **both** — independently testable AND pipeline-conne
 | Development / debugging | Run each phase independently |
 | CI/CD | `pytest` per phase — no DB needed for unit tests |
 | Full SC-001 demo | Run Phase 2 demo → Phase 3 demo in sequence |
-| Dashboard | All phases shown in one Streamlit app |
+| React UI | `launch.bat` — live backend, real DB data |
+| Streamlit dashboard | All phases shown in one Streamlit app |
 | Production | Separate containers communicating via Kafka events |
 
 Phases share **only the PostgreSQL database** — they do not make live API calls to each other.
@@ -143,34 +162,57 @@ Phase 3 reads a `case_id` written by Phase 2. Phase 4 will read a `token_id` wri
 
 ---
 
-## Dashboard Pages
+## Backend API Routes (Phase 2 — port 8000)
 
-| Page | Phase | What it shows |
-|------|-------|---------------|
-| 🏠 Home | 0 | Live metrics, SC-001 summary |
-| 📋 All Cases | 0 | All cases, state badges, AI findings |
-| ➕ New Case | 0 | Register tenant + submit invoice |
-| 👤 Analyst Review | 0 | Human 1 reviews finding, proposes recovery |
-| ✅ Manager Approval | 0 | Human 2 approves (SoD enforced) |
-| ⚡ Execute Recovery | 0 | 8-gate execution, ACR issued |
-| 🔐 Crypto & Audit | 0 | JCS demo, domain hash, Merkle, tamper detection |
-| 🗄️ Database | 0 | All 26 tables with row counts |
-| 🔑 KMS Keys | 1 | Key hierarchy, live sign/verify, rotation |
-| 🎫 OIDC Identity | 1 | Issue/verify JWT tokens, tamper demo |
-| 🛡️ OPA Policies | 1 | Policy evaluation, SoD, tenant isolation, fail-closed |
-| 📨 Kafka Events | 1 | SC-001 lifecycle events, publish/consume |
-| 📥 Ingestion | 2 | 5-step write pattern, outbox, idempotency |
-| ✔ Validation | 2 | Contract rate check, overcharge detection |
-| 📄 Canonical Truth | 2 | Authoritative canonical_invoice row |
-| 🗂 Case Flow | 2 | State machine transitions, APPEND-ONLY audit trail |
-| 🔍 Evidence | 3 | Add evidence items, Merkle root update |
-| 🧠 Reasoning | 3 | SC-001 confidence 0.96, rule trace, finding + proposal |
-| ✅ Governance | 3 | Create approval task, SoD-enforced decision |
-| 🎫 Token | 3 | Mint governance token, view active tokens |
+| Method | Route | Description |
+|--------|-------|-------------|
+| GET | `/health` | Health check |
+| POST | `/cases/submit` | Full pipeline: ingest → validate → canonical → open case → evidence → AI finding |
+| GET | `/cases` | List all cases for tenant |
+| GET | `/cases/{id}` | Get single case |
+| GET | `/cases/{id}/events` | Case audit trail (append-only) |
+| POST | `/cases/{id}/propose` | Analyst proposes recovery action |
+| POST | `/cases/{id}/decide` | Manager approves/rejects (SoD enforced) |
+| GET | `/cases/{id}/validation` | Validation result for case |
+| GET | `/cases/{id}/canonical-invoice` | Canonical invoice data |
+| GET | `/cases/{id}/finding` | AI reasoning finding |
+| GET | `/cases/{id}/proposal` | Recovery proposal |
+| GET | `/cases/{id}/acr` | Action Certification Record |
+| GET | `/tokens` | List governance tokens |
+| GET | `/tokens/{id}` | Get single token |
+| POST | `/contract-rates` | Create contract rate |
+| GET | `/contract-rates` | List contract rates |
+| DELETE | `/contract-rates/{id}` | Delete contract rate |
+| POST | `/ingestion/parse-invoice` | Parse PDF/image invoice |
+| GET | `/ingestion/source-records` | List source records |
+| GET | `/kafka/events` | Recent Kafka events |
+| GET | `/stats` | Aggregated pipeline stats |
+| GET | `/admin/db-stats` | Live row counts for all 25 DB tables |
+
+All routes require: `Authorization: Bearer <JWT>`, `X-Tenant-ID: <uuid>`, `Idempotency-Key: <unique>` (on mutations).
 
 ---
 
-## The 26 Database Tables
+## Frontend Pages
+
+| Page | URL | Live Data |
+|------|-----|-----------|
+| Home / Dashboard | `/` | Cases, tokens, Kafka events, carrier breakdown |
+| All Cases | `/cases` | Full case list from DB |
+| New Case | `/cases/new` | Submits to `/cases/submit` → real pipeline |
+| Case Detail | `/cases/:id` | Single case, events, finding, proposal |
+| Analyst Review | `/cases/:id/review` | Propose recovery action |
+| Manager Approval | `/cases/:id/approve` | Approve/reject (SoD enforced) |
+| Rate Control | `/cases/rates` | Contract rates (live CRUD) |
+| Payment Control | `/cases/payment` | Governance tokens register |
+| Performance | `/analytics/performance` | Carrier spend, overcharge trends |
+| Audit Conditions | `/analytics/conditions` | Carrier overcharge breakdown |
+| Alerts | `/audit/alerts` | Real-time Kafka event stream |
+| Database | `/audit/database` | Live row counts for all 25 tables |
+
+---
+
+## The 25 Database Tables
 
 All tables have **RLS ENABLED + FORCED**. Tables marked `*` are APPEND-ONLY (no UPDATE or DELETE).
 
@@ -186,8 +228,8 @@ GOVERNANCE     → policy_bundles, governance_decisions, approval_tasks
 TOKEN          → governance_tokens
 EXECUTION      → idempotency_keys, execution_envelopes, connector_responses
 RECONCILIATION → reconciliations, outcomes
-AUDIT          → action_certification_records
-INFRASTRUCTURE → outbox, audit_worm_index*
+AUDIT          → action_certification_records, audit_worm_index*
+INFRASTRUCTURE → outbox
 ```
 
 ---
@@ -222,15 +264,18 @@ This is **deterministic** — any reasoning service anywhere must produce exactl
 
 | Layer | Technology |
 |-------|-----------|
-| API Services | FastAPI + Python 3.13 |
-| Dashboard | Streamlit |
-| Messaging | Apache Kafka (MockKafkaBroker in dev, Strimzi on GKE in prod) |
-| Database | PostgreSQL 18 |
-| Cache | Redis 7 |
-| Signing Keys | GCP Cloud KMS HSM (Ed25519) — SOFTWARE backend in dev |
-| Policy | OPA (Rego) |
-| Crypto | JCS RFC 8785, SHA-256 domain-tagged, Merkle trees |
-| CI | pytest + pytest-cov |
+| **Frontend** | React 18 + TypeScript + Vite + TailwindCSS + shadcn/ui |
+| **State / Data** | TanStack Query v5 · Zustand · Axios |
+| **Charts** | Recharts · lucide-react icons |
+| **API Services** | FastAPI + Python 3.10+ |
+| **Dashboard** | Streamlit |
+| **Messaging** | Apache Kafka (MockKafkaBroker in dev, Strimzi on GKE in prod) |
+| **Database** | PostgreSQL |
+| **Cache** | Redis 7 |
+| **Signing Keys** | GCP Cloud KMS HSM (Ed25519) — SOFTWARE backend in dev |
+| **Policy** | OPA (Rego) |
+| **Crypto** | JCS RFC 8785, SHA-256 domain-tagged, Merkle trees |
+| **CI** | pytest + pytest-cov · TypeScript tsc |
 
 ---
 
@@ -238,17 +283,17 @@ This is **deterministic** — any reasoning service anywhere must produce exactl
 
 ```
 zoiko-logistics/
-├── dashboard.py                   ← Streamlit dashboard (all phases, 20 pages)
-├── requirements.txt               ← All dependencies (single file)
+├── dashboard.py                   ← Streamlit dashboard (all phases)
+├── requirements.txt               ← All Python dependencies (single file)
+├── launch.bat                     ← One-click start: PostgreSQL check → backend → frontend
+├── setup.bat                      ← One-time setup (venv + pip + npm install)
 ├── EXECUTION_GUIDE.md             ← Step-by-step commands per phase
 ├── CLAUDE.md                      ← AI assistant context and conventions
-├── README.md                      ← This file
-├── zoiko_phases_story.html        ← Phase-by-phase story document
 │
-├── phase-0/                       ← Crypto + DB + seed data
+├── phase-0/                       ← Crypto + DB schema + seed data
 │   ├── packages/zoiko-common/     ← JCS, Merkle, Ed25519, Kafka
-│   ├── db/migrations/             ← Alembic: all 26 tables
-│   └── scripts/                   ← seed_dummy_data.py, demo_sc001.py, tenant_fuzzer.py
+│   ├── db/migrations/             ← Alembic: all 25 tables
+│   └── scripts/                   ← seed_dummy_data.py, demo_sc001.py
 │
 ├── phase-1/                       ← Security substrate
 │   ├── packages/zoiko-kms/        ← 3-tier key hierarchy, local Ed25519
@@ -257,26 +302,29 @@ zoiko-logistics/
 │   ├── kafka/                     ← ZoikoProducer, ZoikoConsumer, MockKafkaBroker
 │   └── opa/policies/              ← freight_dispute.rego, tenant_isolation.rego
 │
-├── phase-2/                       ← Service pipeline
+├── phase-2/                       ← Service pipeline (port 8000)
 │   └── services/
-│       ├── api_gateway/           ← FastAPI, JWT + OPA auth, 6 routes
+│       ├── api_gateway/           ← FastAPI, 24 routes, JWT + OPA auth
 │       ├── ingestion_svc/         ← 5-step write pattern
 │       ├── validation_svc/        ← Contract rate engine, overcharge detection
 │       ├── canonical_truth/       ← Authoritative canonical_invoice row
 │       └── case_orchestration/    ← Case FSM, APPEND-ONLY case_events
 │
 ├── phase-3/                       ← Evidence · Reasoning · Governance · Token
-│   ├── services/
-│   │   ├── api_gateway/           ← FastAPI, 7 routes, OPA wired, DEV_MODE
-│   │   ├── evidence_svc/          ← Domain-tagged hash, Merkle root bundle
-│   │   ├── reasoning_svc/         ← SC-001 confidence 0.96 (deterministic)
-│   │   ├── governance_svc/        ← SoD enforcement, case FSM APPROVED
-│   │   └── token_svc/             ← tenant_binding, signed token, 15-min TTL
-│   └── shared/
-│       ├── db.py                  ← DB helpers
-│       ├── signer.py              ← Ed25519 sign wrapper
-│       ├── redis_idem.py          ← Ingestion idempotency cache
-│       └── redis_token.py         ← Token CONSUMED lock (Phase 4 reads this)
+│   └── services/
+│       ├── api_gateway/           ← FastAPI, 7 routes, OPA wired, DEV_MODE
+│       ├── evidence_svc/          ← Domain-tagged hash, Merkle root bundle
+│       ├── reasoning_svc/         ← SC-001 confidence 0.96 (deterministic)
+│       ├── governance_svc/        ← SoD enforcement, case FSM APPROVED
+│       └── token_svc/             ← tenant_binding, signed token, 15-min TTL
 │
-└── phase-4/                       ← (next) 8-gate execution + reconciliation + ACR
+├── phase-4/                       ← (next) 8-gate execution + reconciliation + ACR
+│
+└── zoiko-frontend/frontend/       ← React + TypeScript frontend
+    ├── src/features/              ← dashboard, cases, governance, analytics, audit
+    ├── src/api/zoiko.ts           ← API service layer (mock/live switch)
+    ├── src/api/client.ts          ← Axios instance, auth headers, idempotency key
+    ├── src/types/index.ts         ← TypeScript types matching backend schema
+    ├── vite.config.ts             ← Dev proxy: /api → localhost:8000
+    └── .env.local                 ← VITE_USE_MOCK=false · VITE_API_BASE=/api
 ```

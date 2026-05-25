@@ -14,7 +14,7 @@ All mutating routes require:
   Authorization: Bearer <JWT>
   X-Tenant-ID:   <tenant-uuid>
 """
-import base64, os
+import base64, os, uuid as _uuid_lib
 import paths  # noqa: F401 — must be first
 
 from fastapi import FastAPI, Depends, HTTPException
@@ -73,13 +73,21 @@ def add_evidence_item(
         content_bytes = base64.b64decode(body.content_b64)
     except Exception:
         raise HTTPException(status_code=422, detail="content_b64 is not valid base64")
+    # Accept any string as entity_id — coerce to UUID (UUID5 from non-UUID strings)
+    if body.entity_id:
+        try:
+            entity_uuid = _uuid_lib.UUID(str(body.entity_id))
+        except ValueError:
+            entity_uuid = _uuid_lib.uuid5(_uuid_lib.NAMESPACE_URL, str(body.entity_id))
+    else:
+        entity_uuid = None
     try:
         result = _evidence.add_item(
             tenant_id     = str(claims.tenant_id),
             case_id       = case_id,
             item_type     = body.item_type,
             content_bytes = content_bytes,
-            entity_id     = body.entity_id,
+            entity_id     = entity_uuid,
             actor_sub     = claims.sub,
         )
     except Exception as e:

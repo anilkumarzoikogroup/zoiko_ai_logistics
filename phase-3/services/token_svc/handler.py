@@ -59,7 +59,7 @@ class TokenHandler:
             if row["outcome"] != "EXECUTION_READY":
                 raise ValueError(
                     f"Cannot mint token: decision {decision_id} outcome is {row['outcome']}, "
-                    f"must be APPROVED"
+                    f"must be EXECUTION_READY"
                 )
 
             # tenant_binding = SHA-256(tenant_id_utf8 || decision_id_utf8)
