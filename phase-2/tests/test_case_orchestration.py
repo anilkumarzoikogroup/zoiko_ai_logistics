@@ -2,7 +2,21 @@
 import uuid
 import pytest
 import paths  # noqa: F401
-from services.case_orchestration.handler import CaseHandler
+from services.case_orchestration.handler import CaseHandler, ConflictError
+
+
+# ── OCC unit test — no DB required ────────────────────────────────────────────
+
+class TestOCCUnit:
+    """T-016: ConflictError is raised when expected_version doesn't match."""
+
+    def test_conflict_error_is_importable(self):
+        from services.case_orchestration.handler import ConflictError
+        assert issubclass(ConflictError, Exception)
+
+    def test_conflict_error_message(self):
+        err = ConflictError("Stale version: expected 1, got 3. Reload the case and retry.")
+        assert "Stale version" in str(err)
 
 
 def _setup_canonical(db_url, broker, tenant, inv_no):

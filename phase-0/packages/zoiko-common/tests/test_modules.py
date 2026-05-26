@@ -147,7 +147,7 @@ class TestKafka:
         assert partition_key("tenant-1", "case-abc") == "tenant-1:case-abc"
 
     def test_all_17_topics_defined(self):
-        assert len(TOPICS) == 17
+        assert len(TOPICS) == 18  # 17 pipeline topics + security.event.detected (FR-024)
 
     def test_topic_names_have_version_suffix(self):
         for name, topic in TOPICS.items():

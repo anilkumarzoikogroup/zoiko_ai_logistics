@@ -37,6 +37,7 @@ class OpenCaseRequest(BaseModel):
 class TransitionRequest(BaseModel):
     new_state:  str
     actor_sub:  str
+    version:    int | None = None   # OCC: if provided, must match cases.version (T-016)
     payload:    dict = Field(default_factory=dict)
 
 

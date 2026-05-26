@@ -1,0 +1,12 @@
+variable "project_id"      { type = string }
+variable "region"          { type = string }
+variable "env"             { type = string }
+variable "image_phase2"    { type = string }
+variable "image_phase3"    { type = string }
+variable "image_phase4"    { type = string }
+variable "image_connector" { type = string }
+variable "image_stub"      { type = string }
+variable "db_connection"   { type = string }
+variable "redis_host"      { type = string }
+variable "kms_key_name"    { type = string }
+variable "db_secret_name"  { type = string }

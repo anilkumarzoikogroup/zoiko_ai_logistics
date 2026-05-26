@@ -17,6 +17,10 @@ import shared.db  # noqa: F401 — registers UUID adapter
 
 from services.case_orchestration.models import CaseResult
 
+class ConflictError(Exception):
+    """Raised on OCC stale-version mismatch (HTTP 409)."""
+
+
 VALID_TRANSITIONS = {
     "NEW":               {"EVIDENCE_PENDING",  "ABORTED"},
     "EVIDENCE_PENDING":  {"FINDING_GENERATED", "ABORTED"},
@@ -113,14 +117,25 @@ class CaseHandler:
         new_state: str,
         actor_sub: str,
         payload: dict = None,
+        expected_version: int = None,
     ) -> str:
+        """
+        Advance the FSM to new_state.
+
+        If expected_version is provided (OCC / T-016):
+          - 409 ConflictError is raised if cases.version != expected_version.
+          - version is incremented atomically in the same UPDATE.
+
+        If expected_version is None (legacy / internal callers):
+          - No version check is performed (backward-compatible).
+        """
         tenant_id = str(tenant_id)
         case_id   = uuid.UUID(str(case_id))
         conn      = psycopg2.connect(self.db_url)
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(
-                "SELECT state FROM cases WHERE id=%s AND tenant_id=%s",
+                "SELECT state, version FROM cases WHERE id=%s AND tenant_id=%s",
                 (case_id, tenant_id),
             )
             row = cur.fetchone()
@@ -134,11 +149,28 @@ class CaseHandler:
                     f"Invalid transition: {current} → {new_state}. Allowed: {allowed}"
                 )
 
+            # OCC check (T-016)
+            if expected_version is not None:
+                actual_version = row.get("version", 1)
+                if actual_version != expected_version:
+                    raise ConflictError(
+                        f"Stale version: expected {expected_version}, got {actual_version}. "
+                        "Reload the case and retry."
+                    )
+
             now = datetime.now(timezone.utc)
-            cur.execute(
-                "UPDATE cases SET state=%s WHERE id=%s AND tenant_id=%s",
-                (new_state, case_id, tenant_id),
-            )
+            if expected_version is not None:
+                cur.execute(
+                    "UPDATE cases SET state=%s, version=version+1 WHERE id=%s AND tenant_id=%s AND version=%s",
+                    (new_state, case_id, tenant_id, expected_version),
+                )
+                if cur.rowcount == 0:
+                    raise ConflictError("Concurrent modification detected — retry with latest version")
+            else:
+                cur.execute(
+                    "UPDATE cases SET state=%s WHERE id=%s AND tenant_id=%s",
+                    (new_state, case_id, tenant_id),
+                )
 
             # APPEND-ONLY case_event
             cur.execute("""

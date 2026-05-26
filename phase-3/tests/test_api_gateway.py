@@ -19,7 +19,18 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def client():
-    from services.api_gateway.app import app
+    import sys, os
+    _phase3 = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+    # Evict stale phase-2 cache entries
+    for _k in [k for k in sys.modules if "services.api_gateway" in k or k == "services"]:
+        del sys.modules[_k]
+    # Temporarily prioritise phase-3 so its app loads instead of phase-2's
+    sys.path.insert(0, _phase3)
+    try:
+        from services.api_gateway.app import app
+    finally:
+        if _phase3 in sys.path:
+            sys.path.remove(_phase3)
     return TestClient(app, raise_server_exceptions=False)
 
 

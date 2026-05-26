@@ -2,7 +2,9 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from "ax
 import { generateIdempotencyKey } from "@/utils/cn";
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK !== "false";
-const API_BASE = import.meta.env.VITE_API_BASE || "/api";
+// Spec §9.2: all routes are under /v1/. Proxy in vite.config.ts rewrites /api → ""
+// so /api/v1/cases becomes /v1/cases at the backend.
+const API_BASE = (import.meta.env.VITE_API_BASE || "/api") + "/v1";
 
 // JWT + tenant come from auth store (or env for dev)
 function getAuthHeaders(): Record<string, string> {

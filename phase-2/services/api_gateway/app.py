@@ -41,7 +41,7 @@ from services.ingestion_svc.handler    import IngestionHandler
 from services.ingestion_svc.models     import InvoiceInput
 from services.validation_svc.handler  import ValidationHandler
 from services.canonical_truth.handler import CanonicalHandler
-from services.case_orchestration.handler import CaseHandler
+from services.case_orchestration.handler import CaseHandler, ConflictError
 from middleware.oidc.claims import ZoikoClaims
 
 DB_URL      = os.getenv("DB_URL",      "postgresql://postgres:1234@localhost/zoiko")
@@ -61,6 +61,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting (T-024) — enabled via ZOIKO_RATE_LIMIT_ENABLED=true
+try:
+    from zoiko_common.middleware.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
+except ImportError:
+    pass
+
+# OTel distributed tracing (FR-022)
+try:
+    from zoiko_common.observability.tracing import setup_tracing
+    setup_tracing("phase2-api-gateway")
+except Exception:
+    pass
+
+# Security event publisher (FR-024)
+from zoiko_common.security.events import SecurityEventPublisher, SecurityEventKind
+_sec = SecurityEventPublisher(broker=_BROKER)
+
+# All UI/internal routes are registered on v1_router; the router is included
+# TWICE: once with /v1 prefix (spec §9.2) and once without (backward compat).
+from fastapi import APIRouter as _AR
+v1_router = _AR()
+
 
 # ── Singleton handlers ────────────────────────────────────────────────────────
 
@@ -70,16 +93,17 @@ _canonical  = CanonicalHandler(DB_URL, _BROKER, TENANT_SLUG)
 _cases      = CaseHandler(DB_URL, _BROKER)
 
 
-# ── Health ────────────────────────────────────────────────────────────────────
+# ── Health — registered directly on app (not versioned) ──────────────────────
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
+@app.get("/v1/health", response_model=HealthResponse, tags=["ops"], include_in_schema=False)
 def health():
     return HealthResponse(status="ok", service="api-gateway", version="2.0.0")
 
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
-@app.post("/invoices", response_model=InvoiceResponse, status_code=201, tags=["invoices"])
+@v1_router.post("/invoices", response_model=InvoiceResponse, status_code=201, tags=["invoices"])
 def ingest_invoice(
     body: InvoiceRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -109,7 +133,7 @@ def ingest_invoice(
 
 # ── Validation ────────────────────────────────────────────────────────────────
 
-@app.post(
+@v1_router.post(
     "/invoices/{source_record_id}/validate",
     response_model=ValidateResponse,
     tags=["invoices"],
@@ -142,7 +166,7 @@ def validate_invoice(
 
 # ── Canonicalize ──────────────────────────────────────────────────────────────
 
-@app.post(
+@v1_router.post(
     "/invoices/{source_record_id}/canonicalize",
     response_model=CanonicalizeResponse,
     tags=["invoices"],
@@ -177,7 +201,7 @@ def canonicalize_invoice(
 
 # ── Cases ─────────────────────────────────────────────────────────────────────
 
-@app.post("/cases", response_model=OpenCaseResponse, status_code=201, tags=["cases"])
+@v1_router.post("/cases", response_model=OpenCaseResponse, status_code=201, tags=["cases"])
 def open_case(
     body: OpenCaseRequest,
     claims: ZoikoClaims = Depends(get_claims),
@@ -199,7 +223,7 @@ def open_case(
     )
 
 
-@app.patch("/cases/{case_id}/state", response_model=TransitionResponse, tags=["cases"])
+@v1_router.patch("/cases/{case_id}/state", response_model=TransitionResponse, tags=["cases"])
 def transition_case(
     case_id: str,
     body: TransitionRequest,
@@ -207,12 +231,46 @@ def transition_case(
 ):
     try:
         new_state = _cases.transition_state(
-            tenant_id = str(claims.tenant_id),
-            case_id   = case_id,
-            new_state = body.new_state,
-            actor_sub = body.actor_sub,
-            payload   = body.payload,
+            tenant_id        = str(claims.tenant_id),
+            case_id          = case_id,
+            new_state        = body.new_state,
+            actor_sub        = body.actor_sub,
+            payload          = body.payload,
+            expected_version = getattr(body, "version", None),
         )
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return TransitionResponse(case_id=case_id, new_state=new_state)
+
+
+@v1_router.post("/cases/{case_id}/transition", response_model=TransitionResponse, tags=["cases"])
+def transition_case_post(
+    case_id: str,
+    body: TransitionRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """
+    Generic FSM transition with OCC version check (T-016).
+    Body: {new_state, actor_sub, version (optional), payload (optional)}
+    Returns 409 if version doesn't match current row version.
+    """
+    try:
+        new_state = _cases.transition_state(
+            tenant_id        = str(claims.tenant_id),
+            case_id          = case_id,
+            new_state        = body.new_state,
+            actor_sub        = body.actor_sub,
+            payload          = body.payload,
+            expected_version = getattr(body, "version", None),
+        )
+    except ConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
@@ -298,7 +356,7 @@ def _cases_q(where: str, params: tuple) -> list[dict]:
 
 # ── Dashboard stats ────────────────────────────────────────────────────────────
 
-@app.get("/dashboard/stats", tags=["ui"])
+@v1_router.get("/dashboard/stats", tags=["ui"])
 def ui_stats(claims: ZoikoClaims = Depends(get_claims)):
     tid = claims.tenant_id
     cnt = q1("""
@@ -335,7 +393,7 @@ def ui_stats(claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Cases list + detail ────────────────────────────────────────────────────────
 
-@app.get("/cases", tags=["ui"])
+@v1_router.get("/cases", tags=["ui"])
 def ui_list_cases(
     state: str | None = None,
     claims: ZoikoClaims = Depends(get_claims),
@@ -346,7 +404,7 @@ def ui_list_cases(
     return _cases_q("WHERE c.tenant_id=%s::uuid", (tid,))
 
 
-@app.get("/cases/{case_id}", tags=["ui"])
+@v1_router.get("/cases/{case_id}", tags=["ui"])
 def ui_get_case(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     rows = _cases_q(
         "WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid",
@@ -359,7 +417,7 @@ def ui_get_case(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Case events ────────────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/events", tags=["ui"])
+@v1_router.get("/cases/{case_id}/events", tags=["ui"])
 def ui_case_events(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     rows = q("""
         SELECT id::text, case_id::text, from_state, to_state,
@@ -375,7 +433,7 @@ def ui_case_events(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Validation result ──────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/validation", tags=["ui"])
+@v1_router.get("/cases/{case_id}/validation", tags=["ui"])
 def ui_validation(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     row = q1("""
         SELECT
@@ -402,7 +460,7 @@ def ui_validation(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Canonical invoice ──────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/canonical-invoice", tags=["ui"])
+@v1_router.get("/cases/{case_id}/canonical-invoice", tags=["ui"])
 def ui_canonical_invoice(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     row = q1("""
         SELECT
@@ -428,7 +486,7 @@ def ui_canonical_invoice(case_id: str, claims: ZoikoClaims = Depends(get_claims)
 
 # ── Source records ─────────────────────────────────────────────────────────────
 
-@app.get("/ingestion/source-records", tags=["ui"])
+@v1_router.get("/ingestion/source-records", tags=["ui"])
 def ui_source_records(claims: ZoikoClaims = Depends(get_claims)):
     rows = q("""
         SELECT
@@ -461,7 +519,7 @@ def ui_source_records(claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Evidence bundle ────────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/evidence", tags=["ui"])
+@v1_router.get("/cases/{case_id}/evidence", tags=["ui"])
 def ui_evidence(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     bundle = q1("""
         SELECT id::text, case_id::text,
@@ -489,7 +547,7 @@ def ui_evidence(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Finding ────────────────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/finding", tags=["ui"])
+@v1_router.get("/cases/{case_id}/finding", tags=["ui"])
 def ui_finding(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     row = q1("""
         SELECT id::text, case_id::text, confidence::float,
@@ -509,7 +567,7 @@ def ui_finding(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Proposal ───────────────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/proposal", tags=["ui"])
+@v1_router.get("/cases/{case_id}/proposal", tags=["ui"])
 def ui_get_proposal(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     row = q1("""
         SELECT id::text, case_id::text,
@@ -526,7 +584,7 @@ def ui_get_proposal(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     return _r(row)
 
 
-@app.post("/cases/{case_id}/proposal", tags=["ui"], status_code=201)
+@v1_router.post("/cases/{case_id}/proposal", tags=["ui"], status_code=201)
 def ui_create_proposal(
     case_id: str,
     body: UIProposalRequest,
@@ -600,7 +658,7 @@ def ui_create_proposal(
 
 # ── Decide ─────────────────────────────────────────────────────────────────────
 
-@app.post("/cases/{case_id}/decide", tags=["ui"])
+@v1_router.post("/cases/{case_id}/decide", tags=["ui"])
 def ui_decide(
     case_id: str,
     body: UIDecideRequest,
@@ -622,6 +680,11 @@ def ui_decide(
     if not task:
         raise HTTPException(404, detail="No pending approval task for this case")
     if claims.sub == str(task["proposer_sub"]):
+        _sec.publish(SecurityEventKind.FORBIDDEN_FSM_TRANSITION, str(claims.tenant_id), {
+            "violation": "SOD_VIOLATION",
+            "actor_sub": claims.sub,
+            "case_id":   case_id,
+        })
         raise HTTPException(422, detail="Separation of Duties: proposer cannot approve own proposal")
 
     proposal_id = str(task["proposal_id"])
@@ -711,7 +774,7 @@ _TOKEN_SELECT = """
 """
 
 
-@app.get("/tokens", tags=["ui"])
+@v1_router.get("/tokens", tags=["ui"])
 def ui_list_tokens(
     status: str | None = None,
     claims: ZoikoClaims = Depends(get_claims),
@@ -725,7 +788,7 @@ def ui_list_tokens(
     return [_r(r) for r in rows]
 
 
-@app.get("/cases/{case_id}/token", tags=["ui"])
+@v1_router.get("/cases/{case_id}/token", tags=["ui"])
 def ui_case_token(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     row = q1(_TOKEN_SELECT + "WHERE dp.case_id=%s::uuid AND gt.tenant_id=%s::uuid ORDER BY gt.issued_at DESC LIMIT 1",
              (case_id, claims.tenant_id))
@@ -736,7 +799,7 @@ def ui_case_token(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Kafka events (from case_events) ───────────────────────────────────────────
 
-@app.get("/kafka/events", tags=["ui"])
+@v1_router.get("/kafka/events", tags=["ui"])
 def ui_kafka_events(claims: ZoikoClaims = Depends(get_claims)):
     rows = q("""
         SELECT event_type AS topic, case_id::text AS key, payload, occurred_at AS published_at
@@ -748,7 +811,7 @@ def ui_kafka_events(claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Contract rates ────────────────────────────────────────────────────────────
 
-@app.get("/contract-rates", tags=["ui"])
+@v1_router.get("/contract-rates", tags=["ui"])
 def ui_list_contract_rates(claims: ZoikoClaims = Depends(get_claims)):
     rows = q("""
         SELECT id::text, carrier_id AS carrier, rate_type, rate_value::float,
@@ -760,7 +823,7 @@ def ui_list_contract_rates(claims: ZoikoClaims = Depends(get_claims)):
     return [_r(r) for r in rows]
 
 
-@app.post("/contract-rates", tags=["ui"], status_code=201)
+@v1_router.post("/contract-rates", tags=["ui"], status_code=201)
 def ui_create_contract_rate(
     body: ContractRateRequest,
     claims: ZoikoClaims = Depends(get_claims),
@@ -777,7 +840,7 @@ def ui_create_contract_rate(
             "effective_on": body.effective_on}
 
 
-@app.delete("/contract-rates/{rate_id}", tags=["ui"])
+@v1_router.delete("/contract-rates/{rate_id}", tags=["ui"])
 def ui_delete_contract_rate(rate_id: str, claims: ZoikoClaims = Depends(get_claims)):
     _raw_exec(
         "DELETE FROM contract_rates WHERE id=%s::uuid AND tenant_id=%s::uuid",
@@ -786,9 +849,30 @@ def ui_delete_contract_rate(rate_id: str, claims: ZoikoClaims = Depends(get_clai
     return {"deleted": rate_id}
 
 
+# ── ACR — Action Certification Record (Phase 4 artifact) ─────────────────────
+
+@v1_router.get("/cases/{case_id}/acr", tags=["ui"])
+def ui_get_acr(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """Return ACR verify bundle if Phase 4 has run for this case."""
+    row = q1("""
+        SELECT id::text, case_id::text, tenant_id::text,
+               encode(merkle_root,'hex') AS merkle_root,
+               encode(acr_hash,'hex')   AS acr_hash,
+               verify_bundle,
+               is_locked,
+               issued_at
+        FROM   action_certification_records
+        WHERE  case_id=%s::uuid AND tenant_id=%s::uuid
+        ORDER BY issued_at DESC LIMIT 1
+    """, (case_id, claims.tenant_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="ACR not yet issued for this case")
+    return _r(row)
+
+
 # ── Admin: real DB row counts ──────────────────────────────────────────────────
 
-@app.get("/admin/db-stats", tags=["admin"])
+@v1_router.get("/admin/db-stats", tags=["admin"])
 def admin_db_stats(claims: ZoikoClaims = Depends(get_claims)):
     rows = q("""
         SELECT relname AS table_name, n_live_tup AS row_count
@@ -801,7 +885,7 @@ def admin_db_stats(claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Invoice file parse ────────────────────────────────────────────────────────
 
-@app.post("/ingestion/parse-invoice", tags=["ui"])
+@v1_router.post("/ingestion/parse-invoice", tags=["ui"])
 async def parse_invoice_file(
     file: UploadFile = File(...),
     claims: ZoikoClaims = Depends(get_claims),
@@ -931,7 +1015,10 @@ def _run_evidence_and_reasoning(
             leaf_hashes.append(item_hash)
 
         # Recompute Merkle root
-        merkle_root = MerkleTree(leaf_hashes, domain=MERKLE_DOM).root()
+        _tree = MerkleTree(MERKLE_DOM)
+        for _h in leaf_hashes:
+            _tree.append(_h)
+        merkle_root = _tree.root()
         root_sig, root_kid = _sign(slug, merkle_root)
         cur.execute("UPDATE evidence_bundles SET bundle_hash=%s, signature=%s, kid=%s WHERE id=%s",
                     (merkle_root, root_sig, root_kid, bundle_id))
@@ -984,7 +1071,7 @@ def _run_evidence_and_reasoning(
                               payload={"case_id": case_id, "confidence": SC001}, tenant_id=tenant_id))
 
 
-@app.post("/cases/submit", tags=["ui"], status_code=201)
+@v1_router.post("/cases/submit", tags=["ui"], status_code=201)
 def ui_submit_case(
     body: SubmitCaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -1034,3 +1121,11 @@ def ui_submit_case(
     rows = _cases_q("WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid",
                     (str(case_r.case_id), str(claims.tenant_id)))
     return rows[0] if rows else {"id": str(case_r.case_id), "state": "FINDING_GENERATED"}
+
+
+# ── Route registration ────────────────────────────────────────────────────────
+# Spec §9.2: all routes are versioned under /v1/
+# Backward-compat: also register without prefix so existing tests and
+#   non-upgraded clients continue to work during the migration window.
+app.include_router(v1_router, prefix="/v1")
+app.include_router(v1_router)

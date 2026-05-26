@@ -13,7 +13,7 @@ export const zoikoApi = {
   // ---------- Dashboard ----------
   async getStats(): Promise<DashboardStats> {
     if (USE_MOCK) { await delay(); return mocks.mockStats; }
-    const { data } = await api.get<DashboardStats>("/dashboard/stats");
+    const { data } = await api.get<DashboardStats>("/stats");
     return data;
   },
 

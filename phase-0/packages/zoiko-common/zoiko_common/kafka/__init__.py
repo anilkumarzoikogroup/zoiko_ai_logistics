@@ -1,35 +1,23 @@
-"""Kafka topic registry and partition key helpers for Zoiko services.
+"""
+Kafka abstractions for Zoiko services.
 
-All 17 topics follow the same partition key convention:
+All 17 registered topics follow the convention: zoiko.<aggregate>.<event>
+
+Topic partition key convention:
   partition_key = f"{tenant_id}:{case_id}"
+  This guarantees ordered delivery per case, enabling deterministic FSM replay.
 
-This guarantees ordered delivery per case, enabling deterministic FSM replay
-from the Kafka log.
+Public API:
+  TOPICS              — dict of short alias → full topic name
+  REGISTERED_TOPICS   — set of all valid full topic names
+  KafkaEventEnvelope  — standard event wrapper (use this for all publishes)
+  OutboxRelay         — polls outbox table and publishes to Kafka
+  partition_key()     — build a standard partition key string
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-# Canonical topic names — must match Strimzi KafkaTopic resources in kafka/
-TOPICS = {
-    "source-record-created": "zoiko.ingestion.source-record-created.v1",
-    "validation-completed": "zoiko.validation.validation-completed.v1",
-    "canonical-truth-created": "zoiko.canonical.canonical-truth-created.v1",
-    "case-opened": "zoiko.case.case-opened.v1",
-    "case-state-changed": "zoiko.case.case-state-changed.v1",
-    "evidence-bundle-created": "zoiko.evidence.evidence-bundle-created.v1",
-    "finding-generated": "zoiko.reasoning.finding-generated.v1",
-    "decision-proposed": "zoiko.reasoning.decision-proposed.v1",
-    "governance-review-requested": "zoiko.governance.governance-review-requested.v1",
-    "governance-decision-made": "zoiko.governance.governance-decision-made.v1",
-    "token-issued": "zoiko.token.token-issued.v1",
-    "execution-requested": "zoiko.execution.execution-requested.v1",
-    "execution-completed": "zoiko.execution.execution-completed.v1",
-    "reconciliation-completed": "zoiko.reconciliation.reconciliation-completed.v1",
-    "acr-created": "zoiko.audit.acr-created.v1",
-    "outbox-relay": "zoiko.infra.outbox-relay.v1",
-    "dead-letter": "zoiko.infra.dead-letter.v1",
-}
+from zoiko_common.kafka.schemas import TOPICS, REGISTERED_TOPICS, KafkaEventEnvelope, KafkaMessage
+from zoiko_common.kafka.outbox_relay import OutboxRelay
 
 
 def partition_key(tenant_id: str, case_id: str) -> str:
@@ -37,9 +25,11 @@ def partition_key(tenant_id: str, case_id: str) -> str:
     return f"{tenant_id}:{case_id}"
 
 
-@dataclass(frozen=True)
-class KafkaMessage:
-    topic: str
-    key: str       # partition key
-    value: bytes   # serialised event payload
-    headers: dict[str, str]
+__all__ = [
+    "TOPICS",
+    "REGISTERED_TOPICS",
+    "KafkaEventEnvelope",
+    "KafkaMessage",
+    "OutboxRelay",
+    "partition_key",
+]

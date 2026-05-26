@@ -16,10 +16,10 @@ Zoiko detects freight overcharges automatically and recovers money through a cry
 |-------|-------|-------|-----------|
 | Phase 0 | ✅ | 86/86 | JCS + SHA-256 + Ed25519 + 25 DB tables + Streamlit dashboard |
 | Phase 1 | ✅ | 54/54 | KMS key hierarchy + OIDC/JWT + Kafka (17 topics) + OPA policies |
-| Phase 2 | ✅ | 38/38 | Ingestion → Validation → Canonical Truth → Case Orchestration · OPA fail-closed · 24 API routes |
+| Phase 2 | ✅ | 38/38 | Ingestion → Validation → Canonical Truth → Case Orchestration · OPA fail-closed · 24 API routes · /v1/ prefix |
 | Phase 3 | ✅ | 46/46 | Evidence → Reasoning → Governance → Token · OPA wired · DEV_MODE · Redis CONSUMED lock |
-| Phase 5 | ✅ | — | React 18 + TypeScript + Vite frontend · fully wired to live backend · no mock data · real DB |
-| Phase 4 | ⏳ next | — | 8-gate Execution Gateway → Connector → Reconciliation → ACR |
+| Phase 4 | ✅ | unit  | 8-gate Execution Gateway → Reconciliation → ACR · WORM index · CLOSED case state |
+| Phase 5 | ✅ | — | React 18 + TypeScript + Vite frontend · /v1/ API prefix · fully wired to live backend |
 
 ---
 
@@ -45,53 +45,62 @@ In dev/tests each phase runs in the same Python process using MockKafkaBroker.
 zoiko-logistics/
 ├── dashboard.py                     ← Streamlit, all phases
 ├── requirements.txt                 ← Single combined requirements file
+├── docker-compose.dev.yml           ← Full local stack (postgres, redis, kafka, opa, services)
 ├── launch.bat                       ← One-click: DB check → backend → frontend → browser
 ├── setup.bat                        ← One-time setup (venv + pip + npm install)
 ├── EXECUTION_GUIDE.md               ← Step-by-step run commands
-├── README.md                        ← Project overview
-├── CLAUDE.md                        ← This file
+├── .github/workflows/ci.yml         ← 8-gate CI: JCS → crypto → KMS → P1 → P2 → P3 → P4 → frontend
 │
-├── phase-0/packages/zoiko-common/   ← zoiko_common: jcs.py, merkle.py, signing.py
-├── phase-0/db/migrations/           ← Alembic: 0001_p0_all_tables.py (25 tables)
-├── phase-0/scripts/                 ← seed_dummy_data.py, demo_sc001.py
+├── opa/policies/zoiko/freight/      ← allow.rego — RBAC + tenant isolation policy
+│
+├── phase-0/packages/zoiko-common/zoiko_common/
+│   ├── crypto/jcs.py                ← RFC 8785 JCS canonicalization (CI hard block)
+│   ├── crypto/merkle.py             ← Merkle tree (domain-tagged)
+│   ├── crypto/signing.py            ← Ed25519 wrapper
+│   ├── kafka/__init__.py            ← Re-exports TOPICS, KafkaEventEnvelope, OutboxRelay
+│   ├── kafka/schemas.py             ← KafkaEventEnvelope (17-topic registry + envelope format)
+│   ├── kafka/outbox_relay.py        ← Polls outbox table → publishes to Kafka
+│   ├── errors/exceptions.py         ← ZoikoError hierarchy (GateFailureError, SoDViolationError…)
+│   └── observability/logging.py     ← JSON structured logging with tenant/trace context
+├── phase-0/db/migrations/           ← Alembic: 25 tables
+├── phase-0/scripts/                 ← seed_dummy_data.py, demo_sc001.py, tenant_fuzzer.py
 │
 ├── phase-1/packages/zoiko-kms/      ← zoiko_kms: hierarchy.py, local_backend.py
 ├── phase-1/middleware/oidc/         ← token_verifier.py, claims.py
 ├── phase-1/middleware/opa/          ← client.py (fail-closed), MockOPAClient
-├── phase-1/kafka/                   ← producer.py, consumer.py, mock_kafka.py
+├── phase-1/kafka/                   ← producer.py (zoiko.* topics), consumer.py, mock_kafka.py
 │
-├── phase-2/services/api_gateway/    ← app.py (24 routes), auth.py (OPA wired), models.py
+├── phase-2/services/api_gateway/    ← app.py (24 routes + /v1/ prefix + ACR route), auth.py, models.py
 ├── phase-2/services/ingestion_svc/  ← handler.py (5-step write pattern)
 ├── phase-2/services/validation_svc/ ← handler.py (contract rate engine)
 ├── phase-2/services/canonical_truth/← handler.py (authoritative row)
 ├── phase-2/services/case_orchestration/ ← handler.py (FSM)
-├── phase-2/shared/db.py             ← DB helpers (q, q1) — default DB_URL fallback
-├── phase-2/shared/redis_idem.py     ← Redis idempotency (graceful degradation)
+├── phase-2/shared/db.py             ← DB helpers (q, q1)
+├── phase-2/Dockerfile               ← Multi-stage, non-root, port 8000
 ├── phase-2/demo_phase2.py           ← Full Phase 2 end-to-end demo
-├── phase-2/smoke_test_gateway.py    ← 28-check API gateway smoke test
 │
-├── phase-3/services/api_gateway/    ← app.py (7 routes), auth.py (OPA + DEV_MODE), models.py
+├── phase-3/services/api_gateway/    ← app.py (7 routes + /v1/ prefix), auth.py, models.py
 ├── phase-3/services/evidence_svc/   ← handler.py (Merkle bundle)
 ├── phase-3/services/reasoning_svc/  ← handler.py (SC-001 confidence 0.96)
 ├── phase-3/services/governance_svc/ ← handler.py (SoD + case FSM)
 ├── phase-3/services/token_svc/      ← handler.py (tenant-bound token, 15-min TTL)
-├── phase-3/shared/db.py             ← DB helpers (get_conn, q, q1)
-├── phase-3/shared/signer.py         ← sign() wrapper over zoiko-kms
-├── phase-3/shared/redis_idem.py     ← Redis idempotency (graceful degradation)
-├── phase-3/shared/redis_token.py    ← Redis CONSUMED lock (Phase 4 uses this)
+├── phase-3/shared/redis_token.py    ← Redis CONSUMED lock (also used by Phase 4)
+├── phase-3/Dockerfile               ← Multi-stage, non-root, port 8002
 ├── phase-3/demo_phase3.py           ← Full Phase 3 end-to-end demo
 │
+├── phase-4/services/execution_gateway/ ← handler.py (8-gate check), models.py
+├── phase-4/services/reconciliation_svc/ ← handler.py (settlement match)
+├── phase-4/services/audit_acr_svc/  ← handler.py (8-artifact Merkle ACR)
+├── phase-4/services/api_gateway/    ← app.py (execute, reconcile, ACR — port 8001)
+├── phase-4/tests/                   ← test_execution_gateway.py, test_acr.py
+├── phase-4/Dockerfile               ← Multi-stage, non-root, port 8001
+├── phase-4/demo_phase4.py           ← Full Phase 4 end-to-end demo
+│
 └── zoiko-frontend/frontend/
-    ├── src/api/client.ts            ← Axios instance · auth headers · idempotency key
+    ├── src/api/client.ts            ← Axios instance · /v1/ API base · auth + idempotency headers
     ├── src/api/zoiko.ts             ← API service layer (USE_MOCK gate on every method)
-    ├── src/features/dashboard/      ← Home.tsx, Performance.tsx (live data)
-    ├── src/features/cases/          ← NewCase.tsx, CaseDetail.tsx, RateControl.tsx, PaymentControl.tsx
-    ├── src/features/governance/     ← AnalystReview.tsx, ManagerApproval.tsx
-    ├── src/features/analytics/      ← AuditConditions.tsx
-    ├── src/features/audit/          ← Alerts.tsx, DatabasePage.tsx
-    ├── src/mocks/fixtures.ts        ← Fallback mock data (used only when VITE_USE_MOCK=true)
-    ├── src/types/index.ts           ← TypeScript types matching backend schema
     ├── vite.config.ts               ← Dev proxy: /api → http://localhost:8000
+    ├── Dockerfile                   ← Multi-stage: dev + build + nginx prod
     └── .env.local                   ← VITE_USE_MOCK=false · VITE_API_BASE=/api
 ```
 
@@ -320,12 +329,13 @@ This check happens in `GovernanceHandler.decide()` BEFORE any DB write.
 ## Case FSM States
 
 ```
-OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL → APPROVED → EXECUTED → RECONCILED → CLOSED
-                                                                          ↘ REJECTED (from any state)
+NEW → EVIDENCE_PENDING → FINDING_GENERATED → APPROVAL_PENDING
+    → EXECUTION_READY → DISPATCHED → OUTCOME_RECORDED → CLOSED
+    → ABORTED (from any state)
 ```
 
-When using `POST /cases/submit`, the case returns as `EVIDENCE_PENDING` (Phase 3 pipeline runs async).
-Phase 3 demo advances it to `FINDING_GENERATED` → `PENDING_APPROVAL`.
+When using `POST /v1/cases/submit`, the case returns as `FINDING_GENERATED` (Phase 2+3 inline).
+Phase 4 demo advances it through: `EXECUTION_READY → DISPATCHED → OUTCOME_RECORDED → CLOSED`.
 
 ---
 
@@ -417,12 +427,38 @@ Gracefully no-ops if Redis unavailable — DB `status=CONSUMED` update is author
 ## What Phase 4 Will Need
 
 - `execution_envelopes` table (already in schema)
-- `connector_responses` table (already in schema)
-- `reconciliations` + `outcomes` tables (already in schema)
-- `action_certification_records` + `audit_worm_index` tables (already in schema)
-- Read `governance_tokens` where `status='ACTIVE'` and `expires_at > now` — written by Phase 3
-- Call `phase-3/shared/redis_token.mark_consumed(token_id)` as Gate 8 pre-check
-- 8-gate check logic (token sig, expiry, tenant_binding, scope, sanctions, FX, connector, idempotency)
-- `token.consumed` Kafka event after execution
-- Merkle tree over 8 artifacts → ACR row → `audit_worm_index` row (APPEND-ONLY)
-- Frontend: `GET /cases/{id}/acr` already wired in zoiko.ts, page in `CaseDetail.tsx`
+## Phase 4 — What's Built
+
+Phase 4 is now implemented. Key files:
+
+| File | Purpose |
+|------|---------|
+| `phase-4/services/execution_gateway/handler.py` | 8-gate check (sig, expiry, consumed, binding, scope, sanctions, FX, connector) |
+| `phase-4/services/reconciliation_svc/handler.py` | Settlement match against connector_responses, writes reconciliations + outcomes |
+| `phase-4/services/audit_acr_svc/handler.py` | 8-artifact Merkle ACR, writes action_certification_records + audit_worm_index |
+| `phase-4/services/api_gateway/app.py` | FastAPI gateway (port 8001): POST /v1/execute, POST /v1/reconcile, POST /v1/cases/{id}/acr |
+| `phase-4/demo_phase4.py` | Full end-to-end demo (requires Phase 2+3 demo first) |
+| `phase-4/tests/test_execution_gateway.py` | Gate unit tests (no DB) + integration test (skip if no DB) |
+| `phase-4/tests/test_acr.py` | ACR verify bundle structure tests |
+
+### Running Phase 4 demo
+```powershell
+# First run Phase 2 + 3 demos to seed an ACTIVE token
+cd phase-2; py demo_phase2.py; cd ..
+cd phase-3; py demo_phase3.py; cd ..
+
+# Then run Phase 4
+cd phase-4
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:PYTHONIOENCODING = "utf-8"
+py demo_phase4.py
+```
+
+### Running Phase 4 API
+```powershell
+cd phase-4
+..\..\.venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8001
+```

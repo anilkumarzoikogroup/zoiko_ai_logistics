@@ -32,6 +32,8 @@ REGISTERED_TOPICS = {
     "zoiko.governance.decision.issued","zoiko.governance.token.issued",   "zoiko.governance.token.consumed",
     "zoiko.execution.dispatched",      "zoiko.execution.completed",
     "zoiko.reconciliation.updated",    "zoiko.acr.generated",             "zoiko.audit.artifact.written",
+    # FR-024 — security event stream
+    "zoiko.security.event-detected.v1",
 }
 
 

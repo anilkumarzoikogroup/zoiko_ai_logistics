@@ -74,7 +74,7 @@ class TestKafkaMessage:
             KafkaMessage(topic="nonexistent.topic", key="k", payload={}, tenant_id=TENANT_ID)
 
     def test_all_17_topics_are_registered(self):
-        assert len(REGISTERED_TOPICS) == 17
+        assert len(REGISTERED_TOPICS) == 18  # 17 pipeline topics + security.event.detected (FR-024)
 
     def test_headers_include_tenant_and_idempotency(self):
         msg     = KafkaMessage(topic="zoiko.case.closed", key="k", payload={}, tenant_id=TENANT_ID)
