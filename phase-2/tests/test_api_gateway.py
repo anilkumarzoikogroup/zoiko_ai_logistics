@@ -10,15 +10,18 @@ ZOIKO_DEV_SECRET env-var (default: "zoiko-dev-secret-for-testing-only").
 """
 import os
 import uuid
+from dotenv import load_dotenv
 
 import pytest
 import paths  # noqa: F401
 
+load_dotenv()
+
 from fastapi.testclient import TestClient
 from middleware.oidc.token_verifier import TokenVerifier
 
-DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET", "zoiko-dev-secret-for-testing-only").encode()
-ISSUER     = os.getenv("ZOIKO_ISSUER",     "https://auth.zoikotech.com")
+DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET").encode()
+ISSUER     = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
 
 _minter = TokenVerifier(dev_secret=DEV_SECRET, issuer=ISSUER)
 

@@ -9,8 +9,11 @@ TestPipelineUnit   (DB tests, skipped if PostgreSQL unreachable)
 import base64
 import os
 import pytest
+from dotenv import load_dotenv
 
 import paths  # noqa: F401
+
+load_dotenv()
 
 _DEV_MODE = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
 
@@ -40,7 +43,7 @@ def dev_token(client):
     from middleware.oidc.token_verifier import TokenVerifier
     import uuid
 
-    secret = os.getenv("ZOIKO_DEV_SECRET", "zoiko-dev-secret-for-testing-only").encode()
+    secret = os.getenv("ZOIKO_DEV_SECRET").encode()
     issuer = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
     tv     = TokenVerifier(dev_secret=secret, issuer=issuer)
     tid    = str(uuid.uuid4())

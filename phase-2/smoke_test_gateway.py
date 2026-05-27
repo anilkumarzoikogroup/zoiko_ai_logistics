@@ -16,7 +16,7 @@ from middleware.oidc.token_verifier import TokenVerifier
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET", "zoiko-dev-secret-for-testing-only").encode()
+DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET").encode()
 ISSUER     = os.getenv("ZOIKO_ISSUER",     "https://auth.zoikotech.com")
 DB_URL     = os.getenv("DB_URL")
 

@@ -87,7 +87,7 @@ try:
     from middleware.oidc.token_verifier import TokenVerifier as _TV
     import jwt as _jwt
     _tv = _TV(
-        dev_secret    = os.getenv("ZOIKO_DEV_SECRET", "zoiko-dev-secret-for-testing-only").encode(),
+        dev_secret    = os.getenv("ZOIKO_DEV_SECRET").encode(),
         issuer        = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com"),
     )
     _DEV_MODE = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"

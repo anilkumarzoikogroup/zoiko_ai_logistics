@@ -10,8 +10,11 @@ Rules:
     update is the primary protection; Redis is a fast replay guard on top.
 """
 import os
+from dotenv import load_dotenv
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL")
 _PREFIX   = "token"
 _TTL      = 7 * 24 * 3600   # 7 days — matches WORM retention window
 

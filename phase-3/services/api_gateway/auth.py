@@ -12,8 +12,8 @@ from middleware.oidc.token_verifier import TokenVerifier, TokenExpiredError, Tok
 from middleware.oidc.claims import ZoikoClaims
 from middleware.opa.client import OPAClient, MockOPAClient, OPAUnavailableError
 
-DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET", "zoiko-dev-secret-for-testing-only").encode()
-ISSUER     = os.getenv("ZOIKO_ISSUER",     "https://auth.zoikotech.com")
+DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET").encode()
+ISSUER     = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
 DEV_MODE   = os.getenv("ZOIKO_DEV_MODE",   "false").lower() == "true"
 OPA_URL    = os.getenv("OPA_URL", "")
 

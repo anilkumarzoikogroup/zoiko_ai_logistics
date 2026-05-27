@@ -12,6 +12,8 @@ Shows all 4 Phase 1 components in action:
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── colour helpers ─────────────────────────────────────────────────────────────
 GREEN  = "\033[92m"
@@ -103,8 +105,8 @@ print("  Every API call must carry a signed JWT + X-Tenant-ID header")
 
 from middleware.oidc.token_verifier import TokenVerifier, TokenExpiredError, TokenInvalidError
 
-DEV_SECRET = b"zoiko-dev-secret-for-testing-only"
-verifier   = TokenVerifier(dev_secret=DEV_SECRET, issuer="https://auth.zoikotech.com")
+DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET").encode()
+verifier   = TokenVerifier(dev_secret=DEV_SECRET, issuer=os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com"))
 
 sub("Analyst Alice logs in → gets a JWT")
 analyst_token = verifier.make_dev_token(

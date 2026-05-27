@@ -13,6 +13,7 @@ Run:
 import sys, os, hashlib, uuid, json
 sys.path.insert(0, "packages/zoiko-common")
 
+from dotenv import load_dotenv
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from datetime import datetime, timezone, timedelta
@@ -20,7 +21,9 @@ from zoiko_common.crypto.jcs import canonicalize
 from zoiko_common.crypto.merkle import MerkleTree, hash_leaf
 from zoiko_common.crypto.signing import ZoikoSigner, LocalEd25519Backend
 
-DB_URL = os.environ.get("DB_URL", "postgresql://postgres:postgres@localhost/zoiko")
+load_dotenv()
+
+DB_URL = os.environ["DB_URL"]
 
 # Fixed UUIDs so re-running seed is idempotent
 TENANT_ID      = "11111111-1111-1111-1111-111111111111"

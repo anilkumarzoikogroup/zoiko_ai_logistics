@@ -11,6 +11,8 @@ Run:
 """
 import sys, os, json, hashlib, uuid
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+load_dotenv()
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "phase-0", "packages", "zoiko-common"))
@@ -245,7 +247,7 @@ from kafka.consumer           import ZoikoConsumer
 
 TENANT_ID = "tenant-acme-logistics-001"
 CASE_ID   = f"case-{uuid.uuid4().hex[:8]}"
-DEV_SECRET = b"zoiko-dev-secret-for-demo"
+DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET").encode()
 
 # ── KMS ───────────────────────────────────────────────────────────────────────
 phase(1, "KMS — Secure Key Hierarchy for Acme Logistics")

@@ -4,10 +4,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import time
 import pytest
+from dotenv import load_dotenv
 from middleware.oidc.claims import ZoikoClaims, TenantContext
 from middleware.oidc.token_verifier import TokenVerifier, TokenExpiredError, TokenInvalidError
 
-DEV_SECRET = b"zoiko-dev-secret-for-testing-only"
+load_dotenv()
+
+DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET").encode()
 TENANT_ID  = "tenant-abc-123"
 SUB        = "analyst@zoikotech.com"
 

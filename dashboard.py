@@ -974,7 +974,7 @@ elif page == "upload":
             st.write(f"   Signing key : `{sign_key.kms_resource}` — Ed25519, used for all signatures")
 
             # 1b — OIDC/JWT: issue a dev token for the analyst
-            verifier  = TokenVerifier(dev_secret=b"zoiko-dev-secret-2026")
+            verifier  = TokenVerifier(dev_secret=os.getenv("ZOIKO_DEV_SECRET").encode())
             jwt_token = verifier.make_dev_token(
                 sub=analyst, tenant_id=str(tenant["id"]),
                 roles=["analyst"], ttl_sec=3600, audience="zoiko-api",
@@ -1781,7 +1781,7 @@ elif page == "kms":
 elif page == "oidc":
     st.title("🎫 OIDC Identity — Phase 1")
     if not P1_AVAILABLE: st.error(_p1_err_msg); st.stop()
-    verifier    = TokenVerifier(dev_secret=b"zoiko-dev-secret-streamlit", issuer="https://auth.zoikotech.com")
+    verifier    = TokenVerifier(dev_secret=os.getenv("ZOIKO_DEV_SECRET").encode(), issuer=os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com"))
     tenants     = q("SELECT id, display_name FROM tenants WHERE status='ACTIVE'")
     tenant_opts = {t["display_name"]: t["id"] for t in tenants} if tenants else {"Demo": str(uuid.uuid4())}
     tab1, tab2  = st.tabs(["Issue Token", "Verify Token"])

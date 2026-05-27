@@ -34,6 +34,19 @@ if %errorlevel%==0 (
 )
 echo.
 
+REM ── Run Alembic migrations (only if DB is online) ──────────
+if "%DB_ONLINE%"=="1" (
+    echo Running database migrations...
+    .venv\Scripts\python -m alembic upgrade head
+    if errorlevel 1 (
+        echo  ERROR: Migration failed. Check PostgreSQL is running and DB_URL is correct.
+        pause
+        exit /b 1
+    )
+    echo  Migrations up to date.
+    echo.
+)
+
 REM ── Backend (only if DB is online) ─────────────────────────
 if "%DB_ONLINE%"=="1" (
     echo Starting Zoiko Backend (port 8000^)...

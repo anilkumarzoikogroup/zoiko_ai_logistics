@@ -8,8 +8,11 @@ Gracefully no-ops if Redis is unreachable — the DB-level ON CONFLICT guard
 is the primary idempotency protection; Redis is a fast replay cache on top.
 """
 import os
+from dotenv import load_dotenv
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL")
 _PREFIX   = "idempotency"
 _TTL      = 86_400   # 24 h
 
