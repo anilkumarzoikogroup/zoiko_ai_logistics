@@ -95,6 +95,12 @@ jobs:
           alembic upgrade head
         env:
           DB_URL: ${{ env.DB_URL }}
+      - name: Seed dummy data (tenant + SC-001 case)
+        run: |
+          cd phase-0
+          python scripts/seed_dummy_data.py
+        env:
+          DB_URL: ${{ env.DB_URL }}
       - name: Seed contract rates
         run: |
           cd phase-2
@@ -131,6 +137,8 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
       - run: cd phase-0 && alembic upgrade head
+        env: {DB_URL: "${{ env.DB_URL }}"}
+      - run: cd phase-0 && python scripts/seed_dummy_data.py
         env: {DB_URL: "${{ env.DB_URL }}"}
       - run: cd phase-2 && python seed_contract_rates.py
         env: {DB_URL: "${{ env.DB_URL }}"}
