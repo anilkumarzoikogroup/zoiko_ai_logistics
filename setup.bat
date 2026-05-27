@@ -1,7 +1,5 @@
 @echo off
 setlocal EnableDelayedExpansion
-
-REM Always run from the folder where this bat file lives
 cd /d "%~dp0"
 
 echo ============================================================
@@ -9,17 +7,25 @@ echo  Zoiko AI Logistics -- One-Time Setup
 echo ============================================================
 echo.
 
-REM ── Environment ────────────────────────────────────────────
-set DB_URL=postgresql://postgres:1234@localhost/zoiko
-set PYTHONIOENCODING=utf-8
-set ZOIKO_DEV_MODE=true
+REM ── Load .env ───────────────────────────────────────────────
+if not exist ".env" (
+    echo  ERROR: .env file not found. Create it from .env.example
+    pause
+    exit /b 1
+)
+for /f "usebackq tokens=* delims=" %%l in (".env") do (
+    set "line=%%l"
+    if not "!line:~0,1!"=="#" if not "!line!"=="" set "%%l"
+)
+echo  Loaded configuration from .env
+echo.
 
 REM ── Step 0: Check PostgreSQL ────────────────────────────────
 echo [0/6] Checking PostgreSQL connection...
-python -c "import psycopg2; psycopg2.connect('postgresql://postgres:1234@localhost/zoiko')" 2>nul
+python -c "import psycopg2; psycopg2.connect('%DB_URL%')" 2>nul
 if errorlevel 1 (
     echo.
-    echo  WARNING: PostgreSQL is not reachable at localhost:5432
+    echo  WARNING: PostgreSQL is not reachable.
     echo  Steps [3] and [4] will be skipped.
     echo  Start PostgreSQL, then re-run setup.bat to complete them.
     echo.
@@ -64,7 +70,6 @@ if "%SKIP_DB%"=="1" (
     echo  SKIPPED -- PostgreSQL not available.
 ) else (
     cd phase-0\db
-    set DB_URL=postgresql://postgres:1234@localhost/zoiko
     ..\..\\.venv\Scripts\python -m alembic upgrade head
     if errorlevel 1 (
         echo  ERROR: Alembic migration failed. Check PostgreSQL is running.
@@ -107,7 +112,7 @@ cd ..\..
 echo  Done.
 echo.
 
-REM ── Step 6: Create .env.local ──────────────────────────────
+REM ── Step 6: Create frontend .env.local ─────────────────────
 echo [6/6] Creating frontend .env.local...
 if not exist "zoiko-frontend\frontend\.env.local" (
     (
