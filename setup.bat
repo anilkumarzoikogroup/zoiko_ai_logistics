@@ -69,15 +69,12 @@ echo [3/6] Running Alembic database migrations...
 if "%SKIP_DB%"=="1" (
     echo  SKIPPED -- PostgreSQL not available.
 ) else (
-    cd phase-0\db
-    ..\..\\.venv\Scripts\python -m alembic upgrade head
+    .venv\Scripts\python -m alembic upgrade head
     if errorlevel 1 (
         echo  ERROR: Alembic migration failed. Check PostgreSQL is running.
-        cd ..\..
         pause
         exit /b 1
     )
-    cd ..\..
     echo  Done.
 )
 echo.
