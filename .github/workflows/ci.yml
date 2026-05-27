@@ -91,7 +91,7 @@ jobs:
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
       - name: Run Alembic migrations
         run: |
-          cd phase-0
+          cd phase-0/db
           alembic upgrade head
         env:
           DB_URL: ${{ env.DB_URL }}
@@ -132,7 +132,7 @@ jobs:
         with: {python-version: "3.10"}
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-      - run: cd phase-0 && alembic upgrade head
+      - run: cd phase-0/db && alembic upgrade head
         env: {DB_URL: "${{ env.DB_URL }}"}
       - name: Seed CI tenant (amazon-india)
         run: python scripts/ci_seed_tenant.py
@@ -200,7 +200,7 @@ jobs:
         with: {python-version: "3.10"}
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-      - run: cd phase-0 && alembic upgrade head
+      - run: cd phase-0/db && alembic upgrade head
         env: {DB_URL: "${{ env.DB_URL }}"}
       - run: python phase-0/scripts/tenant_fuzzer.py
         env:
