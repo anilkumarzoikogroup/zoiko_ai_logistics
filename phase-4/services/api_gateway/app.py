@@ -16,14 +16,17 @@ Required headers on all mutating routes:
 This gateway runs on port 8001 (Phase 2 runs on 8000).
 """
 import os
+from dotenv import load_dotenv
 import paths  # noqa: F401 — must be first
+
+load_dotenv()
 
 from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from middleware.oidc.claims import ZoikoClaims
 
-DB_URL      = os.getenv("DB_URL",      "postgresql://postgres:1234@localhost/zoiko")
+DB_URL      = os.getenv("DB_URL")
 TENANT_SLUG = os.getenv("TENANT_SLUG", "default")
 
 from kafka.mock_kafka import MockKafkaBroker as _MockBroker

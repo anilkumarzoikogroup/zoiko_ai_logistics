@@ -11,10 +11,13 @@ import os, sys, uuid, hashlib
 sys.path.insert(0, os.path.dirname(__file__))
 import paths  # noqa
 
+from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
+load_dotenv()
+
+DB_URL = os.getenv("DB_URL")
 
 # Agreed rates per carrier for amazon-india
 # rate_value = maximum allowed charge (INR) per shipment

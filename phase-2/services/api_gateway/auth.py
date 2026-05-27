@@ -1,6 +1,9 @@
 """JWT verification + tenant binding + OPA authorization — FastAPI dependency."""
 import os
+from dotenv import load_dotenv
 import paths  # noqa: F401
+
+load_dotenv()
 
 from fastapi import Header, HTTPException, Security
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -39,7 +42,7 @@ def get_claims(
         if not row:
             # Seed a dev tenant on first run
             tid = _uuid.uuid4()
-            conn = _pg.connect(os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko"))
+            conn = _pg.connect(os.getenv("DB_URL"))
             try:
                 cur = conn.cursor()
                 cur.execute(

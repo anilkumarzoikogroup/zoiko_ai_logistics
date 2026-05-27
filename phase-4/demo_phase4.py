@@ -13,11 +13,14 @@ Usage:
   py demo_phase4.py
 """
 import os, sys
+from dotenv import load_dotenv
 import paths  # noqa: F401
+
+load_dotenv()
 
 from kafka.mock_kafka import MockKafkaBroker
 
-DB_URL      = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
+DB_URL      = os.getenv("DB_URL")
 TENANT_SLUG = os.getenv("TENANT_SLUG", "default")
 BROKER      = MockKafkaBroker()
 

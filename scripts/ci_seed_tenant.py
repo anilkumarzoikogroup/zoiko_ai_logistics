@@ -2,7 +2,7 @@
 import os
 import psycopg2
 
-DB_URL = os.environ.get("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
+DB_URL = os.environ["DB_URL"]
 
 conn = psycopg2.connect(DB_URL)
 conn.autocommit = True

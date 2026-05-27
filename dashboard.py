@@ -5,7 +5,9 @@ Zoiko AI Logistics — End-to-End Dashboard
 """
 import sys, os, json, hashlib, uuid, io, re
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"   # easyocr / torch conflict fix
+load_dotenv()
 
 # ── OCR (easyocr — no external binary needed) ─────────────────────────────────
 try:
@@ -130,7 +132,7 @@ from zoiko_common.crypto.signing import ZoikoSigner, LocalEd25519Backend
 
 st.set_page_config(page_title="Zoiko Logistics", page_icon="🚚", layout="wide")
 
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
+DB_URL = os.getenv("DB_URL")
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 def get_conn():

@@ -6,11 +6,13 @@ _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import pytest
 import os
 import uuid
+from dotenv import load_dotenv
 
 import paths  # noqa: F401 — sets up sys.path for Phase 0 + Phase 1
 
+load_dotenv()
 
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
+DB_URL = os.getenv("DB_URL")
 
 
 def _db_available() -> bool:

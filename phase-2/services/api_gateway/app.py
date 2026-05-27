@@ -15,7 +15,10 @@ All mutating routes require:
   Idempotency-Key: <client-uuid>   (POST /invoices only)
 """
 import os
+from dotenv import load_dotenv
 import paths  # noqa: F401 — must be first
+
+load_dotenv()
 
 from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +47,7 @@ from services.canonical_truth.handler import CanonicalHandler
 from services.case_orchestration.handler import CaseHandler, ConflictError
 from middleware.oidc.claims import ZoikoClaims
 
-DB_URL      = os.getenv("DB_URL",      "postgresql://postgres:1234@localhost/zoiko")
+DB_URL      = os.getenv("DB_URL")
 TENANT_SLUG = os.getenv("TENANT_SLUG", "default")
 
 # Dev: in-memory mock; prod: swap for a real kafka-python KafkaProducer

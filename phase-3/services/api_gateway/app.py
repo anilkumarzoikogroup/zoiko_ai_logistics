@@ -15,7 +15,10 @@ All mutating routes require:
   X-Tenant-ID:   <tenant-uuid>
 """
 import base64, os, uuid as _uuid_lib
+from dotenv import load_dotenv
 import paths  # noqa: F401 — must be first
+
+load_dotenv()
 
 from fastapi import FastAPI, APIRouter, Depends, HTTPException
 
@@ -35,7 +38,7 @@ from services.governance_svc.handler import GovernanceHandler
 from services.token_svc.handler      import TokenHandler
 from middleware.oidc.claims import ZoikoClaims
 
-DB_URL      = os.getenv("DB_URL",      "postgresql://postgres:1234@localhost/zoiko")
+DB_URL      = os.getenv("DB_URL")
 TENANT_SLUG = os.getenv("TENANT_SLUG", "default")
 
 from kafka.mock_kafka import MockKafkaBroker as _MockBroker

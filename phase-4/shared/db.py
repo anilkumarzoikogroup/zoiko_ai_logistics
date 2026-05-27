@@ -1,11 +1,14 @@
 ﻿import os
+from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 import psycopg2.extensions
 
+load_dotenv()
+
 psycopg2.extras.register_uuid()
 
-DB_URL = os.getenv("DB_URL", "postgresql://postgres:1234@localhost/zoiko")
+DB_URL = os.getenv("DB_URL")
 
 
 def get_conn(db_url: str = None) -> psycopg2.extensions.connection:

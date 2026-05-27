@@ -20,6 +20,9 @@ pycose>=1.1
 python-jose[cryptography]>=3.3
 PyJWT>=2.8                 # lightweight JWT encode/decode in dev tooling
 
+# ── Environment ───────────────────────────────────────────────────────────────
+python-dotenv>=1.0             # loads .env automatically — no hardcoded credentials
+
 # ── Database ──────────────────────────────────────────────────────────────────
 psycopg2-binary>=2.9
 alembic>=1.13
