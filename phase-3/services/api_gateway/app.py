@@ -1,19 +1,3 @@
-"""
-API Gateway — FastAPI application for Phase 3.
-
-Routes (all registered under /v1/ AND / for backward compat):
-  GET  /health
-  POST /evidence/{case_id}/items               (add evidence item)
-  GET  /evidence/{case_id}/bundle              (get bundle info)
-  POST /reasoning/{case_id}/analyze            (analyze + propose)
-  POST /governance/tasks                       (create approval task)
-  PATCH /governance/tasks/{task_id}/decide     (approve / reject)
-  POST /tokens/mint                            (mint governance token)
-
-All mutating routes require:
-  Authorization: Bearer <JWT>
-  X-Tenant-ID:   <tenant-uuid>
-"""
 import base64, os, uuid as _uuid_lib
 from dotenv import load_dotenv
 import paths  # noqa: F401 — must be first
@@ -28,6 +12,7 @@ from services.api_gateway.models import (
     AddEvidenceRequest, AddEvidenceResponse,
     GetBundleResponse,
     AnalyzeRequest, AnalyzeResponse,
+    GetFindingsResponse,
     CreateTaskRequest, CreateTaskResponse,
     DecideRequest, DecideResponse,
     MintTokenRequest, MintTokenResponse,
@@ -51,11 +36,10 @@ _reasoning  = ReasoningHandler(DB_URL, _BROKER, TENANT_SLUG)
 _governance = GovernanceHandler(DB_URL, _BROKER, TENANT_SLUG)
 _tokens     = TokenHandler(DB_URL, _BROKER, TENANT_SLUG)
 
-# All routes registered on v1_router; included twice (with and without /v1/).
 v1_router = APIRouter()
 
 
-# ── Health — on app directly (not versioned) ─────────────────────────────────
+# ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse, tags=["ops"])
 @app.get("/v1/health", response_model=HealthResponse, tags=["ops"], include_in_schema=False)
@@ -151,6 +135,9 @@ def analyze(
             proposed_action = body.proposed_action,
             amount          = body.amount,
             currency        = body.currency,
+            carrier         = body.carrier,        # ← NEW
+            route           = body.route,          # ← NEW
+            contract_rate   = body.contract_rate,  # ← NEW
         )
     except Exception as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -162,6 +149,37 @@ def analyze(
         amount          = result.amount,
         currency        = result.currency,
         tenant_id       = result.tenant_id,
+    )
+
+
+@v1_router.get(
+    "/reasoning/{case_id}/findings",
+    response_model=GetFindingsResponse,
+    tags=["reasoning"],
+)
+def get_findings(
+    case_id: str,
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """
+    Retrieve all AI-generated findings and decision proposals for a given case.
+    Returns every finding joined with its latest decision proposal so the caller
+    can inspect confidence scores, risk levels, AI reasoning, and proposed action
+    without re-running the analysis.
+    """
+    try:
+        result = _reasoning.get_findings(
+            tenant_id = str(claims.tenant_id),
+            case_id   = case_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return GetFindingsResponse(
+        case_id   = case_id,
+        tenant_id = str(claims.tenant_id),
+        findings  = result,
     )
 
 
