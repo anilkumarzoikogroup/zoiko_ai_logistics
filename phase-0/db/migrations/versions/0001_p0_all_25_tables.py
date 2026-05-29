@@ -207,15 +207,18 @@ def upgrade() -> None:
     # ------------------------------------------------------------------ #
     op.execute("""
     CREATE TABLE findings (
-        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id    UUID NOT NULL REFERENCES tenants(id),
-        case_id      UUID NOT NULL REFERENCES cases(id),
-        bundle_id    UUID NOT NULL REFERENCES evidence_bundles(id),
-        confidence   NUMERIC(5,4) NOT NULL CHECK (confidence BETWEEN 0 AND 1),
-        rule_trace   JSONB NOT NULL,
-        signature    BYTEA NOT NULL,
-        kid          TEXT NOT NULL,
-        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        tenant_id     UUID NOT NULL REFERENCES tenants(id),
+        case_id       UUID NOT NULL REFERENCES cases(id),
+        bundle_id     UUID NOT NULL REFERENCES evidence_bundles(id),
+        confidence    NUMERIC(5,4) NOT NULL CHECK (confidence BETWEEN 0 AND 1),
+        ai_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+        risk_level    TEXT NOT NULL DEFAULT 'MEDIUM',
+        ai_reasoning  TEXT NOT NULL DEFAULT '[]',
+        rule_trace    JSONB NOT NULL,
+        signature     BYTEA NOT NULL,
+        kid           TEXT NOT NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )""")
 
     op.execute("""
@@ -253,7 +256,12 @@ def upgrade() -> None:
         tenant_id       UUID NOT NULL REFERENCES tenants(id),
         proposal_id     UUID NOT NULL REFERENCES decision_proposals(id),
         policy_bundle_id UUID NOT NULL REFERENCES policy_bundles(id),
-        outcome         TEXT NOT NULL CHECK (outcome IN ('APPROVED','REJECTED')),
+        outcome         TEXT NOT NULL CHECK (
+                           outcome IN (
+                               'APPROVED','REJECTED',
+                               'EXECUTION_READY','ABORTED'
+                           )
+                       ),
         decision_hash   BYTEA NOT NULL,
         signature       BYTEA NOT NULL,
         kid             TEXT NOT NULL,
