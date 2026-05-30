@@ -1,8 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
+import { api } from "@/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/utils/cn";
-import { Database, Lock, Shield, RefreshCw } from "lucide-react";
+import { Database, Lock, Shield, RefreshCw, Hash } from "lucide-react";
 
 const TABLE_META: Record<string, { group: string; append: boolean; rls: boolean }> = {
   tenants:                      { group: "Tenant",         append: false, rls: true  },
@@ -49,11 +50,25 @@ const GROUP_COLORS: Record<string, string> = {
   "Audit":           "bg-rose-100 text-rose-700",
 };
 
+interface WormEntry {
+  id: string; acr_id: string; worm_bucket: string;
+  object_name: string; object_hash: string; indexed_at: string;
+}
+
 export default function DatabasePage() {
   const { data: dbStats = [], isLoading, refetch, isFetching } = useQuery({
     queryKey: ["db-stats"],
     queryFn: zoikoApi.getDbStats,
     refetchInterval: 60_000,
+  });
+
+  const { data: wormData } = useQuery({
+    queryKey: ["worm-index"],
+    queryFn:  async () => {
+      const { data } = await api.get<{ entries: WormEntry[]; count: number }>("/audit-worm");
+      return data;
+    },
+    refetchInterval: 30_000,
   });
 
   const rowMap: Record<string, number> = {};
@@ -179,6 +194,50 @@ export default function DatabasePage() {
           );
         })}
       </div>
+
+      {/* WORM Audit Index */}
+      <Card>
+        <CardHeader className="pb-2 pt-4">
+          <CardTitle className="text-sm flex items-center gap-2">
+            <Lock className="h-4 w-4 text-rose-500" />
+            WORM Audit Index
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">
+              Append-only · 7-year retention
+            </span>
+            {wormData && (
+              <span className="ml-auto text-xs text-muted-foreground font-normal">{wormData.count} entries</span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {!wormData || wormData.entries.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-4 text-center">
+              No WORM entries yet. ACR records are written here after execution completes.
+            </p>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <th className="text-left py-2 font-medium">ACR ID</th>
+                  <th className="text-left py-2 font-medium">Object</th>
+                  <th className="text-left py-2 font-medium flex items-center gap-1"><Hash className="h-3 w-3" />Hash</th>
+                  <th className="text-right py-2 font-medium">Indexed At</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {wormData.entries.map(e => (
+                  <tr key={e.id} className="hover:bg-secondary/30">
+                    <td className="py-2 font-mono text-rose-700">{e.acr_id?.slice(0, 8)}…</td>
+                    <td className="py-2 text-muted-foreground truncate max-w-[180px]">{e.object_name ?? e.worm_bucket}</td>
+                    <td className="py-2 font-mono text-slate-500">{e.object_hash?.slice(0, 16)}…</td>
+                    <td className="py-2 text-right text-muted-foreground">{e.indexed_at?.slice(0, 19).replace("T", " ")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

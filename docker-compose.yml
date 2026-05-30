@@ -1,0 +1,163 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1234}
+      POSTGRES_DB:       zoiko
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── DB Migrations ───────────────────────────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m alembic -c alembic.ini upgrade head
+    environment:
+      DB_URL: postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Seed Users ──────────────────────────────────────────────────────────────
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python seed_users.py
+    environment:
+      DB_URL:                postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_COMPANY_NAME:    ${ZOIKO_COMPANY_NAME:-Zoiko}
+      ZOIKO_ADMIN_EMAIL:     ${ZOIKO_ADMIN_EMAIL:-admin@zoiko.com}
+      ZOIKO_ADMIN_PASSWORD:  ${ZOIKO_ADMIN_PASSWORD:-changeme123}
+      ZOIKO_ADMIN_NAME:      ${ZOIKO_ADMIN_NAME:-Platform Admin}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # ── Phase 2 — API Gateway (port 8000) ───────────────────────────────────────
+  phase2:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: >
+      python -m uvicorn services.api_gateway.app:app
+      --workers 4 --host 0.0.0.0 --port 8000
+    working_dir: /app/phase-2
+    ports:
+      - "8000:8000"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      ZOIKO_FF_SC_001_ENABLED: "*"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      ZOIKO_COMPANY_NAME:  ${ZOIKO_COMPANY_NAME:-Zoiko}
+      ZOIKO_ADMIN_EMAIL:   ${ZOIKO_ADMIN_EMAIL:-admin@zoiko.com}
+      ZOIKO_ADMIN_PASSWORD: ${ZOIKO_ADMIN_PASSWORD:-changeme123}
+      ZOIKO_ADMIN_NAME:    ${ZOIKO_ADMIN_NAME:-Platform Admin}
+      JWT_TTL_SECONDS:     ${JWT_TTL_SECONDS:-86400}
+      REDIS_URL:           redis://redis:6379/0
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Phase 3 — Evidence / Reasoning / Governance (port 8002) ────────────────
+  phase3:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: >
+      python -m uvicorn services.api_gateway.app:app
+      --workers 4 --host 0.0.0.0 --port 8002
+    working_dir: /app/phase-3
+    ports:
+      - "8002:8002"
+    environment:
+      DB_URL:           postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_SECRET: ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:     ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      REDIS_URL:        redis://redis:6379/0
+      GROQ_API_KEY:     ${GROQ_API_KEY:-}
+      GROQ_MODEL:       ${GROQ_MODEL:-llama-3.1-70b-versatile}
+      PYTHONIOENCODING: utf-8
+    depends_on:
+      phase2:
+        condition: service_healthy
+
+  # ── Phase 4 — Execution Gateway (port 8001) ─────────────────────────────────
+  phase4:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: >
+      python -m uvicorn services.api_gateway.app:app
+      --workers 4 --host 0.0.0.0 --port 8001
+    working_dir: /app/phase-4
+    ports:
+      - "8001:8001"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
+      FX_STRICT:           ${FX_STRICT:-false}
+      CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      phase2:
+        condition: service_healthy
+
+  # ── Frontend (port 5173) ────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: zoiko-frontend/frontend
+      dockerfile: Dockerfile
+      target: dev
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_USE_MOCK:  "false"
+      VITE_API_BASE:  http://phase2:8000
+      VITE_API3_BASE: http://phase3:8002
+      VITE_API4_BASE: http://phase4:8001
+    depends_on:
+      phase2:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

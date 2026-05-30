@@ -11,6 +11,7 @@ After the Execution Gateway dispatches a credit, the Reconciliation Service:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from typing import Optional
 
 import psycopg2
 import psycopg2.extras
+import shared.db as _db
 
 import paths  # noqa: F401
 import shared.db as _db
@@ -76,19 +78,28 @@ class ReconciliationHandler:
         rec_id     = uuid.uuid4()
         outcome_id = uuid.uuid4()
 
-        conn = psycopg2.connect(self._db_url)
-        try:
+        # Compute recon_hash over reconciliation data (domain-tagged SHA-256)
+        recon_bytes = json.dumps({
+            "envelope_id": envelope_id, "expected": expected,
+            "actual": actual, "delta": delta, "status": status,
+        }, sort_keys=True).encode("utf-8")
+        recon_hash = hashlib.sha256(b"zoiko.reconciliation.v1:" + recon_bytes).digest()
+
+        with _db.get_conn(self._db_url) as conn:
+          try:
             cur = conn.cursor()
 
-            # Write reconciliations row
+            # Write reconciliations row (correct schema: delta_amount, recon_hash)
             cur.execute("""
                 INSERT INTO reconciliations
-                    (id, tenant_id, envelope_id, expected_amount, actual_amount,
-                     currency, status, delta, reconciled_at)
-                VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s)
+                    (id, tenant_id, case_id, envelope_id,
+                     delta_amount, currency, recon_hash, reconciled_at)
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s)
             """, (
-                rec_id, tenant_id, uuid.UUID(envelope_id),
-                expected, actual, currency, status, delta, now,
+                rec_id, tenant_id,
+                uuid.UUID(case_id) if case_id else uuid.UUID(envelope_id),
+                uuid.UUID(envelope_id),
+                delta, currency, recon_hash, now,
             ))
 
             # Write outcomes row
@@ -102,6 +113,32 @@ class ReconciliationHandler:
                 "CREDIT_ISSUED" if status in ("MATCHED", "PARTIAL") else "DISCREPANCY_FLAGGED",
                 actual, currency, now,
             ))
+
+            # T-011: write variance_record when amount doesn't fully match
+            if status in ("PARTIAL", "DISCREPANCY"):
+                # Look up most recent proposal for the case
+                prop_row = None
+                if case_id:
+                    cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                    cur2.execute(
+                        "SELECT id FROM decision_proposals "
+                        "WHERE case_id=%s::uuid AND tenant_id=%s::uuid "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        (uuid.UUID(case_id), tenant_id),
+                    )
+                    prop_row = cur2.fetchone()
+                cur.execute("""
+                    INSERT INTO variance_records
+                        (id, tenant_id, case_id, proposal_id,
+                         variance_type, expected_value, actual_value, delta, status)
+                    VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s)
+                """, (
+                    uuid.uuid4(), tenant_id,
+                    uuid.UUID(case_id) if case_id else None,
+                    prop_row["id"] if prop_row else None,
+                    "AMOUNT_MISMATCH",
+                    expected, actual, delta, "OPEN",
+                ))
 
             # Mark envelope settled
             cur.execute("""
@@ -144,8 +181,8 @@ class ReconciliationHandler:
             ))
 
             conn.commit()
-        finally:
-            conn.close()
+          finally:
+            pass  # pool returns connection via context manager
 
         # Kafka publish
         try:

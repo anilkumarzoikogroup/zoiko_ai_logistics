@@ -24,6 +24,7 @@ from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.api_gateway.auth   import get_claims
+from zoiko_common.middleware.feature_flags import require_feature_flag
 import re as _re, uuid, hashlib, json
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
@@ -37,6 +38,9 @@ from services.api_gateway.models import (
     HealthResponse,
     SubmitCaseRequest, UIProposalRequest, UIDecideRequest,
     ContractRateRequest,
+    LoginRequest, LoginResponse,
+    RegisterRequest, RegisterResponse,
+    UsersListResponse, UserItem,
 )
 from shared.db import q, q1
 from zoiko_common.crypto.jcs import canonicalize as _jcs
@@ -56,15 +60,18 @@ _BROKER = _MockBroker()
 
 app = FastAPI(title="Zoiko Logistics API Gateway", version="2.0.0")
 
+_cors_origins_env = os.getenv("ZOIKO_CORS_ORIGINS", "http://localhost:5173")
+_cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Rate limiting (T-024) — enabled via ZOIKO_RATE_LIMIT_ENABLED=true
+# Rate limiting — always on
 try:
     from zoiko_common.middleware.rate_limit import RateLimitMiddleware
     app.add_middleware(RateLimitMiddleware)
@@ -94,6 +101,146 @@ _ingestion  = IngestionHandler(DB_URL, _BROKER, TENANT_SLUG)
 _validation = ValidationHandler(DB_URL, _BROKER, TENANT_SLUG)
 _canonical  = CanonicalHandler(DB_URL, _BROKER, TENANT_SLUG)
 _cases      = CaseHandler(DB_URL, _BROKER)
+
+
+# ── Auth — public endpoints (no JWT required) ─────────────────────────────────
+
+@app.post("/auth/login", response_model=LoginResponse, tags=["auth"])
+@app.post("/v1/auth/login", response_model=LoginResponse, tags=["auth"], include_in_schema=False)
+def login(body: LoginRequest):
+    """Email + password → JWT. Works for all roles (analyst / manager / admin)."""
+    import bcrypt as _bcrypt
+    from middleware.oidc.token_verifier import TokenVerifier
+    row = q1(
+        "SELECT id, tenant_id, email, password_hash, full_name, role, is_active FROM users WHERE email = %s",
+        (body.email.lower().strip(),),
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    if not row["is_active"]:
+        raise HTTPException(status_code=403, detail="Account is disabled. Contact your admin.")
+    if not _bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl     = int(os.getenv("JWT_TTL_SECONDS", "86400"))   # 24h default
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token   = verifier.make_dev_token(
+        sub       = row["email"],
+        tenant_id = str(row["tenant_id"]),
+        roles     = [row["role"]],
+        ttl_sec   = ttl,
+    )
+    return LoginResponse(
+        token      = token,
+        tenant_id  = str(row["tenant_id"]),
+        role       = row["role"],
+        full_name  = row["full_name"],
+        email      = row["email"],
+        expires_in = ttl,
+    )
+
+
+@app.post("/auth/register", response_model=RegisterResponse, tags=["auth"])
+@app.post("/v1/auth/register", response_model=RegisterResponse, tags=["auth"], include_in_schema=False)
+def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
+    """Admin-only: create a new analyst or manager for the same tenant."""
+    import bcrypt as _bcrypt
+    import psycopg2 as _pg
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can register new users")
+    if body.role not in ("analyst", "manager", "admin"):
+        raise HTTPException(status_code=422, detail="role must be analyst, manager, or admin")
+
+    email = body.email.lower().strip()
+    existing = q1("SELECT id FROM users WHERE email = %s", (email,))
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Email '{email}' is already registered")
+
+    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode()
+    user_id = uuid.uuid4()
+    now     = datetime.now(timezone.utc)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, claims.tenant_id, email, pw_hash, body.full_name.strip(), body.role, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return RegisterResponse(
+        user_id    = str(user_id),
+        email      = email,
+        full_name  = body.full_name.strip(),
+        role       = body.role,
+        tenant_id  = str(claims.tenant_id),
+        created_at = now.isoformat(),
+    )
+
+
+@app.get("/auth/users", response_model=UsersListResponse, tags=["auth"])
+@app.get("/v1/auth/users", response_model=UsersListResponse, tags=["auth"], include_in_schema=False)
+def list_users(claims: ZoikoClaims = Depends(get_claims)):
+    """Admin-only: list all users for the tenant."""
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can list users")
+    rows = q(
+        "SELECT id, email, full_name, role, is_active, created_at FROM users "
+        "WHERE tenant_id = %s ORDER BY created_at ASC",
+        (claims.tenant_id,),
+    )
+    return UsersListResponse(
+        tenant_id = str(claims.tenant_id),
+        users = [
+            UserItem(
+                user_id    = str(r["id"]),
+                email      = r["email"],
+                full_name  = r["full_name"],
+                role       = r["role"],
+                is_active  = r["is_active"],
+                created_at = r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+            )
+            for r in rows
+        ],
+    )
+
+
+@app.post("/auth/change-password", tags=["auth"])
+@app.post("/v1/auth/change-password", tags=["auth"], include_in_schema=False)
+def change_password(
+    body: dict,
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """Logged-in user changes their own password."""
+    import bcrypt as _bcrypt, psycopg2 as _pg
+    current_pw = body.get("current_password", "")
+    new_pw     = body.get("new_password", "")
+    if not current_pw or not new_pw:
+        raise HTTPException(status_code=422, detail="current_password and new_password required")
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=422, detail="new_password must be at least 8 characters")
+
+    row = q1("SELECT id, password_hash FROM users WHERE email = %s", (claims.sub,))
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not _bcrypt.checkpw(current_pw.encode(), row["password_hash"].encode()):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    new_hash = _bcrypt.hashpw(new_pw.encode(), _bcrypt.gensalt()).decode()
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_hash, row["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"message": "Password changed successfully"}
 
 
 # ── Health — registered directly on app (not versioned) ──────────────────────
@@ -155,8 +302,10 @@ def validate_invoice(
             total_amount     = body.total_amount,
             currency         = body.currency,
         )
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Validation error: {e}")
 
     return ValidateResponse(
         validation_id     = str(result.validation_id),
@@ -191,8 +340,10 @@ def canonicalize_invoice(
             dest_city        = body.dest_city,
             weight_lbs       = body.weight_lbs,
         )
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Canonicalization error: {e}")
 
     return CanonicalizeResponse(
         canonical_invoice_id  = str(result.canonical_invoice_id),
@@ -215,8 +366,10 @@ def open_case(
             canonical_invoice_id = body.canonical_invoice_id,
             actor_sub            = claims.sub,
         )
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Case creation error: {e}")
 
     return OpenCaseResponse(
         case_id   = str(result.case_id),
@@ -893,11 +1046,12 @@ async def parse_invoice_file(
     file: UploadFile = File(...),
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """Parse a PDF invoice and extract structured fields using pdfplumber."""
+    """Parse a PDF invoice using Groq AI (fallback: regex)."""
     import re as _re2
     content = await file.read()
     text = ""
 
+    # ── Step 1: Extract text from PDF ────────────────────────────────────────
     try:
         import pdfplumber, io
         with pdfplumber.open(io.BytesIO(content)) as pdf:
@@ -905,57 +1059,309 @@ async def parse_invoice_file(
     except Exception:
         text = content.decode("utf-8", errors="ignore")
 
-    text_lower = text.lower()
+    KNOWN_CARRIERS = [
+        "BlueDart", "Delhivery", "FedEx India", "DTDC",
+        "Ekart", "UPS India", "V Express", "Gati", "Other"
+    ]
+    KNOWN_CITIES = [
+        "Hyderabad", "Warangal", "Mumbai", "Delhi", "Bangalore",
+        "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur",
+        "Lucknow", "Surat", "Kochi", "Nagpur", "Vizag",
+    ]
 
-    # ── Carrier detection ─────────────────────────────────────────────────────
-    CARRIERS = ["BlueDart", "Delhivery", "FedEx", "DTDC", "Ekart", "Gati", "UPS India", "DHL", "Aramex"]
-    carrier = ""
-    for c in CARRIERS:
-        if c.lower() in text_lower:
-            carrier = c
-            break
+    carrier, amount, currency, route = "", 0.0, "INR", ""
 
-    # ── Amount detection (look for totals near ₹ / INR / USD) ────────────────
-    amount = 0.0
-    for pat in [
-        r"(?:total|grand total|amount due|invoice amount)[^\d₹]*[₹$]?\s*([\d,]+(?:\.\d{1,2})?)",
-        r"[₹$]\s*([\d,]+(?:\.\d{1,2})?)",
-        r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR)",
-    ]:
-        m = _re2.search(pat, text, _re2.IGNORECASE)
-        if m:
-            try:
-                amount = float(m.group(1).replace(",", ""))
-                if amount > 100:
-                    break
-            except ValueError:
-                pass
+    # ── Step 2: Try Groq AI first ─────────────────────────────────────────────
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    ai_parsed = False
 
-    # ── Currency detection ────────────────────────────────────────────────────
-    currency = "INR"
-    if "usd" in text_lower or "$" in text:
-        currency = "USD"
-    elif "eur" in text_lower or "€" in text:
-        currency = "EUR"
+    if groq_key and text.strip():
+        try:
+            from groq import Groq as _Groq
+            _groq = _Groq(api_key=groq_key)
+            prompt = (
+                f"You are an invoice parser. Extract fields from this freight carrier invoice text.\n\n"
+                f"INVOICE TEXT:\n{text[:3000]}\n\n"
+                f"Return ONLY valid JSON with these fields:\n"
+                f"- carrier: one of {KNOWN_CARRIERS} or 'Other'\n"
+                f"- total_amount: the final invoice total as a number (no commas)\n"
+                f"- currency: INR, USD, EUR, or GBP\n"
+                f"- origin: origin city name\n"
+                f"- destination: destination city name\n\n"
+                f"If a field cannot be determined, use empty string or 0.\n"
+                f"Respond with ONLY the JSON object, no explanation."
+            )
+            chat = _groq.chat.completions.create(
+                model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=200,
+            )
+            raw = chat.choices[0].message.content.strip()
+            # Extract JSON from response
+            json_match = _re2.search(r'\{.*\}', raw, _re2.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                carrier  = str(parsed.get("carrier", "")).strip()
+                amount   = float(parsed.get("total_amount", 0) or 0)
+                currency = str(parsed.get("currency", "INR")).strip().upper() or "INR"
+                origin   = str(parsed.get("origin", "")).strip()
+                dest     = str(parsed.get("destination", "")).strip()
+                if origin and dest and origin != dest:
+                    route = f"{origin}-{dest}"
+                # Validate carrier against known list
+                if carrier not in KNOWN_CARRIERS:
+                    carrier = "Other" if carrier else ""
+                ai_parsed = True
+        except Exception as _ai_err:
+            ai_parsed = False  # fall through to regex
 
-    # ── Route detection (City-City or From/To patterns) ───────────────────────
-    route = ""
-    for pat in [
-        r"(?:from|origin)[:\s]+([A-Z][a-zA-Z ]+?)\s+(?:to|dest(?:ination)?)[:\s]+([A-Z][a-zA-Z ]+?)(?:\n|,|\.|$)",
-        r"([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[-–→]\s*([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)",
-    ]:
-        m = _re2.search(pat, text, _re2.IGNORECASE)
-        if m:
-            route = f"{m.group(1).strip()}-{m.group(2).strip()}"
-            break
+    # ── Step 3: Regex fallback if AI not available or failed ─────────────────
+    if not ai_parsed:
+        text_lower = text.lower()
+        CARRIER_ALIASES = {
+            "bluedart": "BlueDart", "blue dart": "BlueDart",
+            "delhivery": "Delhivery",
+            "fedex india": "FedEx India", "fedex": "FedEx India",
+            "dtdc": "DTDC", "ekart": "Ekart", "gati": "Gati",
+            "ups india": "UPS India", "ups": "UPS India",
+            "v express": "V Express", "vexpress": "V Express",
+            "dhl": "Other", "aramex": "Other",
+        }
+        for alias, canonical in CARRIER_ALIASES.items():
+            if alias in text_lower:
+                carrier = canonical
+                break
+
+        for pat in [
+            r"(?:total|grand total|amount due|invoice amount)[^\d₹]*[₹$]?\s*([\d,]+(?:\.\d{1,2})?)",
+            r"[₹$]\s*([\d,]+(?:\.\d{1,2})?)",
+            r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR)",
+        ]:
+            m = _re2.search(pat, text, _re2.IGNORECASE)
+            if m:
+                try:
+                    amount = float(m.group(1).replace(",", ""))
+                    if amount > 100:
+                        break
+                except ValueError:
+                    pass
+
+        if "usd" in text_lower or "$" in text:
+            currency = "USD"
+        elif "eur" in text_lower or "€" in text:
+            currency = "EUR"
+
+        CITY_ALIASES = {
+            "bombay": "Mumbai", "new delhi": "Delhi", "bengaluru": "Bangalore",
+            "calcutta": "Kolkata", "madras": "Chennai", "visakhapatnam": "Vizag",
+            "cochin": "Kochi",
+        }
+        def _normalise_city(raw: str) -> str:
+            raw = raw.strip().lower()
+            if raw in CITY_ALIASES:
+                return CITY_ALIASES[raw]
+            for city in KNOWN_CITIES:
+                if city.lower() in raw or raw in city.lower():
+                    return city
+            return raw.title()
+
+        for pat in [
+            r"(?:from|origin)[:\s]+([A-Za-z][a-zA-Z ]+?)\s+(?:to|dest(?:ination)?)[:\s]+([A-Za-z][a-zA-Z ]+?)(?:\n|,|\.|$)",
+            r"([A-Za-z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[-–→]\s*([A-Za-z][a-z]+(?:\s[A-Z][a-z]+)?)",
+        ]:
+            m = _re2.search(pat, text, _re2.IGNORECASE)
+            if m:
+                city_a = _normalise_city(m.group(1))
+                city_b = _normalise_city(m.group(2))
+                if city_a and city_b and city_a != city_b:
+                    route = f"{city_a}-{city_b}"
+                break
 
     return {
-        "carrier":  carrier,
-        "route":    route,
-        "amount":   amount,
-        "currency": currency,
+        "carrier":   carrier,
+        "route":     route,
+        "amount":    amount,
+        "currency":  currency,
+        "parsed_by": "groq_ai" if ai_parsed else "regex",
         "raw_text_preview": text[:300] if text else "",
     }
+
+
+# ── Contract rate extractor — AI reads carrier contract PDF ──────────────────
+
+@v1_router.post("/ingestion/extract-contract-rates", tags=["ui"])
+async def extract_contract_rates(
+    file: UploadFile = File(...),
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """
+    Upload a carrier contract PDF → AI extracts rate table → returns structured rates.
+    Each returned rate can be directly POSTed to /contract-rates.
+    """
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Set it in .env to use AI contract extraction.")
+
+    content = await file.read()
+    text = ""
+    try:
+        import pdfplumber, io
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+    except Exception:
+        text = content.decode("utf-8", errors="ignore")
+
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="Could not extract text from file.")
+
+    try:
+        from groq import Groq as _Groq
+        _groq = _Groq(api_key=groq_key)
+
+        prompt = (
+            "You are a freight contract analyst. Extract ALL rate entries from this carrier contract.\n\n"
+            f"CONTRACT TEXT:\n{text[:4000]}\n\n"
+            "Return ONLY a JSON array of rate objects. Each object must have:\n"
+            '- "carrier_id": carrier name (string)\n'
+            '- "rate_type": one of "fuel_charge", "accessorial", "base_rate", "surcharge"\n'
+            '- "rate_value": numeric amount (no commas or currency symbols)\n'
+            '- "currency": "INR", "USD", "EUR", or "GBP"\n'
+            '- "effective_on": date in YYYY-MM-DD format (use today if not found)\n'
+            '- "expires_on": date in YYYY-MM-DD or null\n\n'
+            "Extract every distinct rate you can find. Return ONLY the JSON array."
+        )
+
+        chat = _groq.chat.completions.create(
+            model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=1000,
+        )
+        raw = chat.choices[0].message.content.strip()
+
+        # Extract JSON array from response
+        import re as _re3
+        arr_match = _re3.search(r'\[.*\]', raw, _re3.DOTALL)
+        if not arr_match:
+            raise HTTPException(status_code=422, detail="AI could not identify rate entries in this document.")
+
+        rates = json.loads(arr_match.group())
+
+        # Validate and sanitise each rate
+        valid_types = {"fuel_charge", "accessorial", "base_rate", "surcharge"}
+        cleaned = []
+        for r in rates:
+            if not r.get("carrier_id") or not r.get("rate_value"):
+                continue
+            cleaned.append({
+                "carrier_id":   str(r.get("carrier_id", "")).strip(),
+                "rate_type":    r.get("rate_type", "base_rate") if r.get("rate_type") in valid_types else "base_rate",
+                "rate_value":   float(r.get("rate_value", 0)),
+                "currency":     str(r.get("currency", "INR")).strip().upper()[:3],
+                "effective_on": str(r.get("effective_on", datetime.now(timezone.utc).date())),
+                "expires_on":   r.get("expires_on"),
+            })
+
+        return {
+            "extracted_rates": cleaned,
+            "count": len(cleaned),
+            "parsed_by": "groq_ai",
+            "message": f"Found {len(cleaned)} rate(s). Review and click Save to add them.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI extraction failed: {e}")
+
+
+# ── Dispute Letter Generator ─────────────────────────────────────────────────
+
+@v1_router.post("/cases/{case_id}/dispute-letter", tags=["ui"])
+def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """
+    AI-generated professional dispute letter based on the case ACR data.
+    Ready to send to the carrier.
+    """
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Set it in .env.")
+
+    # Fetch case + validation + finding data
+    row = q1("""
+        SELECT
+            c.id::text AS case_id,
+            c.state,
+            ci.carrier_id AS carrier,
+            ci.invoice_number,
+            ci.total_amount::float AS billed_amount,
+            ci.currency,
+            vr.rule_violations,
+            f.confidence,
+            COALESCE(cs.origin_city || ' to ' || cs.dest_city, '') AS route
+        FROM cases c
+        JOIN canonical_invoices ci ON ci.id = c.invoice_id
+        LEFT JOIN validation_results vr ON vr.source_record_id = ci.id AND vr.tenant_id = c.tenant_id
+        LEFT JOIN findings f ON f.case_id = c.id AND f.tenant_id = c.tenant_id
+        LEFT JOIN canonical_shipments cs ON cs.invoice_id = ci.id
+        WHERE c.id = %s::uuid AND c.tenant_id = %s::uuid
+        LIMIT 1
+    """, (case_id, claims.tenant_id))
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    overcharge = 0.0
+    violations = row.get("rule_violations") or []
+    if isinstance(violations, list) and violations:
+        overcharge = violations[0].get("delta", 0) if isinstance(violations[0], dict) else 0
+
+    import json as _json
+    try:
+        from groq import Groq as _Groq
+        _groq = _Groq(api_key=groq_key)
+
+        prompt = (
+            f"Write a professional freight overcharge dispute letter from a logistics company to a carrier.\n\n"
+            f"Details:\n"
+            f"- Carrier: {row['carrier']}\n"
+            f"- Invoice Number: {row.get('invoice_number', 'N/A')}\n"
+            f"- Route: {row.get('route', 'N/A')}\n"
+            f"- Amount Billed: {row['currency']} {row['billed_amount']:,.2f}\n"
+            f"- Overcharge Amount: {row['currency']} {overcharge:,.2f}\n"
+            f"- AI Confidence: {int((row.get('confidence') or 0.96) * 100)}%\n"
+            f"- Case Reference: {case_id[:8].upper()}\n\n"
+            f"The letter should:\n"
+            f"1. State the overcharge clearly with invoice reference\n"
+            f"2. Cite the contracted rate vs billed rate\n"
+            f"3. Request a credit memo or refund within 30 days\n"
+            f"4. Reference the cryptographic audit record (ACR) as proof\n"
+            f"5. Be professional and firm but not aggressive\n\n"
+            f"Write the full letter with [Company Name] and [Your Name] as placeholders."
+        )
+
+        chat = _groq.chat.completions.create(
+            model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=800,
+        )
+        letter = chat.choices[0].message.content.strip()
+
+        return {
+            "case_id":        case_id,
+            "carrier":        row["carrier"],
+            "overcharge":     overcharge,
+            "currency":       row["currency"],
+            "dispute_letter": letter,
+            "generated_by":   "groq_ai",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Letter generation failed: {e}")
 
 
 # ── Full pipeline: Phase 2 + Phase 3 inline ────────────────────────────────────
@@ -1023,8 +1429,10 @@ def _run_evidence_and_reasoning(
             _tree.append(_h)
         merkle_root = _tree.root()
         root_sig, root_kid = _sign(slug, merkle_root)
-        cur.execute("UPDATE evidence_bundles SET bundle_hash=%s, signature=%s, kid=%s WHERE id=%s",
-                    (merkle_root, root_sig, root_kid, bundle_id))
+        cur.execute(
+            "UPDATE evidence_bundles SET bundle_hash=%s, signature=%s, kid=%s, completeness_status='COMPLETE' WHERE id=%s",
+            (merkle_root, root_sig, root_kid, bundle_id)
+        )
 
         # Step 3 — reasoning: SC-001 confidence = 0.96
         SC001 = 0.96
@@ -1040,8 +1448,10 @@ def _run_evidence_and_reasoning(
         f_sig, f_kid  = _sign(slug, finding_hash)
         finding_id = uuid.uuid4()
         cur.execute("""
-            INSERT INTO findings (id, tenant_id, case_id, bundle_id, confidence, rule_trace, signature, kid, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+            INSERT INTO findings
+                (id, tenant_id, case_id, bundle_id, confidence, rule_trace, signature, kid, created_at,
+                 ai_confidence, risk_level, ai_reasoning)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NULL, NULL, NULL)
         """, (finding_id, tenant_id, uuid.UUID(case_id), bundle_id, SC001, json.dumps(rule_trace), f_sig, f_kid, now))
 
         prop_payload = {"amount": str(amount), "case_id": case_id, "currency": currency,
@@ -1075,10 +1485,11 @@ def _run_evidence_and_reasoning(
 
 
 @v1_router.post("/cases/submit", tags=["ui"], status_code=201)
-def ui_submit_case(
+async def ui_submit_case(
     body: SubmitCaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     claims: ZoikoClaims = Depends(get_claims),
+    _ff: None = Depends(require_feature_flag("SC_001_ENABLED")),
 ):
     """Full pipeline: ingest → validate → canonical → open case → evidence → AI finding."""
     parts  = _re.split(r'\s*[-→–]\s*', body.route.strip(), maxsplit=1)
@@ -1128,6 +1539,29 @@ def ui_submit_case(
 
 # ── Route registration ────────────────────────────────────────────────────────
 # Spec §9.2: all routes are versioned under /v1/
+
+
+# ── WORM Audit Index ──────────────────────────────────────────────────────────
+
+@v1_router.get("/audit-worm", tags=["audit"])
+def ui_audit_worm_index(
+    limit: int = 100,
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """Return WORM audit index entries for this tenant (append-only, hash-verified)."""
+    rows = q("""
+        SELECT id::text, tenant_id::text, acr_id::text,
+               worm_bucket, object_name, object_hash, indexed_at::text
+        FROM   audit_worm_index
+        WHERE  tenant_id = %s::uuid
+        ORDER  BY indexed_at DESC
+        LIMIT  %s
+    """, (claims.tenant_id, limit))
+    return {"entries": rows, "count": len(rows)}
+
+
+# ── Route registration ─────────────────────────────────────────────────────────
+
 # Backward-compat: also register without prefix so existing tests and
 #   non-upgraded clients continue to work during the migration window.
 app.include_router(v1_router, prefix="/v1")

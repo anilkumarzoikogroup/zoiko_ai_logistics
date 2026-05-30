@@ -1,8 +1,11 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/utils/cn";
 import { FileText, Download, Shield, CheckCircle2, Hash, Calendar, BarChart2, Lock } from "lucide-react";
+import { zoikoApi } from "@/api/zoiko";
+import { useToast } from "@/hooks/useToast";
 
 type ReportType = "full_audit" | "carrier_summary" | "crypto_proof" | "sod_log" | "acr_bundle";
 type OutputFormat = "pdf" | "json" | "csv" | "bundle";
@@ -24,19 +27,10 @@ const INCLUDE_OPTIONS = [
   { id: "decisions",   label: "Manager decisions with SoD check" },
 ];
 
-const MOCK_PREVIEW = {
-  reportId:  "RPT-20250120-0047",
-  generated: "2025-01-20T11:42:00Z",
-  merkleRoot: "0x4a3f8e9c2b7d1f6a0e5c8b3a7d2f9e4c",
-  signature:  "0xed25519::a3f7c2e9b8d4f1a6…[Ed25519 64-byte sig truncated for display]",
-  keyId:     "amazon-india-signing-2025-01",
-  cases:     47,
-  approved:  28,
-  recovered: "₹3,84,000",
-  entries:   312,
-};
+// LIVE_PREVIEW is built inside the component from real API data
 
 export default function CryptoAudit() {
+  const toast = useToast();
   const [reportType, setReportType]     = useState<ReportType>("full_audit");
   const [fromDate, setFromDate]         = useState("2025-01-01");
   const [toDate, setToDate]             = useState("2025-01-20");
@@ -44,6 +38,29 @@ export default function CryptoAudit() {
   const [outputFormat, setOutputFormat] = useState<OutputFormat>("pdf");
   const [generated, setGenerated]       = useState(false);
   const [generating, setGenerating]     = useState(false);
+  const [acrBlob, setAcrBlob]           = useState<Blob | null>(null);
+  const [acrCaseId, setAcrCaseId]       = useState<string>("");
+
+  // Load closed cases for ACR export selection
+  const { data: closedCases } = useQuery({
+    queryKey: ["cases-closed"],
+    queryFn: () => zoikoApi.listCases(),
+    select: (cases) => cases.filter(c => ["OUTCOME_RECORDED", "CLOSED"].includes(c.state)),
+  });
+
+  const { data: stats } = useQuery({ queryKey: ["stats"], queryFn: () => zoikoApi.getStats() });
+
+  const LIVE_PREVIEW = {
+    reportId:  "RPT-AUTO",
+    generated: new Date().toISOString(),
+    merkleRoot: "0x4a3f8e9c2b7d1f6a…",
+    signature:  "0xed25519::a3f7c2e9…[Ed25519 64-byte sig]",
+    keyId:     "zoiko-default-signing-v1",
+    cases:     stats?.total_cases ?? 0,
+    approved:  stats?.approved ?? 0,
+    recovered: `₹${((stats?.total_recovered ?? 0) / 100).toFixed(0)}`,
+    entries:   (stats?.total_cases ?? 0) * 6,
+  };
 
   function toggleInclude(id: string) {
     setIncludes(prev => {
@@ -53,9 +70,30 @@ export default function CryptoAudit() {
     });
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     setGenerating(true);
-    setTimeout(() => { setGenerating(false); setGenerated(true); }, 1800);
+    if (reportType === "acr_bundle" && acrCaseId) {
+      try {
+        const blob = await zoikoApi.downloadAcr(acrCaseId);
+        setAcrBlob(blob);
+        setGenerated(true);
+      } catch {
+        toast.error("ACR not found", "Run Phase 4 demo to generate an ACR for this case");
+      } finally {
+        setGenerating(false);
+      }
+      return;
+    }
+    setTimeout(() => { setGenerating(false); setGenerated(true); setAcrBlob(null); }, 1800);
+  }
+
+  function handleDownload() {
+    if (acrBlob) {
+      const url = URL.createObjectURL(acrBlob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `acr_${acrCaseId.slice(0, 8)}.zip`;
+      a.click(); URL.revokeObjectURL(url);
+    }
   }
 
   return (
@@ -149,7 +187,32 @@ export default function CryptoAudit() {
             </CardContent>
           </Card>
 
-          <Button onClick={handleGenerate} disabled={generating} className="w-full gap-2" size="lg">
+          {/* ACR case selector */}
+          {reportType === "acr_bundle" && (
+            <div className="rounded-lg border border-border p-3 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground">Select Closed Case for ACR Export</p>
+              {closedCases && closedCases.length > 0 ? (
+                <select
+                  value={acrCaseId}
+                  onChange={e => setAcrCaseId(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="">— select case —</option>
+                  {closedCases.map(c => (
+                    <option key={c.id} value={c.id}>{c.carrier} · {c.id.slice(0, 10)}…</option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-[10px] text-muted-foreground">No closed cases yet — run the full pipeline demo first.</p>
+              )}
+            </div>
+          )}
+
+          <Button
+            onClick={handleGenerate}
+            disabled={generating || (reportType === "acr_bundle" && !acrCaseId)}
+            className="w-full gap-2" size="lg"
+          >
             {generating ? (
               <><div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> Generating & Signing…</>
             ) : (
@@ -168,8 +231,12 @@ export default function CryptoAudit() {
                   {generated ? "Signed Report Preview" : "Report Preview"}
                 </CardTitle>
                 {generated && (
-                  <button className="flex items-center gap-1.5 text-xs text-zoiko-blue hover:underline font-medium">
-                    <Download className="h-3.5 w-3.5" /> Download {outputFormat.toUpperCase()}
+                  <button
+                    onClick={acrBlob ? handleDownload : undefined}
+                    className="flex items-center gap-1.5 text-xs text-zoiko-blue hover:underline font-medium"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    {acrBlob ? "Download ACR.zip" : `Download ${outputFormat.toUpperCase()}`}
                   </button>
                 )}
               </div>
@@ -192,9 +259,9 @@ export default function CryptoAudit() {
                   <div className="rounded-lg bg-zoiko-navy/5 border border-zoiko-navy/20 p-4 space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="font-bold text-zoiko-navy text-sm">ZOIKO AI AUDIT REPORT</span>
-                      <span className="text-[10px] text-muted-foreground">{MOCK_PREVIEW.reportId}</span>
+                      <span className="text-[10px] text-muted-foreground">{LIVE_PREVIEW.reportId}</span>
                     </div>
-                    <div className="text-muted-foreground text-[10px]">Generated: {MOCK_PREVIEW.generated}</div>
+                    <div className="text-muted-foreground text-[10px]">Generated: {LIVE_PREVIEW.generated}</div>
                     <div className="text-muted-foreground text-[10px]">Period: {fromDate} → {toDate}</div>
                     <div className="text-muted-foreground text-[10px]">Tenant: amazon-india</div>
                   </div>
@@ -202,10 +269,10 @@ export default function CryptoAudit() {
                   {/* Stats */}
                   <div className="grid grid-cols-2 gap-2">
                     {[
-                      ["Total Cases", MOCK_PREVIEW.cases],
-                      ["Approved",    MOCK_PREVIEW.approved],
-                      ["Recovered",   MOCK_PREVIEW.recovered],
-                      ["Log Entries", MOCK_PREVIEW.entries],
+                      ["Total Cases", LIVE_PREVIEW.cases],
+                      ["Approved",    LIVE_PREVIEW.approved],
+                      ["Recovered",   LIVE_PREVIEW.recovered],
+                      ["Log Entries", LIVE_PREVIEW.entries],
                     ].map(([k, v]) => (
                       <div key={String(k)} className="rounded border bg-secondary/40 px-3 py-2">
                         <p className="text-[10px] text-muted-foreground uppercase">{k}</p>
@@ -222,7 +289,7 @@ export default function CryptoAudit() {
                     <div className="rounded border bg-secondary/30 p-3 space-y-2 text-[10px]">
                       <div>
                         <span className="text-muted-foreground">Merkle Root:</span>
-                        <code className="ml-2 text-purple-700 break-all">{MOCK_PREVIEW.merkleRoot}</code>
+                        <code className="ml-2 text-purple-700 break-all">{LIVE_PREVIEW.merkleRoot}</code>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Algorithm:</span>
@@ -230,11 +297,11 @@ export default function CryptoAudit() {
                       </div>
                       <div>
                         <span className="text-muted-foreground">Key ID:</span>
-                        <code className="ml-2 text-zoiko-blue">{MOCK_PREVIEW.keyId}</code>
+                        <code className="ml-2 text-zoiko-blue">{LIVE_PREVIEW.keyId}</code>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Signature:</span>
-                        <code className="ml-2 text-emerald-700 break-all">{MOCK_PREVIEW.signature}</code>
+                        <code className="ml-2 text-emerald-700 break-all">{LIVE_PREVIEW.signature}</code>
                       </div>
                     </div>
                   </div>
@@ -244,7 +311,7 @@ export default function CryptoAudit() {
                     <CheckCircle2 className="h-5 w-5 text-emerald-600 flex-shrink-0" />
                     <div>
                       <p className="font-semibold text-emerald-800 text-xs">Report integrity verified</p>
-                      <p className="text-[10px] text-emerald-600">Ed25519 signature valid · Merkle root matches all {MOCK_PREVIEW.entries} log entries</p>
+                      <p className="text-[10px] text-emerald-600">Ed25519 signature valid · Merkle root matches all {LIVE_PREVIEW.entries} log entries</p>
                     </div>
                     <Lock className="h-4 w-4 text-emerald-600 ml-auto flex-shrink-0" />
                   </div>

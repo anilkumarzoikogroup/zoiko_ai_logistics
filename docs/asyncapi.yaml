@@ -1,0 +1,257 @@
+asyncapi: "2.6.0"
+
+info:
+  title: Zoiko AI Logistics — Kafka Event API
+  version: "1.0.0"
+  description: |
+    All Kafka topics used by the Zoiko SC-001 freight overcharge detection pipeline.
+    Partition key = tenant_id + case_id (ordering guaranteed per case).
+    All events are wrapped in KafkaEventEnvelope with Ed25519 signature.
+
+defaultContentType: application/json
+
+servers:
+  dev:
+    url: localhost:9092
+    protocol: kafka
+    description: Local development broker (MockKafkaBroker in tests)
+  production:
+    url: kafka.zoikotech.com:9092
+    protocol: kafka
+    description: GKE Strimzi production cluster
+
+channels:
+
+  zoiko.source.record.received:
+    description: Fired when a raw carrier invoice is ingested and encrypted.
+    subscribe:
+      summary: Validation service consumes this to validate the invoice.
+      message:
+        $ref: '#/components/messages/SourceRecordReceived'
+
+  zoiko.source.record.validated:
+    description: Fired after validation completes (VALID or QUARANTINE).
+    subscribe:
+      summary: Canonical truth service consumes this.
+      message:
+        $ref: '#/components/messages/SourceRecordValidated'
+
+  zoiko.canonical.invoice.created:
+    description: Canonical invoice created with predecessor hash chain.
+    subscribe:
+      summary: Case orchestration service consumes this to open a case.
+      message:
+        $ref: '#/components/messages/CanonicalInvoiceCreated'
+
+  zoiko.case.triaged:
+    description: Case opened and triaged — evidence collection begins.
+    subscribe:
+      summary: Evidence service consumes this.
+      message:
+        $ref: '#/components/messages/CaseTriaged'
+
+  zoiko.evidence.bundled:
+    description: Evidence bundle sealed with Merkle root.
+    subscribe:
+      summary: Reasoning service consumes this.
+      message:
+        $ref: '#/components/messages/EvidenceBundled'
+
+  zoiko.finding.generated:
+    description: AI reasoning complete — overcharge finding with confidence 0.96.
+    subscribe:
+      summary: Governance service consumes this.
+      message:
+        $ref: '#/components/messages/FindingGenerated'
+
+  zoiko.proposal.created:
+    description: Recovery proposal created — pending governance evaluation.
+    subscribe:
+      summary: Governance service consumes this.
+      message:
+        $ref: '#/components/messages/ProposalCreated'
+
+  zoiko.governance.decision.issued:
+    description: OPA governance decision — ALLOW / APPROVAL / DENY.
+    subscribe:
+      summary: Token service and case orchestration consume this.
+      message:
+        $ref: '#/components/messages/GovernanceDecisionIssued'
+
+  zoiko.governance.token.issued:
+    description: Single-use execution token issued (15-min TTL).
+    subscribe:
+      summary: Execution gateway consumes this.
+      message:
+        $ref: '#/components/messages/GovernanceTokenIssued'
+
+  zoiko.execution.dispatched:
+    description: All 8 gates passed — token consumed, credit memo dispatched.
+    subscribe:
+      summary: Connector hub and reconciliation service consume this.
+      message:
+        $ref: '#/components/messages/ExecutionDispatched'
+
+  zoiko.reconciliation.updated:
+    description: Reconciliation FSM state change (MATCHED / PARTIAL / DISCREPANCY).
+    subscribe:
+      summary: ACR service consumes MATCHED outcomes.
+      message:
+        $ref: '#/components/messages/ReconciliationUpdated'
+
+  zoiko.acr.generated:
+    description: ACR generated and WORM-locked. Final event in the pipeline.
+    subscribe:
+      summary: Frontend polling consumer. Also SIEM sink.
+      message:
+        $ref: '#/components/messages/AcrGenerated'
+
+  zoiko.security.events:
+    description: Security events — tenant mismatch, token replay, SoD violations.
+    subscribe:
+      summary: SIEM sink. Never permit on these events.
+      message:
+        $ref: '#/components/messages/SecurityEvent'
+
+components:
+  messages:
+
+    SourceRecordReceived:
+      payload:
+        type: object
+        required: [record_id, tenant_id, raw_payload_hash]
+        properties:
+          record_id:        { type: string, format: uuid }
+          tenant_id:        { type: string, format: uuid }
+          raw_payload_hash: { type: string, description: "sha256:<hex>" }
+          schema_version:   { type: string, example: "source-record.v1" }
+
+    SourceRecordValidated:
+      payload:
+        type: object
+        required: [record_id, tenant_id, status]
+        properties:
+          record_id:  { type: string, format: uuid }
+          tenant_id:  { type: string, format: uuid }
+          status:     { type: string, enum: [VALID, QUARANTINED] }
+          violations: { type: integer }
+
+    CanonicalInvoiceCreated:
+      payload:
+        type: object
+        required: [invoice_id, tenant_id, payload_hash]
+        properties:
+          invoice_id:    { type: string, format: uuid }
+          tenant_id:     { type: string, format: uuid }
+          payload_hash:  { type: string }
+          invoice_number:{ type: string }
+
+    CaseTriaged:
+      payload:
+        type: object
+        required: [case_id, tenant_id, state]
+        properties:
+          case_id:   { type: string, format: uuid }
+          tenant_id: { type: string, format: uuid }
+          state:     { type: string, example: "NEW" }
+
+    EvidenceBundled:
+      payload:
+        type: object
+        required: [case_id, bundle_id, merkle_root]
+        properties:
+          case_id:     { type: string, format: uuid }
+          bundle_id:   { type: string, format: uuid }
+          merkle_root: { type: string }
+          item_count:  { type: integer }
+
+    FindingGenerated:
+      payload:
+        type: object
+        required: [case_id, finding_id, confidence]
+        properties:
+          case_id:    { type: string, format: uuid }
+          finding_id: { type: string, format: uuid }
+          confidence: { type: number, example: 0.96 }
+          risk_level: { type: string, enum: [HIGH, MEDIUM, LOW] }
+
+    ProposalCreated:
+      payload:
+        type: object
+        required: [proposal_id, case_id, proposed_action, amount, currency]
+        properties:
+          proposal_id:     { type: string, format: uuid }
+          case_id:         { type: string, format: uuid }
+          proposed_action: { type: string, example: "CREDIT_MEMO" }
+          amount:          { type: number }
+          currency:        { type: string, example: "INR" }
+
+    GovernanceDecisionIssued:
+      payload:
+        type: object
+        required: [decision_id, proposal_id, decision]
+        properties:
+          decision_id:  { type: string, format: uuid }
+          proposal_id:  { type: string, format: uuid }
+          decision:     { type: string, enum: [ALLOW, APPROVAL, DENY] }
+          signature:    { type: string }
+
+    GovernanceTokenIssued:
+      payload:
+        type: object
+        required: [token_id, case_id, scope, expires_at]
+        properties:
+          token_id:   { type: string, format: uuid }
+          case_id:    { type: string, format: uuid }
+          scope:      { type: string, example: "EXECUTE_CREDIT_MEMO" }
+          expires_at: { type: string, format: date-time }
+
+    ExecutionDispatched:
+      payload:
+        type: object
+        required: [envelope_id, token_id, case_id, amount, currency]
+        properties:
+          envelope_id:   { type: string, format: uuid }
+          token_id:      { type: string, format: uuid }
+          case_id:       { type: string, format: uuid }
+          amount:        { type: number }
+          currency:      { type: string }
+          connector_ref: { type: string }
+
+    ReconciliationUpdated:
+      payload:
+        type: object
+        required: [reconciliation_id, case_id, state]
+        properties:
+          reconciliation_id: { type: string, format: uuid }
+          case_id:           { type: string, format: uuid }
+          state:             { type: string, enum: [MATCHED, PARTIAL, DISCREPANCY] }
+          variance:          { type: number }
+
+    AcrGenerated:
+      payload:
+        type: object
+        required: [acr_id, case_id, merkle_root, certification_status]
+        properties:
+          acr_id:               { type: string, format: uuid }
+          case_id:              { type: string, format: uuid }
+          merkle_root:          { type: string }
+          certification_status: { type: string, enum: [CERTIFIED, PENDING, FAILED] }
+          worm_bucket:          { type: string }
+
+    SecurityEvent:
+      payload:
+        type: object
+        required: [event_type, tenant_id, severity]
+        properties:
+          event_type:
+            type: string
+            enum:
+              - security.tenant_mismatch.v1
+              - security.token_replay.v1
+              - security.forbidden_transition.v1
+              - security.sod_violation.v1
+              - security.signature_verification_failed.v1
+          tenant_id: { type: string, format: uuid }
+          severity:  { type: string, enum: [CRITICAL, HIGH, MEDIUM] }
+          detail:    { type: string }

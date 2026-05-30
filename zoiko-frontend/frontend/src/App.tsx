@@ -23,7 +23,8 @@ import AnalystReview  from "./features/governance/AnalystReview";
 import ManagerApproval from "./features/governance/ManagerApproval";
 
 // features/acr
-import CryptoAudit from "./features/acr/CryptoAudit";
+import CryptoAudit   from "./features/acr/CryptoAudit";
+import AcrVerifier   from "./features/acr/AcrVerifier";
 
 // features/audit
 import Alerts          from "./features/audit/Alerts";
@@ -32,7 +33,8 @@ import KafkaEvents     from "./features/audit/KafkaEvents";
 import AuditConditions from "./features/audit/AuditConditions";
 
 // features/settings
-import Settings from "./features/settings/Settings";
+import Settings        from "./features/settings/Settings";
+import UserManagement  from "./features/settings/UserManagement";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const role = localStorage.getItem("zoiko_role");
@@ -70,6 +72,7 @@ export default function App() {
 
         {/* ACR */}
         <Route path="/crypto"    element={<CryptoAudit />} />
+        <Route path="/verifier"  element={<AcrVerifier />} />
 
         {/* Audit */}
         <Route path="/alerts"    element={<Alerts />} />
@@ -77,7 +80,8 @@ export default function App() {
         <Route path="/kafka"     element={<KafkaEvents />} />
 
         {/* Settings */}
-        <Route path="/settings"  element={<Settings />} />
+        <Route path="/settings"       element={<Settings />} />
+        <Route path="/users"          element={<UserManagement />} />
       </Route>
     </Routes>
     </>

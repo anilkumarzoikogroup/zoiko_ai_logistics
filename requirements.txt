@@ -15,6 +15,7 @@ pypdf>=4.0                 # fallback PDF reader
 Pillow>=10.0               # image invoice support (PNG/JPG)
 
 # ── Cryptography ──────────────────────────────────────────────────────────────
+bcrypt>=4.0                # password hashing for users table
 cryptography>=42.0
 pycose>=1.1
 python-jose[cryptography]>=3.3

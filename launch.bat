@@ -8,79 +8,61 @@ echo  Zoiko AI Logistics -- Launch
 echo ============================================================
 echo.
 
+if not exist ".env" ( echo  ERROR: .env not found. Run setup.bat first. & pause & exit /b 1 )
+if not exist ".venv\Scripts\python.exe" ( echo  ERROR: .venv not found. Run setup.bat first. & pause & exit /b 1 )
+
 REM ── Load .env ───────────────────────────────────────────────
-if not exist ".env" (
-    echo  ERROR: .env file not found. Run setup.bat first.
-    pause
-    exit /b 1
-)
-for /f "usebackq tokens=* delims=" %%l in (".env") do (
-    set "line=%%l"
-    if not "!line:~0,1!"=="#" if not "!line!"=="" set "%%l"
-)
-echo  Loaded configuration from .env
-echo.
+.venv\Scripts\python _load_env.py >nul 2>&1
+if exist ".env_tmp.bat" ( call .env_tmp.bat & del .env_tmp.bat >nul 2>&1 )
+echo  Configuration loaded.
 
 REM ── Check PostgreSQL ────────────────────────────────────────
-echo Checking PostgreSQL connection...
-python -c "import psycopg2; psycopg2.connect('%DB_URL%'); print('DB_OK')" 2>nul | find "DB_OK" >nul
+echo  Checking PostgreSQL...
+.venv\Scripts\python -c "import psycopg2,os; psycopg2.connect(os.environ.get('DB_URL',''))" 2>nul
 if %errorlevel%==0 (
     set DB_ONLINE=1
-    echo  [OK] PostgreSQL is running.
+    echo  [OK] PostgreSQL running. Starting in LIVE MODE.
 ) else (
     set DB_ONLINE=0
-    echo  [WARN] PostgreSQL not reachable. Starting in MOCK MODE.
-    echo         Frontend will use demo data only.
+    echo  [WARN] PostgreSQL not reachable. Start it and re-run.
+    pause & exit /b 1
 )
 echo.
 
-REM ── Run Alembic migrations (only if DB is online) ──────────
-if "%DB_ONLINE%"=="1" (
-    echo Running database migrations...
-    .venv\Scripts\python -m alembic upgrade head
-    if errorlevel 1 (
-        echo  ERROR: Migration failed. Check PostgreSQL is running and DB_URL is correct.
-        pause
-        exit /b 1
-    )
-    echo  Migrations up to date.
-    echo.
-)
-
-REM ── Backend (only if DB is online) ─────────────────────────
-if "%DB_ONLINE%"=="1" (
-    echo Starting Zoiko Backend (port 8000^)...
-    start "Zoiko Backend" cmd /k "cd /d "%ROOT%phase-2" && call "%ROOT%.venv\Scripts\activate.bat" && call "%ROOT%.env" && echo Backend ready at http://localhost:8000 && python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8000"
-    echo  Backend window opened.
-    timeout /t 3 /nobreak >nul
-) else (
-    echo  Skipping backend (no DB^).
-)
+REM ── Migrations ──────────────────────────────────────────────
+.venv\Scripts\python -m alembic -c alembic.ini upgrade head 2>nul
+echo  Migrations up to date.
 echo.
 
-REM ── Frontend ────────────────────────────────────────────────
-echo Starting Zoiko Frontend (port 5173^)...
-if "%DB_ONLINE%"=="1" (
-    start "Zoiko Frontend" cmd /k "cd /d "%ROOT%zoiko-frontend\frontend" && set VITE_USE_MOCK=false && echo Frontend ready at http://localhost:5173 && npm run dev"
-) else (
-    start "Zoiko Frontend" cmd /k "cd /d "%ROOT%zoiko-frontend\frontend" && echo [MOCK MODE] Frontend ready at http://localhost:5173 && npm run dev"
-)
-echo  Frontend window opened.
+REM ── Start Phase 2 (port 8000) ───────────────────────────────
+echo  Starting Phase 2 on port 8000...
+start "Zoiko-Phase2" /d "%ROOT%phase-2" cmd /k "call ..\.venv\Scripts\activate.bat && set DB_URL=!DB_URL! && set ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE! && set ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET! && set ZOIKO_ISSUER=!ZOIKO_ISSUER! && set ZOIKO_FF_SC_001_ENABLED=* && set ZOIKO_COMPANY_NAME=!ZOIKO_COMPANY_NAME! && set ZOIKO_ADMIN_EMAIL=!ZOIKO_ADMIN_EMAIL! && set ZOIKO_ADMIN_PASSWORD=!ZOIKO_ADMIN_PASSWORD! && set ZOIKO_ADMIN_NAME=!ZOIKO_ADMIN_NAME! && set JWT_TTL_SECONDS=!JWT_TTL_SECONDS! && set PYTHONIOENCODING=utf-8 && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8000"
+timeout /t 3 /nobreak >nul
+
+REM ── Start Phase 3 (port 8002) ───────────────────────────────
+echo  Starting Phase 3 on port 8002...
+start "Zoiko-Phase3" /d "%ROOT%phase-3" cmd /k "call ..\.venv\Scripts\activate.bat && set DB_URL=!DB_URL! && set ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE! && set ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET! && set ZOIKO_ISSUER=!ZOIKO_ISSUER! && set PYTHONIOENCODING=utf-8 && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8002"
+timeout /t 3 /nobreak >nul
+
+REM ── Start Phase 4 (port 8001) ───────────────────────────────
+echo  Starting Phase 4 on port 8001...
+start "Zoiko-Phase4" /d "%ROOT%phase-4" cmd /k "call ..\.venv\Scripts\activate.bat && set DB_URL=!DB_URL! && set ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE! && set ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET! && set ZOIKO_ISSUER=!ZOIKO_ISSUER! && set PYTHONIOENCODING=utf-8 && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8001"
+timeout /t 3 /nobreak >nul
+
+REM ── Start Frontend (port 5173) — always LIVE ─────────────────
+echo  Starting Frontend on port 5173...
+start "Zoiko-Frontend" /d "%ROOT%zoiko-frontend\frontend" cmd /k "set VITE_USE_MOCK=false && npm run dev"
 echo.
 
-REM ── Auto-open browser ───────────────────────────────────────
-timeout /t 4 /nobreak >nul
+REM ── Open browser ────────────────────────────────────────────
+timeout /t 5 /nobreak >nul
 start "" "http://localhost:5173"
 
 echo ============================================================
-if "%DB_ONLINE%"=="1" (
-    echo  LIVE MODE
-    echo  Backend  :  http://localhost:8000
-    echo  API Docs :  http://localhost:8000/docs
-) else (
-    echo  MOCK MODE  ^(demo data, no database required^)
-)
-echo  Frontend :  http://localhost:5173
+echo  LIVE MODE
+echo  Frontend  :  http://localhost:5173
+echo  Phase 2   :  http://localhost:8000/docs
 echo ============================================================
 echo.
-pause
+echo  Press any key to close. Servers keep running.
+pause >nul

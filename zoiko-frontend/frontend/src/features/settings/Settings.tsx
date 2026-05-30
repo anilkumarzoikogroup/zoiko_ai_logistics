@@ -154,6 +154,7 @@ function ContractsTab() {
   const addMutation = useMutation({
     mutationFn: () => zoikoApi.createContractRate({
       carrier_id:   form.carrier_id,
+      rate_type:    "fuel_charge",
       rate_value:   Number(form.rate_value),
       currency:     form.currency,
       effective_on: form.effective_on,

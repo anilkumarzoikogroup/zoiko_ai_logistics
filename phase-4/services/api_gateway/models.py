@@ -44,3 +44,30 @@ class ACRResponse(BaseModel):
     is_locked:     bool
     issued_at:     str
     verify_bundle: dict
+
+
+class VarianceRecord(BaseModel):
+    id:             str
+    case_id:        str
+    tenant_id:      str
+    variance_type:  str
+    expected_value: Optional[float]
+    actual_value:   Optional[float]
+    delta:          Optional[float]
+    status:         str           # OPEN | RESOLVED | WAIVED
+    resolved_by:    Optional[str]
+    resolved_at:    Optional[str]
+    created_at:     str
+
+
+class ResolveVarianceRequest(BaseModel):
+    action:      str   # "RESOLVE" | "WAIVE"
+    resolved_by: str   # actor_sub of the person resolving
+
+
+class ResolveVarianceResponse(BaseModel):
+    id:          str
+    case_id:     str
+    status:      str
+    resolved_by: str
+    resolved_at: str

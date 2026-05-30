@@ -10,7 +10,7 @@ from services.api_gateway.auth   import get_claims
 from services.api_gateway.models import (
     HealthResponse,
     AddEvidenceRequest, AddEvidenceResponse,
-    GetBundleResponse,
+    GetBundleResponse, SealBundleResponse,
     AnalyzeRequest, AnalyzeResponse,
     GetFindingsResponse,
     CreateTaskRequest, CreateTaskResponse,
@@ -30,6 +30,12 @@ from kafka.mock_kafka import MockKafkaBroker as _MockBroker
 _BROKER = _MockBroker()
 
 app = FastAPI(title="Zoiko Logistics API Gateway", version="3.0.0")
+
+try:
+    from zoiko_common.middleware.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
+except ImportError:
+    pass
 
 _evidence   = EvidenceHandler(DB_URL, _BROKER, TENANT_SLUG)
 _reasoning  = ReasoningHandler(DB_URL, _BROKER, TENANT_SLUG)
@@ -105,11 +111,41 @@ def get_evidence_bundle(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return GetBundleResponse(
-        bundle_id   = str(result.bundle_id),
-        case_id     = result.case_id,
-        bundle_hash = result.bundle_hash,
-        item_count  = result.item_count,
-        tenant_id   = result.tenant_id,
+        bundle_id           = str(result.bundle_id),
+        case_id             = result.case_id,
+        bundle_hash         = result.bundle_hash,
+        item_count          = result.item_count,
+        tenant_id           = result.tenant_id,
+        completeness_status = result.completeness_status,
+    )
+
+
+@v1_router.post(
+    "/evidence/{case_id}/bundle/seal",
+    response_model=SealBundleResponse,
+    tags=["evidence"],
+)
+def seal_evidence_bundle(
+    case_id: str,
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """Seal (mark COMPLETE) the evidence bundle for a case.
+    Reasoning is blocked until this is called — T-006 enforcement."""
+    try:
+        result = _evidence.seal_bundle(
+            tenant_id = str(claims.tenant_id),
+            case_id   = case_id,
+            actor_sub = claims.sub,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return SealBundleResponse(
+        bundle_id           = str(result.bundle_id),
+        case_id             = result.case_id,
+        bundle_hash         = result.bundle_hash,
+        item_count          = result.item_count,
+        completeness_status = result.completeness_status,
+        tenant_id           = result.tenant_id,
     )
 
 
@@ -234,7 +270,7 @@ def decide_governance_task(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return DecideResponse(
-        decision_id   = str(result.decision_id),
+        decision_id   = str(result.decision_id) if result.decision_id is not None else None,
         task_id       = result.task_id,
         outcome       = result.outcome,
         actor_sub     = result.actor_sub,

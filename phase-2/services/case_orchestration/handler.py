@@ -145,8 +145,26 @@ class CaseHandler:
             current = row["state"]
             allowed = VALID_TRANSITIONS.get(current, set())
             if new_state not in allowed:
+                # T-014: invalid FSM transition → emit security event then 422
+                try:
+                    from kafka.producer import ZoikoProducer, KafkaMessage
+                    ZoikoProducer(self.broker).publish(KafkaMessage(
+                        topic     = "zoiko.security.event-detected.v1",
+                        key       = str(case_id),
+                        payload   = {
+                            "event_type":   "INVALID_FSM_TRANSITION",
+                            "case_id":      str(case_id),
+                            "from_state":   current,
+                            "to_state":     new_state,
+                            "actor_sub":    actor_sub,
+                            "allowed":      sorted(allowed),
+                        },
+                        tenant_id = tenant_id,
+                    ))
+                except Exception:
+                    pass
                 raise ValueError(
-                    f"Invalid transition: {current} → {new_state}. Allowed: {allowed}"
+                    f"Invalid transition: {current} → {new_state}. Allowed: {sorted(allowed)}"
                 )
 
             # OCC check (T-016)

@@ -1,0 +1,25 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install internal packages
+COPY phase-0/packages/zoiko-common ./phase-0/packages/zoiko-common
+COPY phase-1/packages/zoiko-kms   ./phase-1/packages/zoiko-kms
+RUN pip install --no-cache-dir -e ./phase-0/packages/zoiko-common \
+ && pip install --no-cache-dir -e ./phase-1/packages/zoiko-kms
+
+# Copy all source
+COPY . .
+
+# Non-root user
+RUN useradd -r -u 1001 zoiko && chown -R zoiko /app
+USER zoiko

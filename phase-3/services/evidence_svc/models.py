@@ -17,9 +17,10 @@ class EvidenceItemResult:
 
 @dataclass
 class EvidenceBundleResult:
-    bundle_id:   uuid.UUID
-    tenant_id:   str
-    case_id:     str
-    bundle_hash: str        # hex Merkle root
-    item_count:  int
-    created_at:  datetime
+    bundle_id:           uuid.UUID
+    tenant_id:           str
+    case_id:             str
+    bundle_hash:         str        # hex Merkle root
+    item_count:          int
+    created_at:          datetime
+    completeness_status: str = "INCOMPLETE"  # INCOMPLETE | COMPLETE

@@ -96,6 +96,7 @@ class TestTokenIntegration:
             item_type="BOL", content_bytes=b"token-test-bol",
             actor_sub="ravi@amazon.com",
         )
+        ev.seal_bundle(tenant_id=test_case["tenant_id"], case_id=test_case["id"])
         rh   = ReasoningHandler(db_url, broker, "default")
         r    = rh.analyze(
             tenant_id=test_case["tenant_id"], case_id=test_case["id"],
@@ -143,6 +144,7 @@ class TestTokenIntegration:
             item_type="PHOTO", content_bytes=b"rejected-test",
             actor_sub="ravi@amazon.com",
         )
+        ev.seal_bundle(tenant_id=test_case["tenant_id"], case_id=test_case["id"])
         rh   = ReasoningHandler(db_url, broker, "default")
         r    = rh.analyze(
             tenant_id=test_case["tenant_id"], case_id=test_case["id"],

@@ -39,6 +39,7 @@ const NAV: { group: string; items: NavEntry[] }[] = [
       { label: "Execute Recovery", icon: Zap,          to: "/execute"   },
       { label: "Gov. Tokens",      icon: Key,          to: "/execute"   },
       { label: "Audit & ACR",      icon: Archive,      to: "/crypto"    },
+      { label: "ACR Verifier",     icon: ShieldCheck,  to: "/verifier"  },
       { label: "Audit Trail",      icon: ClipboardList,to: "/alerts"    },
     ],
   },
@@ -58,8 +59,8 @@ const NAV: { group: string; items: NavEntry[] }[] = [
   {
     group: "ADMIN",
     items: [
-      { label: "Tenants",       icon: Building2, to: "/database"  },
-      { label: "Users & Roles", icon: Users,     to: "/settings"  },
+      { label: "Users & Roles", icon: Users,     to: "/users"     },
+      { label: "Tenants / DB",  icon: Building2, to: "/database"  },
       { label: "Settings",      icon: Settings,  to: "/settings"  },
     ],
   },
@@ -131,21 +132,51 @@ export default function AppLayout() {
 
         {/* Logo */}
         <div className={cn(
-          "flex items-center gap-2.5 px-4 py-4 border-b border-slate-700/40 flex-shrink-0",
-          collapsed && "justify-center px-2"
+          "flex items-center justify-center px-4 py-4 border-b border-slate-700/40 flex-shrink-0",
+          collapsed ? "px-2" : "px-3"
         )}>
-          <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-sm flex-shrink-0 shadow-lg shadow-blue-500/30">
-            Z
-          </div>
-          {!collapsed && (
-            <div>
-              <p className="font-bold text-white text-sm leading-tight tracking-wide">ZOIKO</p>
-              <div className="flex items-center gap-1 mt-0.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <p className="text-[9px] text-slate-500 tracking-widest uppercase">Live</p>
-              </div>
-            </div>
+          {collapsed ? (
+            /* Icon-only when collapsed */
+            <img
+              src="/logo-icon.svg"
+              alt="Z"
+              className="h-8 w-8 object-contain"
+              onError={e => {
+                const t = e.currentTarget;
+                t.style.display = "none";
+                const fb = t.nextElementSibling as HTMLElement | null;
+                if (fb) fb.style.display = "flex";
+              }}
+            />
+          ) : (
+            /* Full logo when expanded */
+            <img
+              src="/logo-dark.jpg"
+              alt="ZoikoAI"
+              className="h-10 w-auto object-contain"
+              onError={e => {
+                const t = e.currentTarget;
+                t.style.display = "none";
+                const fb = t.nextElementSibling as HTMLElement | null;
+                if (fb) fb.style.display = "flex";
+              }}
+            />
           )}
+          {/* Fallback text logo */}
+          <div className="hidden items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+              Z
+            </div>
+            {!collapsed && (
+              <div>
+                <p className="font-bold text-white text-sm leading-tight">ZOIKO</p>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <p className="text-[9px] text-slate-500 uppercase tracking-widest">Live</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Nav */}

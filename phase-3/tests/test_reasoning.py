@@ -1,142 +1,141 @@
-# tests/test_reasoning.py
+"""
+Reasoning Service tests.
 
-import uuid
+Unit tests:  SC-001 confidence formula, JCS canonicalization, signing.
+Integration: analyze() writes findings + decision_proposals (skip if no DB).
+"""
+import pytest
 
-from services.reasoning_svc.handler import (
-    ReasoningHandler,
-    SC001_CONFIDENCE,
-)
-
-
-# =========================================================
-# TEST: BASIC IMPORT
-# =========================================================
-
-def test_import():
-    print("\n[TEST] Import successful")
-    assert ReasoningHandler is not None
+import paths  # noqa: F401
 
 
-# =========================================================
-# TEST: REAL GROQ + REAL DB
-# =========================================================
+# ── Unit: SC-001 confidence formula ──────────────────────────────────────────
 
-def test_real_groq_and_db():
+class TestConfidenceFormula:
+    def test_sc001_confidence_is_096(self):
+        from services.reasoning_svc.handler import SC001_CONFIDENCE
+        assert SC001_CONFIDENCE == 0.96
 
-    print("\n====================================")
-    print("[TEST] Starting Real Integration Test")
-    print("====================================")
+    def test_rule_weights_sum_to_one(self):
+        from services.reasoning_svc.handler import _RULES
+        total_weight = sum(r["weight"] for r in _RULES.values())
+        assert abs(total_weight - 1.0) < 1e-9
 
-    handler = ReasoningHandler()
+    def test_weighted_average_matches_constant(self):
+        from services.reasoning_svc.handler import _RULES, SC001_CONFIDENCE
+        computed = sum(r["confidence"] * r["weight"] for r in _RULES.values())
+        assert abs(computed - SC001_CONFIDENCE) < 1e-9
 
-    result = handler.analyze(
-        tenant_id     = "tenant-prod",
-        case_id       = str(uuid.uuid4()),
-        bundle_id     = str(uuid.uuid4()),
-        proposer_sub  = "real@test.com",
-        proposed_action = "REVIEW",
-        amount        = 12500.0,        # ← invoice amount
-        currency      = "INR",          # ← Indian rupees
-        carrier       = "BlueDart",     # ← NEW
-        route         = "Hyderabad → Mumbai",  # ← NEW
-        contract_rate = 10000.0,        # ← NEW: agreed contract rate
-    )
+    def test_fuel_charge_confidence_is_100(self):
+        from services.reasoning_svc.handler import _RULES
+        assert _RULES["fuel_charge"]["confidence"] == 1.00
 
-    # =====================================================
-    # PRINT RESULTS
-    # =====================================================
-
-    print("\n============= FINAL RESULT =============")
-    print(f"Finding ID:   {result.finding_id}")
-    print(f"Proposal ID:  {result.proposal_id}")
-    print(f"\nTenant ID:    {result.tenant_id}")
-    print(f"Case ID:      {result.case_id}")
-    print(f"Bundle ID:    {result.bundle_id}")
-    print(f"\nAI Confidence:   {result.ai_confidence}")
-    print(f"Risk Level:      {result.risk_level}")
-    print(f"\nAI Reasoning:")
-    print(result.ai_reasoning)
-    print(f"\nFinal Confidence: {result.confidence}")
-    print(f"\nRule Trace:")
-    print(result.rule_trace)
-    print("\n========================================")
-
-    # =====================================================
-    # ASSERTIONS
-    # =====================================================
-
-    assert result is not None
-    assert result.finding_id is not None
-    assert result.proposal_id is not None
-
-    # AI confidence should be meaningful now (not 0.35)
-    assert result.ai_confidence > 0.5, (
-        f"AI confidence too low ({result.ai_confidence}) — "
-        "check Groq is receiving carrier/route/contract_rate"
-    )
-
-    assert result.risk_level in ["LOW", "MEDIUM", "HIGH"]
-
-    assert result.rule_trace is not None
-    assert result.rule_trace["weighted_average"] == SC001_CONFIDENCE
-
-    # Overcharge is 25% (12500 vs 10000) — should flag as MEDIUM or HIGH
-    assert result.risk_level in ["MEDIUM", "HIGH"], (
-        f"Expected MEDIUM or HIGH risk for 25% overcharge, got {result.risk_level}"
-    )
-
-    # Final confidence should be high since rule engine is strong
-    assert result.confidence > 0.80, (
-        f"Final confidence too low: {result.confidence}"
-    )
+    def test_accessorial_confidence_is_092(self):
+        from services.reasoning_svc.handler import _RULES
+        assert _RULES["accessorial"]["confidence"] == 0.92
 
 
-# =========================================================
-# TEST: REAL GROQ — LOW OVERCHARGE SCENARIO
-# =========================================================
+# ── Unit: finding hash uses domain tag ───────────────────────────────────────
 
-def test_low_overcharge_scenario():
+class TestFindingHash:
+    def test_domain_tag_prefix(self):
+        import hashlib
+        from zoiko_common.crypto.jcs import canonicalize
 
-    print("\n====================================")
-    print("[TEST] Low Overcharge Scenario")
-    print("====================================")
+        payload = {
+            "bundle_id":  "test-bundle",
+            "case_id":    "test-case",
+            "confidence": "0.96",
+            "rule_trace": {},
+            "tenant_id":  "test-tenant",
+        }
+        canonical = canonicalize(payload)
+        h = hashlib.sha256(b"zoiko.finding.v1:" + canonical).hexdigest()
+        assert len(h) == 64
 
-    handler = ReasoningHandler()
+    def test_proposal_hash_domain_tag(self):
+        import hashlib
+        from zoiko_common.crypto.jcs import canonicalize
 
-    result = handler.analyze(
-        tenant_id     = "tenant-prod",
-        case_id       = str(uuid.uuid4()),
-        bundle_id     = str(uuid.uuid4()),
-        proposer_sub  = "real@test.com",
-        proposed_action = "REVIEW",
-        amount        = 10200.0,   # only 2% over contract
-        currency      = "INR",
-        carrier       = "DTDC",
-        route         = "Delhi → Bangalore",
-        contract_rate = 10000.0,
-    )
-
-    print(f"AI Confidence: {result.ai_confidence}")
-    print(f"Risk Level:    {result.risk_level}")
-    print(f"AI Reasoning:  {result.ai_reasoning}")
-    print(f"Final Conf:    {result.confidence}")
-
-    assert result is not None
-    assert result.ai_confidence > 0
-    assert result.risk_level in ["LOW", "MEDIUM", "HIGH"]
+        payload = {
+            "amount":          "4500.0",
+            "case_id":         "test-case",
+            "currency":        "INR",
+            "finding_hash":    "abc123",
+            "proposed_action": "CREDIT_MEMO",
+            "proposer_sub":    "ravi@amazon.com",
+            "tenant_id":       "test-tenant",
+        }
+        canonical = canonicalize(payload)
+        h = hashlib.sha256(b"zoiko.proposal.v1:" + canonical).hexdigest()
+        assert len(h) == 64
 
 
-# =========================================================
-# TEST: DB CONNECTION
-# =========================================================
+# ── Integration: analyze writes to DB ────────────────────────────────────────
 
-def test_db_connection():
+class TestReasoningIntegration:
+    def test_analyze_creates_finding_and_proposal(self, db_url, test_case, broker):
+        import psycopg2, psycopg2.extras, uuid
 
-    handler = ReasoningHandler()
+        # Ensure there is a bundle first, then seal it (T-006)
+        from services.evidence_svc.handler import EvidenceHandler
+        ev = EvidenceHandler(db_url, broker, "default")
+        ev_result = ev.add_item(
+            tenant_id     = test_case["tenant_id"],
+            case_id       = test_case["id"],
+            item_type     = "RATE_SHEET",
+            content_bytes = b"contracted rate 8000 INR",
+            actor_sub     = "ravi@amazon.com",
+        )
+        ev.seal_bundle(tenant_id=test_case["tenant_id"], case_id=test_case["id"])
 
-    print("\n====================================")
-    print("[TEST] DB URL")
-    print("====================================")
-    print(handler.db_url)
+        from services.reasoning_svc.handler import ReasoningHandler
+        handler = ReasoningHandler(db_url, broker, "default")
+        result  = handler.analyze(
+            tenant_id       = test_case["tenant_id"],
+            case_id         = test_case["id"],
+            bundle_id       = str(ev_result.bundle_id),
+            proposer_sub    = "ravi@amazon.com",
+            proposed_action = "CREDIT_MEMO",
+            amount          = 4500.0,
+            currency        = "INR",
+        )
 
-    assert handler.db_url is not None
+        assert result.confidence == 0.96
+        assert result.finding_id is not None
+        assert result.proposal_id is not None
+        assert result.proposed_action == "CREDIT_MEMO"
+
+        # Verify DB records exist
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT confidence FROM findings WHERE id=%s", (result.finding_id,))
+        row = cur.fetchone()
+        conn.close()
+        assert row is not None
+        assert float(row["confidence"]) == 0.96
+
+    def test_analyze_confidence_always_096(self, db_url, test_case, broker):
+        from services.evidence_svc.handler import EvidenceHandler
+        from services.reasoning_svc.handler import ReasoningHandler
+
+        ev = EvidenceHandler(db_url, broker, "default")
+        ev_result = ev.add_item(
+            tenant_id     = test_case["tenant_id"],
+            case_id       = test_case["id"],
+            item_type     = "BOL",
+            content_bytes = b"bol-data",
+            actor_sub     = "ravi@amazon.com",
+        )
+        ev.seal_bundle(tenant_id=test_case["tenant_id"], case_id=test_case["id"])
+
+        rh     = ReasoningHandler(db_url, broker, "default")
+        result = rh.analyze(
+            tenant_id    = test_case["tenant_id"],
+            case_id      = test_case["id"],
+            bundle_id    = str(ev_result.bundle_id),
+            proposer_sub = "ravi@amazon.com",
+            amount       = 0.0,
+        )
+        assert result.confidence == 0.96

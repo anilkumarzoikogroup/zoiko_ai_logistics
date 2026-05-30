@@ -28,11 +28,21 @@ class AddEvidenceResponse(BaseModel):
 
 
 class GetBundleResponse(BaseModel):
-    bundle_id:   str
-    case_id:     str
-    bundle_hash: str
-    item_count:  int
-    tenant_id:   str
+    bundle_id:           str
+    case_id:             str
+    bundle_hash:         str
+    item_count:          int
+    tenant_id:           str
+    completeness_status: str = "INCOMPLETE"
+
+
+class SealBundleResponse(BaseModel):
+    bundle_id:           str
+    case_id:             str
+    bundle_hash:         str
+    item_count:          int
+    completeness_status: str
+    tenant_id:           str
 
 
 # ── Reasoning ─────────────────────────────────────────────────────────────────
@@ -76,7 +86,7 @@ class DecideRequest(BaseModel):
 
 
 class DecideResponse(BaseModel):
-    decision_id:   str
+    decision_id:   Optional[str]   # None when DUAL auth first pass (awaiting second approval)
     task_id:       str
     outcome:       str
     actor_sub:     str

@@ -30,7 +30,7 @@ interface FormState {
   currency: string;
 }
 
-async function realParseInvoice(file: File): Promise<{ carrier: string; route: string; amount: number; currency: string }> {
+async function realParseInvoice(file: File): Promise<{ carrier: string; route: string; amount: number; currency: string; parsed_by?: string }> {
   const fd = new FormData();
   fd.append("file", file);
   const { data } = await api.post("/ingestion/parse-invoice", fd);
@@ -51,6 +51,7 @@ export default function NewCase() {
   const [form, setForm]             = useState<FormState>({ carrier: "", from_city: "", to_city: "", amount: "", currency: "INR" });
   const [file, setFile]             = useState<File | null>(null);
   const [parseState, setParseState] = useState<ParseState>("idle");
+  const [parsedBy,  setParsedBy]    = useState<string>("");
   const [dragOver, setDragOver]     = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -84,12 +85,15 @@ export default function NewCase() {
       const { from_city, to_city } = splitRoute(parsed.route);
       setForm({
         carrier:   parsed.carrier || "",
-        from_city,
-        to_city,
-        amount:    parsed.amount ? String(parsed.amount) : "",
+        from_city: from_city || "",
+        to_city:   to_city   || "",
+        amount:    parsed.amount > 0 ? String(parsed.amount) : "",
         currency:  parsed.currency || "INR",
       });
-      setParseState("done");
+      setParsedBy(parsed.parsed_by || "regex");
+      // If nothing was extracted, treat as a soft parse failure
+      const gotData = parsed.carrier || parsed.amount > 0 || from_city;
+      setParseState(gotData ? "done" : "error");
     } catch {
       setParseState("error");
     }
@@ -322,8 +326,17 @@ export default function NewCase() {
                 Parsing…
               </div>
             )}
-            {parseState === "done" && !USE_MOCK && form.carrier && <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />}
-            {parseState === "error" && <span className="text-xs text-amber-600">Parse failed — fill manually</span>}
+            {parseState === "done" && !USE_MOCK && form.carrier && (
+              <span className={cn(
+                "text-[10px] font-bold px-2 py-0.5 rounded-full",
+                parsedBy === "groq_ai"
+                  ? "bg-purple-100 text-purple-700"
+                  : "bg-slate-100 text-slate-600"
+              )}>
+                {parsedBy === "groq_ai" ? "AI" : "regex"}
+              </span>
+            )}
+            {parseState === "error" && <span className="text-xs text-amber-600">Could not extract data — fill the fields below</span>}
             <button onClick={clearFile} className="text-muted-foreground hover:text-foreground ml-1">
               <X className="h-4 w-4" />
             </button>
@@ -332,7 +345,7 @@ export default function NewCase() {
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base">
-                {form.carrier ? "Parsed Invoice Details — Review & Submit" : "Enter Invoice Details"}
+                {parseState === "done" && form.carrier ? "Parsed Invoice Details — Review & Submit" : "Enter Invoice Details"}
               </CardTitle>
             </CardHeader>
             <CardContent>{formFields}</CardContent>

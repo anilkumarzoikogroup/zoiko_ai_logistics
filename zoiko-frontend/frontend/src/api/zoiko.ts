@@ -1,15 +1,58 @@
-import { api, USE_MOCK } from "./client";
+import { api, api3, api4, USE_MOCK } from "./client";
 import * as mocks from "@/mocks/fixtures";
 import type {
   Case, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
   DecisionProposal, GovernanceToken, GovernanceDecision, CaseEvent,
-  KafkaEvent, DashboardStats, SourceRecord
+  KafkaEvent, DashboardStats, SourceRecord, VarianceRecord, ACRBundle,
+  ExecutionResult,
 } from "@/types";
 
 // Simulates network latency for mock mode so loading states are visible
 const delay = (ms = 250) => new Promise(r => setTimeout(r, ms));
 
+// ── Auth types ────────────────────────────────────────────────────────────────
+export interface LoginResponse {
+  token:      string;
+  tenant_id:  string;
+  role:       string;
+  full_name:  string;
+  email:      string;
+  expires_in: number;
+}
+
+export interface RegisterRequest {
+  email:     string;
+  password:  string;
+  full_name: string;
+  role:      "analyst" | "manager" | "admin";
+}
+
+export interface UserItem {
+  user_id:    string;
+  email:      string;
+  full_name:  string;
+  role:       string;
+  is_active:  boolean;
+  created_at: string;
+}
+
 export const zoikoApi = {
+  // ---------- Auth ----------
+  async login(email: string, password: string): Promise<LoginResponse> {
+    const { data } = await api.post<LoginResponse>("/auth/login", { email, password });
+    return data;
+  },
+
+  async registerUser(req: RegisterRequest): Promise<UserItem> {
+    const { data } = await api.post<UserItem>("/auth/register", req);
+    return data;
+  },
+
+  async listUsers(): Promise<UserItem[]> {
+    const { data } = await api.get<{ users: UserItem[] }>("/auth/users");
+    return data.users;
+  },
+
   // ---------- Dashboard ----------
   async getStats(): Promise<DashboardStats> {
     if (USE_MOCK) { await delay(); return mocks.mockStats; }
@@ -52,7 +95,6 @@ export const zoikoApi = {
   async createCase(payload: { carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
     if (USE_MOCK) {
       await delay(500);
-      // Calculate realistic diff based on carrier contract rates
       const CONTRACT_BASE: Record<string, number> = {
         "BlueDart": 8000, "Delhivery": 7500, "FedEx India": 9200,
         "DTDC": 6500, "Ekart": 7000, "UPS India": 10500, "V Express": 50000, "Other": 7000,
@@ -107,6 +149,12 @@ export const zoikoApi = {
     return data;
   },
 
+  async sealBundle(caseId: string): Promise<{ bundle_id: string; completeness_status: string }> {
+    if (USE_MOCK) { await delay(400); return { bundle_id: "bnd_mock", completeness_status: "COMPLETE" }; }
+    const { data } = await api3.post(`/evidence/${caseId}/bundle/seal`);
+    return data;
+  },
+
   async getFinding(caseId: string): Promise<Finding> {
     if (USE_MOCK) { await delay(); return mocks.mockFinding; }
     const { data } = await api.get<Finding>(`/cases/${caseId}/finding`);
@@ -122,12 +170,8 @@ export const zoikoApi = {
   async proposeRecovery(caseId: string, payload: { action: string; amount: number; currency: string }): Promise<DecisionProposal> {
     if (USE_MOCK) {
       await delay(500);
-      // Move case to PENDING_APPROVAL so it appears in manager queue
       const c = mocks.mockCases.find(x => x.id === caseId);
-      if (c) {
-        c.state = "APPROVAL_PENDING";
-        c.updated_at = new Date().toISOString();
-      }
+      if (c) { c.state = "APPROVAL_PENDING"; c.updated_at = new Date().toISOString(); }
       return { ...mocks.mockProposal, case_id: caseId, ...payload } as DecisionProposal;
     }
     const { data } = await api.post<DecisionProposal>(`/cases/${caseId}/proposal`, payload);
@@ -137,40 +181,27 @@ export const zoikoApi = {
   async approveDecision(caseId: string, payload: { decision: "EXECUTION_READY" | "ABORTED"; note?: string }): Promise<GovernanceDecision> {
     if (USE_MOCK) {
       await delay(700);
-      // Move case to APPROVED or REJECTED so it leaves the manager queue
       const c = mocks.mockCases.find(x => x.id === caseId);
       if (c) {
         c.state = payload.decision === "EXECUTION_READY" ? "EXECUTION_READY" : "ABORTED";
         c.updated_at = new Date().toISOString();
       }
-      // Issue a governance token for approved cases so Stage 7 shows in CaseDetail
       if (payload.decision === "EXECUTION_READY") {
         const existing = mocks.mockTokens.find(t => t.case_id === caseId);
         if (!existing) {
           mocks.mockTokens.push({
-            id: `tok_${Date.now()}`,
-            case_id: caseId,
-            tenant_id: "amazon-india",
-            action: "EXECUTE_CREDIT_MEMO",
-            amount: c?.diff ?? 4500,
-            currency: c?.currency ?? "INR",
-            tenant_binding: mocks.rndHash(),
-            exp: new Date(Date.now() + 15 * 60_000).toISOString(),
-            status: "ACTIVE",
-            signature: mocks.rndHash(128),
-            key_id: "amazon-india-signing-2025-01",
+            id: `tok_${Date.now()}`, case_id: caseId, tenant_id: "amazon-india",
+            action: "EXECUTE_CREDIT_MEMO", amount: c?.diff ?? 4500, currency: c?.currency ?? "INR",
+            tenant_binding: mocks.rndHash(), exp: new Date(Date.now() + 15 * 60_000).toISOString(),
+            status: "ACTIVE", signature: mocks.rndHash(128), key_id: "amazon-india-signing-2025-01",
             issued_at: new Date().toISOString(),
           });
         }
       }
       return {
-        id: `dec_${Date.now()}`,
-        case_id: caseId,
-        proposer_sub: "user_analyst_01",
-        actor_sub: "user_manager_01",
-        decision: payload.decision,
-        decision_hash: mocks.rndHash(),
-        decided_at: new Date().toISOString(),
+        id: `dec_${Date.now()}`, case_id: caseId, proposer_sub: "user_analyst_01",
+        actor_sub: "user_manager_01", decision: payload.decision,
+        decision_hash: mocks.rndHash(), decided_at: new Date().toISOString(),
       };
     }
     const { data } = await api.post<GovernanceDecision>(`/cases/${caseId}/decide`, payload);
@@ -180,21 +211,58 @@ export const zoikoApi = {
   async listTokens(filters?: { status?: string }): Promise<GovernanceToken[]> {
     if (USE_MOCK) {
       await delay();
-      return filters?.status
-        ? mocks.mockTokens.filter(t => t.status === filters.status)
-        : mocks.mockTokens;
+      return filters?.status ? mocks.mockTokens.filter(t => t.status === filters.status) : mocks.mockTokens;
     }
     const { data } = await api.get<GovernanceToken[]>("/tokens", { params: filters });
     return data;
   },
 
   async getTokenForCase(caseId: string): Promise<GovernanceToken | null> {
-    if (USE_MOCK) {
-      await delay();
-      return mocks.mockTokens.find(t => t.case_id === caseId) ?? null;
-    }
+    if (USE_MOCK) { await delay(); return mocks.mockTokens.find(t => t.case_id === caseId) ?? null; }
     const { data } = await api.get<GovernanceToken | null>(`/cases/${caseId}/token`);
     return data;
+  },
+
+  // ---------- Phase 4 — Execution ----------
+  async executeRecovery(tokenId: string, caseId: string, amount: number, currency: string): Promise<ExecutionResult> {
+    if (USE_MOCK) {
+      await delay(1200);
+      const c = mocks.mockCases.find(x => x.id === caseId);
+      if (c) { c.state = "DISPATCHED"; c.updated_at = new Date().toISOString(); }
+      return { envelope_id: `env_${Date.now()}`, case_id: caseId, token_id: tokenId, gates_passed: 8, status: "DISPATCHED", dispatched_at: new Date().toISOString() };
+    }
+    const { data } = await api4.post<ExecutionResult>("/execute", { token_id: tokenId, case_id: caseId, amount, currency });
+    return data;
+  },
+
+  // ---------- Phase 4 — Variances ----------
+  async listVariances(caseId: string): Promise<VarianceRecord[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api4.get<VarianceRecord[]>(`/cases/${caseId}/variances`);
+    return data;
+  },
+
+  async resolveVariance(caseId: string, varianceId: string, action: "RESOLVE" | "WAIVE"): Promise<VarianceRecord> {
+    if (USE_MOCK) { await delay(300); return {} as VarianceRecord; }
+    const { data } = await api4.patch<VarianceRecord>(`/cases/${caseId}/variances/${varianceId}/resolve`, { action });
+    return data;
+  },
+
+  // ---------- Phase 4 — ACR ----------
+  async getAcr(caseId: string): Promise<ACRBundle | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    try {
+      const { data } = await api.get<ACRBundle>(`/cases/${caseId}/acr`);
+      return data;
+    } catch {
+      return null;
+    }
+  },
+
+  async downloadAcr(caseId: string): Promise<Blob> {
+    if (USE_MOCK) { await delay(800); return new Blob(["mock acr zip"], { type: "application/zip" }); }
+    const response = await api4.get(`/cases/${caseId}/acr/download`, { responseType: "blob" });
+    return response.data as Blob;
   },
 
   // ---------- Contract rates ----------
@@ -213,11 +281,15 @@ export const zoikoApi = {
     return data;
   },
 
-  async createContractRate(payload: { carrier_id: string; rate_value: number; currency: string; effective_on: string }): Promise<{ id: string }> {
-    if (USE_MOCK) {
-      await delay(400);
-      return { id: `cr_${Date.now()}` };
-    }
+  async createContractRate(payload: {
+    carrier_id:   string;
+    rate_type:    string;
+    rate_value:   number;
+    currency:     string;
+    effective_on: string;
+    expires_on?:  string;
+  }): Promise<{ id: string }> {
+    if (USE_MOCK) { await delay(400); return { id: `cr_${Date.now()}` }; }
     const { data } = await api.post("/contract-rates", payload);
     return data;
   },

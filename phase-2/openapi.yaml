@@ -1,0 +1,641 @@
+openapi: 3.1.0
+info:
+  title: Zoiko AI Logistics — Phase 2 API Gateway
+  version: 2.0.0
+  description: |
+    Freight overcharge detection and recovery pipeline.
+    SC-001 scenario: BlueDart bills ₹12,500, contract allows ₹8,000 →
+    ₹4,500 overcharge caught, two humans approve, money recovered, ACR locked.
+
+servers:
+  - url: http://localhost:8000
+    description: Local dev (Vite proxy via /api)
+
+security:
+  - BearerAuth: []
+    TenantID: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: HS256 JWT signed with ZOIKO_DEV_SECRET in dev; Ed25519 in prod.
+    TenantID:
+      type: apiKey
+      in: header
+      name: X-Tenant-ID
+      description: Tenant UUID (e.g. 11111111-1111-1111-1111-111111111111)
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique key for mutating operations — duplicate requests are deduplicated.
+    CaseId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    TokenId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    CaseState:
+      type: string
+      enum:
+        - NEW
+        - EVIDENCE_PENDING
+        - FINDING_GENERATED
+        - APPROVAL_PENDING
+        - EXECUTION_READY
+        - DISPATCHED
+        - OUTCOME_RECORDED
+        - CLOSED
+        - ABORTED
+
+    Case:
+      type: object
+      required: [id, tenant_id, state, carrier, shipment_ref, amount, currency, diff, confidence, opened_at, updated_at]
+      properties:
+        id:          { type: string, format: uuid }
+        tenant_id:   { type: string, format: uuid }
+        state:       { $ref: "#/components/schemas/CaseState" }
+        carrier:     { type: string, example: BlueDart }
+        shipment_ref:{ type: string, example: HYD-WAR-20250115-001 }
+        amount:      { type: number, format: float, example: 12500 }
+        currency:    { type: string, example: INR }
+        diff:        { type: number, format: float, example: 4500 }
+        confidence:  { type: number, format: float, minimum: 0, maximum: 1, example: 0.96 }
+        opened_at:   { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    CanonicalInvoice:
+      type: object
+      required: [id, tenant_id, shipment_ref, carrier, amount, currency, canonical_hash, signature, signed_at]
+      properties:
+        id:             { type: string, format: uuid }
+        tenant_id:      { type: string, format: uuid }
+        shipment_ref:   { type: string }
+        carrier:        { type: string }
+        amount:         { type: number }
+        currency:       { type: string }
+        canonical_hash: { type: string, description: "Hex SHA-256 of JCS-canonical bytes" }
+        signature:      { type: string, description: "Hex Ed25519 signature" }
+        signed_at:      { type: string, format: date-time }
+
+    ValidationResult:
+      type: object
+      required: [id, case_id, outcome, diff, currency, reason, invoice_amount, contract_amount, validated_at]
+      properties:
+        id:              { type: string, format: uuid }
+        case_id:         { type: string, format: uuid }
+        outcome:         { type: string, enum: [PASS, FAIL, WARN] }
+        diff:            { type: number, format: float }
+        currency:        { type: string }
+        reason:          { type: string }
+        invoice_amount:  { type: number }
+        contract_amount: { type: number }
+        validated_at:    { type: string, format: date-time }
+
+    Finding:
+      type: object
+      required: [id, case_id, confidence, trace, finding_hash, created_at]
+      properties:
+        id:           { type: string, format: uuid }
+        case_id:      { type: string, format: uuid }
+        confidence:   { type: number, format: float, example: 0.96 }
+        trace:
+          type: object
+          description: "Rule-by-rule confidence breakdown"
+          example:
+            fuel_charge: { confidence: 1.00, weight: 0.50 }
+            accessorial:  { confidence: 0.92, weight: 0.50 }
+        finding_hash: { type: string }
+        created_at:   { type: string, format: date-time }
+
+    DecisionProposal:
+      type: object
+      required: [id, case_id, action, amount, currency, proposed_by, proposed_at]
+      properties:
+        id:          { type: string, format: uuid }
+        case_id:     { type: string, format: uuid }
+        action:      { type: string, enum: [EXECUTE_CREDIT_MEMO, REJECT] }
+        amount:      { type: number }
+        currency:    { type: string }
+        proposed_by: { type: string }
+        proposed_at: { type: string, format: date-time }
+
+    GovernanceToken:
+      type: object
+      required: [id, case_id, tenant_id, action, amount, currency, tenant_binding, exp, status, signature, key_id, issued_at]
+      properties:
+        id:             { type: string, format: uuid }
+        case_id:        { type: string, format: uuid }
+        tenant_id:      { type: string, format: uuid }
+        action:         { type: string }
+        amount:         { type: number }
+        currency:       { type: string }
+        tenant_binding: { type: string }
+        exp:            { type: string, format: date-time }
+        status:         { type: string, enum: [ACTIVE, CONSUMED, EXPIRED, REVOKED] }
+        signature:      { type: string }
+        key_id:         { type: string }
+        issued_at:      { type: string, format: date-time }
+
+    CaseEvent:
+      type: object
+      required: [id, case_id, from_state, to_state, actor, reason, created_at]
+      properties:
+        id:         { type: string, format: uuid }
+        case_id:    { type: string, format: uuid }
+        from_state: { type: string, nullable: true }
+        to_state:   { $ref: "#/components/schemas/CaseState" }
+        actor:      { type: string }
+        reason:     { type: string }
+        created_at: { type: string, format: date-time }
+
+    SourceRecord:
+      type: object
+      required: [id, tenant_id, canonical_hash, signature, key_id, received_at, payload_preview]
+      properties:
+        id:              { type: string, format: uuid }
+        tenant_id:       { type: string, format: uuid }
+        canonical_hash:  { type: string }
+        signature:       { type: string }
+        key_id:          { type: string }
+        received_at:     { type: string, format: date-time }
+        payload_preview: { type: object }
+
+    ContractRate:
+      type: object
+      required: [id, tenant_id, carrier_id, rate_type, rate_value, currency, effective_on]
+      properties:
+        id:           { type: string, format: uuid }
+        tenant_id:    { type: string, format: uuid }
+        carrier_id:   { type: string }
+        rate_type:    { type: string, enum: [BASE_RATE, FUEL_CHARGE, ACCESSORIAL] }
+        rate_value:   { type: number }
+        currency:     { type: string }
+        effective_on: { type: string, format: date }
+
+    DashboardStats:
+      type: object
+      required: [total_cases, pending_approval, approved, total_recovered, avg_confidence]
+      properties:
+        total_cases:      { type: integer }
+        pending_approval: { type: integer }
+        approved:         { type: integer }
+        total_recovered:  { type: number, description: "Total INR recovered across all closed cases" }
+        avg_confidence:   { type: number, format: float }
+
+    KafkaEvent:
+      type: object
+      required: [topic, key, payload, published_at]
+      properties:
+        topic:        { type: string }
+        key:          { type: string }
+        payload:      { type: object }
+        published_at: { type: string, format: date-time }
+
+    SubmitRequest:
+      type: object
+      required: [carrier_id, invoice_number, total_amount, currency, route_origin, route_destination]
+      properties:
+        carrier_id:         { type: string, example: BlueDart }
+        invoice_number:     { type: string, example: HYD-WAR-20250115-001 }
+        total_amount:       { type: number, example: 12500 }
+        currency:           { type: string, example: INR }
+        route_origin:       { type: string, example: Hyderabad }
+        route_destination:  { type: string, example: Warehouse }
+
+    ProposeRequest:
+      type: object
+      required: [action, amount, currency]
+      properties:
+        action:   { type: string, enum: [EXECUTE_CREDIT_MEMO, REJECT] }
+        amount:   { type: number }
+        currency: { type: string }
+
+    DecideRequest:
+      type: object
+      required: [task_id, outcome]
+      properties:
+        task_id:  { type: string, format: uuid }
+        outcome:  { type: string, enum: [EXECUTION_READY, ABORTED] }
+
+    ContractRateCreate:
+      type: object
+      required: [carrier_id, rate_type, rate_value, currency, effective_on]
+      properties:
+        carrier_id:   { type: string }
+        rate_type:    { type: string, enum: [BASE_RATE, FUEL_CHARGE, ACCESSORIAL] }
+        rate_value:   { type: number }
+        currency:     { type: string }
+        effective_on: { type: string, format: date }
+
+    HealthResponse:
+      type: object
+      required: [status, service, version]
+      properties:
+        status:  { type: string, example: ok }
+        service: { type: string, example: api-gateway }
+        version: { type: string, example: "2.0.0" }
+
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail: { type: string }
+
+paths:
+
+  # ── Core Case Submission ──────────────────────────────────────────────────
+
+  /v1/cases/submit:
+    post:
+      summary: "Submit invoice for full pipeline processing"
+      description: |
+        Full pipeline in one call: ingest → validate → canonical → case → evidence → finding.
+        Returns a case in FINDING_GENERATED state (Phase 2+3 inline).
+      operationId: submitCase
+      security:
+        - BearerAuth: []
+          TenantID: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitRequest"
+      responses:
+        "201":
+          description: Case opened and finding generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "409": { description: Duplicate submission (idempotency key already used) }
+        "422": { description: Validation error }
+        "503": { description: OPA unavailable (fail-closed) }
+
+  # ── Case CRUD ────────────────────────────────────────────────────────────
+
+  /v1/cases:
+    get:
+      summary: "List all cases for tenant"
+      operationId: listCases
+      responses:
+        "200":
+          description: Paginated list of cases sorted by opened_at DESC
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Case"
+
+  /v1/cases/{id}:
+    get:
+      summary: "Get a single case"
+      operationId: getCase
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "404": { description: Case not found }
+
+  /v1/cases/{id}/events:
+    get:
+      summary: "Append-only audit trail for a case"
+      operationId: listCaseEvents
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaseEvent"
+
+  /v1/cases/{id}/propose:
+    post:
+      summary: "Analyst proposes recovery action"
+      operationId: proposeRecovery
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposeRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionProposal"
+        "403":
+          description: "RBAC: requires role=analyst"
+        "409":
+          description: "Proposal already exists for this case"
+
+  /v1/cases/{id}/decide:
+    post:
+      summary: "Manager approves or rejects a proposal (SoD enforced)"
+      description: "actor_sub must differ from proposer_sub (Separation of Duties)."
+      operationId: decideCase
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecideRequest"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Case"
+        "400":
+          description: "SoD violation: proposer cannot be approver"
+        "403":
+          description: "RBAC: requires role=manager"
+
+  /v1/cases/{id}/validation:
+    get:
+      summary: "Get validation result (overcharge details)"
+      operationId: getCaseValidation
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationResult"
+        "404": { description: No validation result for this case }
+
+  /v1/cases/{id}/canonical-invoice:
+    get:
+      summary: "Get authoritative canonical invoice"
+      operationId: getCaseCanonicalInvoice
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonicalInvoice"
+        "404": { description: No canonical invoice for this case }
+
+  /v1/cases/{id}/finding:
+    get:
+      summary: "Get AI confidence score and rule breakdown"
+      operationId: getCaseFinding
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Finding"
+        "404": { description: No finding for this case }
+
+  /v1/cases/{id}/proposal:
+    get:
+      summary: "Get recovery proposal"
+      operationId: getCaseProposal
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionProposal"
+        "404": { description: No proposal for this case }
+
+  /v1/cases/{id}/acr:
+    get:
+      summary: "Get Action Certification Record (post Phase 4)"
+      description: "Returns the ACR verify bundle after Phase 4 execution is complete."
+      operationId: getCaseACR
+      parameters:
+        - $ref: "#/components/parameters/CaseId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                description: ACR verify bundle (Merkle root + 8 artifact hashes + Ed25519 sig)
+        "404": { description: ACR not yet issued for this case }
+
+  # ── Governance Tokens ─────────────────────────────────────────────────────
+
+  /v1/tokens:
+    get:
+      summary: "List governance tokens for tenant"
+      operationId: listTokens
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GovernanceToken"
+
+  /v1/tokens/{id}:
+    get:
+      summary: "Get a single governance token"
+      operationId: getToken
+      parameters:
+        - $ref: "#/components/parameters/TokenId"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceToken"
+        "404": { description: Token not found }
+
+  # ── Contract Rates ────────────────────────────────────────────────────────
+
+  /v1/contract-rates:
+    get:
+      summary: "List contract rates for tenant"
+      operationId: listContractRates
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ContractRate"
+    post:
+      summary: "Create a new contract rate"
+      operationId: createContractRate
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContractRateCreate"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContractRate"
+
+  /v1/contract-rates/{id}:
+    delete:
+      summary: "Delete a contract rate"
+      operationId: deleteContractRate
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204": { description: Deleted }
+        "404": { description: Rate not found }
+
+  # ── Ingestion ─────────────────────────────────────────────────────────────
+
+  /v1/ingestion/parse-invoice:
+    post:
+      summary: "Upload PDF/image invoice for extraction"
+      description: "OCR and structure extraction. Returns parsed carrier/route/amount."
+      operationId: parseInvoice
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  carrier_id:    { type: string }
+                  invoice_number:{ type: string }
+                  total_amount:  { type: number }
+                  currency:      { type: string }
+
+  /v1/ingestion/source-records:
+    get:
+      summary: "List raw ingested source records"
+      operationId: listSourceRecords
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SourceRecord"
+
+  # ── Kafka Events (Alerts page) ────────────────────────────────────────────
+
+  /v1/kafka/events:
+    get:
+      summary: "Last N Kafka events (for Alerts page)"
+      operationId: listKafkaEvents
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/KafkaEvent"
+
+  # ── Stats & Admin ─────────────────────────────────────────────────────────
+
+  /v1/stats:
+    get:
+      summary: "Dashboard aggregated stats"
+      operationId: getStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+
+  /v1/admin/db-stats:
+    get:
+      summary: "Live row counts from pg_stat_user_tables"
+      operationId: getDbStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: integer
+
+  # ── Health ────────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      summary: "Health check"
+      operationId: health
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"

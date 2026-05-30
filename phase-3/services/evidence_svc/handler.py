@@ -105,23 +105,33 @@ class EvidenceHandler:
                 WHERE id=%s
             """, (bundle_hash, bundle_sig, bundle_kid, bundle_id))
 
-            conn.commit()
-        finally:
-            conn.close()
-
-        # Step 6 — Kafka publish AFTER commit
-        from kafka.producer import ZoikoProducer, KafkaMessage
-        ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic     = "zoiko.evidence.bundled",
-            key       = str(bundle_id),
-            payload   = {
+            # Atomic outbox INSERT in same transaction (crash-safe)
+            outbox_payload = {
                 "bundle_id": str(bundle_id),
                 "item_id":   str(item_id),
                 "case_id":   case_id,
                 "item_type": item_type,
                 "item_hash": item_hash.hex(),
-            },
-            tenant_id = tenant_id,
+            }
+            cur.execute("""
+                INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                uuid.uuid4(), tenant_id, "zoiko.evidence.bundled",
+                str(bundle_id), json.dumps(outbox_payload), now,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Step 6 — Kafka publish AFTER commit (outbox relay recovers if this crashes)
+        from kafka.producer import ZoikoProducer, KafkaMessage
+        ZoikoProducer(self.broker).publish(KafkaMessage(
+            topic          = "zoiko.evidence.bundled",
+            key            = str(bundle_id),
+            payload        = outbox_payload,
+            tenant_id      = tenant_id,
+            correlation_id = case_id,
         ))
 
         return EvidenceItemResult(
@@ -144,7 +154,8 @@ class EvidenceHandler:
         cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         cur.execute(
-            "SELECT id, bundle_hash, created_at FROM evidence_bundles "
+            "SELECT id, bundle_hash, created_at, completeness_status "
+            "FROM evidence_bundles "
             "WHERE tenant_id=%s AND case_id=%s LIMIT 1",
             (tenant_id, uuid.UUID(case_id)),
         )
@@ -160,10 +171,83 @@ class EvidenceHandler:
         conn.close()
 
         return EvidenceBundleResult(
-            bundle_id   = bundle["id"],
-            tenant_id   = tenant_id,
-            case_id     = case_id,
-            bundle_hash = bytes(bundle["bundle_hash"]).hex(),
-            item_count  = item_count,
-            created_at  = bundle["created_at"],
+            bundle_id           = bundle["id"],
+            tenant_id           = tenant_id,
+            case_id             = case_id,
+            bundle_hash         = bytes(bundle["bundle_hash"]).hex(),
+            item_count          = item_count,
+            created_at          = bundle["created_at"],
+            completeness_status = bundle.get("completeness_status", "INCOMPLETE"),
+        )
+
+    def seal_bundle(self, tenant_id: str, case_id: str, actor_sub: str = "system") -> EvidenceBundleResult:
+        """Mark the evidence bundle as COMPLETE. Reasoning is blocked until this is called."""
+        tenant_id = str(tenant_id)
+        case_id   = str(case_id)
+
+        conn = psycopg2.connect(self.db_url)
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                "SELECT id, bundle_hash, created_at, completeness_status "
+                "FROM evidence_bundles WHERE tenant_id=%s AND case_id=%s LIMIT 1",
+                (tenant_id, uuid.UUID(case_id)),
+            )
+            bundle = cur.fetchone()
+            if not bundle:
+                raise ValueError(f"No evidence bundle found for case {case_id}")
+            if bundle["completeness_status"] == "COMPLETE":
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM evidence_items WHERE bundle_id=%s",
+                    (bundle["id"],),
+                )
+                item_count = cur.fetchone()["cnt"]
+                conn.close()
+                return EvidenceBundleResult(
+                    bundle_id           = bundle["id"],
+                    tenant_id           = tenant_id,
+                    case_id             = case_id,
+                    bundle_hash         = bytes(bundle["bundle_hash"]).hex(),
+                    item_count          = item_count,
+                    created_at          = bundle["created_at"],
+                    completeness_status = "COMPLETE",
+                )
+
+            cur.execute(
+                "UPDATE evidence_bundles SET completeness_status='COMPLETE' "
+                "WHERE id=%s",
+                (bundle["id"],),
+            )
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM evidence_items WHERE bundle_id=%s",
+                (bundle["id"],),
+            )
+            item_count = cur.fetchone()["cnt"]
+            conn.commit()
+            bundle_id = bundle["id"]
+        finally:
+            conn.close()
+
+        from kafka.producer import ZoikoProducer, KafkaMessage
+        ZoikoProducer(self.broker).publish(KafkaMessage(
+            topic          = "zoiko.evidence.bundled",
+            key            = str(bundle_id),
+            payload        = {
+                "bundle_id":            str(bundle_id),
+                "case_id":              case_id,
+                "completeness_status":  "COMPLETE",
+                "sealed_by":            actor_sub,
+            },
+            tenant_id      = tenant_id,
+            correlation_id = case_id,
+        ))
+
+        return EvidenceBundleResult(
+            bundle_id           = bundle_id,
+            tenant_id           = tenant_id,
+            case_id             = case_id,
+            bundle_hash         = bytes(bundle["bundle_hash"]).hex(),
+            item_count          = item_count,
+            created_at          = bundle["created_at"],
+            completeness_status = "COMPLETE",
         )

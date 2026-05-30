@@ -77,8 +77,9 @@ def require_feature_flag(flag_name: str):
       def submit(claims=Depends(get_claims), _=Depends(require_feature_flag("SC_001_ENABLED"))):
           ...
     """
-    def _check(x_tenant_id: str | None = None) -> None:
-        from fastapi import Header as _Header, HTTPException as _HTTPException
+    from fastapi import Header as _Header, HTTPException as _HTTPException
+
+    def _check(x_tenant_id: str = _Header("", alias="X-Tenant-ID")) -> None:
         tenant_id = x_tenant_id or ""
         if not is_enabled(flag_name, tenant_id):
             logger.warning("Feature flag %s denied for tenant %s", flag_name, tenant_id)
@@ -86,8 +87,10 @@ def require_feature_flag(flag_name: str):
                 status_code=403,
                 detail={
                     "error": "FEATURE_FLAG_DISABLED",
-                    "detail": f"Feature '{flag_name}' is not enabled for this tenant",
+                    "detail": f"Feature '{flag_name}' is not enabled for this tenant. "
+                              f"Contact admin to enrol your tenant.",
                 },
             )
+
     _check.__name__ = f"require_{flag_name}"
     return _check

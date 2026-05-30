@@ -1,4 +1,4 @@
-// Types matching the Zoiko backend DB schema (Phases 0-3)
+// Types matching the Zoiko backend DB schema (Phases 0-4)
 
 // Case FSM states (spec §7.5 — aligned with implementation plan)
 export type CaseState =
@@ -15,6 +15,15 @@ export type CaseState =
 export type ValidationOutcome = "PASS" | "FAIL";
 
 export type TokenStatus = "ACTIVE" | "CONSUMED" | "EXPIRED" | "REVOKED";
+
+export type VarianceStatus = "OPEN" | "RESOLVED" | "WAIVED";
+
+export type VarianceType =
+  | "AMOUNT_MISMATCH"
+  | "CARRIER_MISMATCH"
+  | "CURRENCY_MISMATCH"
+  | "OVERCHARGE_DELTA"
+  | "OTHER";
 
 export interface Tenant {
   id: string;
@@ -95,6 +104,7 @@ export interface EvidenceBundle {
   merkle_root: string;
   item_count: number;
   created_at: string;
+  completeness_status: "INCOMPLETE" | "COMPLETE";
   items?: EvidenceItem[];
 }
 
@@ -105,6 +115,9 @@ export interface Finding {
   trace: Record<string, { confidence: number; weight: number }>;
   finding_hash: string;
   created_at: string;
+  risk_level?:    "HIGH" | "MEDIUM" | "LOW";
+  ai_confidence?: number;
+  ai_reasoning?:  string;
 }
 
 export interface DecisionProposal {
@@ -148,6 +161,41 @@ export interface GovernanceToken {
   signature: string;
   key_id: string;
   issued_at: string;
+}
+
+export interface VarianceRecord {
+  id: string;
+  case_id: string;
+  variance_type: VarianceType;
+  expected_value: number;
+  actual_value: number;
+  delta: number;
+  status: VarianceStatus;
+  resolved_by?: string;
+  resolved_at?: string;
+  created_at: string;
+}
+
+export interface ACRBundle {
+  id: string;
+  case_id: string;
+  tenant_id: string;
+  merkle_root: string;
+  acr_hash: string;
+  signature: string;
+  kid: string;
+  issued_at: string;
+  is_locked: boolean;
+  artifact_count?: number;
+}
+
+export interface ExecutionResult {
+  envelope_id: string;
+  case_id: string;
+  token_id: string;
+  gates_passed: number;
+  status: string;
+  dispatched_at: string;
 }
 
 export interface KafkaEvent {

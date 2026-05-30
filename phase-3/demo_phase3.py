@@ -114,6 +114,10 @@ bundle = evidence.get_bundle(TENANT_ID, CASE_ID)
 ok(f"Bundle ready: {BUNDLE_ID[:16]}... | {bundle.item_count} items | Merkle root={bundle.bundle_hash[:20]}...")
 info(f"Kafka: evidence.bundled x{broker.message_count('evidence.bundled')}")
 
+# Seal bundle (T-006 — completeness gate)
+sealed = evidence.seal_bundle(TENANT_ID, CASE_ID, actor_sub=RAVI)
+ok(f"Bundle sealed: completeness_status={sealed.completeness_status}")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVICE 2 — REASONING
 # ══════════════════════════════════════════════════════════════════════════════

@@ -43,6 +43,7 @@ from typing import Optional
 
 import psycopg2
 import psycopg2.extras
+import shared.db as _db
 
 import paths  # noqa: F401
 import shared.db as _db
@@ -79,6 +80,22 @@ class AuditACRHandler:
         Build and write the ACR for a completed case.
         Raises ValueError if required artifacts are missing.
         """
+        # T-011: block ACR/CLOSE if any open variance records exist for this case
+        open_vars = _db.q1(
+            db_url=self._db_url,
+            sql="""
+                SELECT COUNT(*) AS cnt FROM variance_records
+                WHERE case_id=%s::uuid AND tenant_id=%s::uuid
+                  AND status = 'OPEN'
+            """,
+            params=(case_id, tenant_id),
+        )
+        if open_vars and int(open_vars["cnt"]) > 0:
+            raise ValueError(
+                f"Case '{case_id}' has {open_vars['cnt']} open variance record(s) — "
+                f"resolve or waive all variances before issuing ACR (T-011)"
+            )
+
         artifacts = self._collect_artifacts(case_id, tenant_id)
         if len(artifacts) < 8:
             raise ValueError(
@@ -108,8 +125,8 @@ class AuditACRHandler:
             acr_id, case_id, tenant_id, merkle_root, artifacts, acr_sig, acr_kid, now
         )
 
-        conn = psycopg2.connect(self._db_url)
-        try:
+        with _db.get_conn(self._db_url) as conn:
+          try:
             cur = conn.cursor()
 
             # Write ACR row (APPEND-ONLY)
@@ -165,8 +182,8 @@ class AuditACRHandler:
             ))
 
             conn.commit()
-        finally:
-            conn.close()
+          finally:
+            pass  # pool returns connection via context manager
 
         # Kafka publish
         try:

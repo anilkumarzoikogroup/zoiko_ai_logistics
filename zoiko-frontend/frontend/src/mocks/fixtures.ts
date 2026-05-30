@@ -116,6 +116,7 @@ export const mockEvidenceBundle: EvidenceBundle = {
   merkle_root: rndHash(),
   item_count: 3,
   created_at: T(120),
+  completeness_status: "COMPLETE",
   items: [
     { id: "ei_1", bundle_id: "ev_001", item_type: "BOL",        leaf_hash: rndHash(), added_at: T(120) },
     { id: "ei_2", bundle_id: "ev_001", item_type: "RATE_SHEET", leaf_hash: rndHash(), added_at: T(119) },

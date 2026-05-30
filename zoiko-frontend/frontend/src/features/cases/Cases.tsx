@@ -53,7 +53,11 @@ export default function Cases() {
   const nav = useNavigate();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<CaseState | "ALL">("ALL");
-  const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
+  const { data: cases, isLoading } = useQuery({
+    queryKey: ["cases"],
+    queryFn:  () => zoikoApi.listCases(),
+    refetchInterval: 5000,   // spec: poll active cases every 5s
+  });
 
   const filtered = (cases || [])
     .filter(c => filter === "ALL" || c.state === filter)

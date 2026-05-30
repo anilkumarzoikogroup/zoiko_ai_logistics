@@ -57,12 +57,18 @@ class IngestionHandler:
         canonical_hash = hashlib.sha256(DOMAIN_TAG + canonical_bytes).digest()
 
         # Step 3 — AES-256-GCM encrypt via KMS DEK (FR-001)
+        # Rule: hash BEFORE encrypt (canonical_hash computed above, now encrypt content)
+        _dev_mode = __import__("os").getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
         try:
             from zoiko_common.crypto.aes_gcm import get_dek, encrypt as _aes_encrypt
             dek        = get_dek(tenant_id)
             ciphertext = _aes_encrypt(dek, canonical_bytes)
-        except Exception:
-            ciphertext = canonical_bytes   # dev fallback if cryptography not installed
+        except Exception as _enc_err:
+            if not _dev_mode:
+                raise RuntimeError(
+                    f"AES-256-GCM encryption required in production (FR-001): {_enc_err}"
+                ) from _enc_err
+            ciphertext = canonical_bytes   # DEV_MODE only — store plaintext
 
         # Sign the canonical_hash with the tenant signing key
         signature, kid = sign(self.tenant_slug, canonical_hash)

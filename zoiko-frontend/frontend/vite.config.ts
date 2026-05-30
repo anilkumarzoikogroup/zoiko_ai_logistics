@@ -15,6 +15,16 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
       },
+      "/api3": {
+        target: "http://localhost:8002",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api3/, ""),
+      },
+      "/api4": {
+        target: "http://localhost:8001",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api4/, ""),
+      },
     },
   },
   build: {

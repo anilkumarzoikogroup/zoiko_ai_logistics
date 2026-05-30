@@ -1,13 +1,15 @@
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
 import { formatCurrency, formatDate, cn } from "@/utils/cn";
 import {
   ArrowRight, ArrowLeft, CheckCircle2, Clock,
   FileText, Shield, Hash, Brain, Lock, AlertTriangle,
   ChevronRight, Zap, Users, RefreshCw, GitBranch,
-  ShieldCheck,
+  ShieldCheck, Download, AlertCircle, Wand2,
 } from "lucide-react";
+import { useToast } from "@/hooks/useToast";
 import type { CaseState } from "@/types";
 
 // Stage → number of completed pipeline steps
@@ -115,14 +117,56 @@ function DataRow({ label, value, valueClass }: { label: string; value: React.Rea
 
 export default function CaseDetail() {
   const { id = "" } = useParams();
-  const nav = useNavigate();
+  const nav   = useNavigate();
+  const qc    = useQueryClient();
+  const toast = useToast();
 
-  const cq      = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),                  retry: 1 });
-  const eventsQ = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),            retry: 1 });
-  const valQ    = useQuery({ queryKey: ["validation",     id], queryFn: () => zoikoApi.getValidationForCase(id),     retry: false });
-  const evQ     = useQuery({ queryKey: ["evidence",       id], queryFn: () => zoikoApi.getEvidence(id),             retry: false });
-  const findQ   = useQuery({ queryKey: ["finding",        id], queryFn: () => zoikoApi.getFinding(id),              retry: false });
-  const tokenQ  = useQuery({ queryKey: ["token-for-case", id], queryFn: () => zoikoApi.getTokenForCase(id),         retry: false });
+  const [disputeLetter, setDisputeLetter] = useState<string>("");
+  const [letterLoading, setLetterLoading] = useState(false);
+
+  const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
+  const eventsQ  = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),        retry: 1 });
+  const valQ     = useQuery({ queryKey: ["validation",     id], queryFn: () => zoikoApi.getValidationForCase(id), retry: false });
+  const evQ      = useQuery({ queryKey: ["evidence",       id], queryFn: () => zoikoApi.getEvidence(id),          retry: false });
+  const findQ    = useQuery({ queryKey: ["finding",        id], queryFn: () => zoikoApi.getFinding(id),           retry: false });
+  const tokenQ   = useQuery({ queryKey: ["token-for-case", id], queryFn: () => zoikoApi.getTokenForCase(id),      retry: false });
+  const varQ     = useQuery({ queryKey: ["variances",       id], queryFn: () => zoikoApi.listVariances(id),       retry: false });
+  const acrQ     = useQuery({ queryKey: ["acr",             id], queryFn: () => zoikoApi.getAcr(id),              retry: false });
+
+  const sealMut = useMutation({
+    mutationFn: () => zoikoApi.sealBundle(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["evidence", id] }); toast.success("Bundle sealed", "Evidence bundle is now COMPLETE"); },
+    onError:   () => toast.error("Seal failed", "Check that Phase 3 backend (port 8002) is running"),
+  });
+
+  const resolveMut = useMutation({
+    mutationFn: ({ vid, action }: { vid: string; action: "RESOLVE" | "WAIVE" }) =>
+      zoikoApi.resolveVariance(id, vid, action),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["variances", id] }); toast.success("Variance updated", "Variance record resolved"); },
+    onError:   () => toast.error("Resolve failed", "Check that Phase 4 backend (port 8001) is running"),
+  });
+
+  function handleDownloadAcr() {
+    zoikoApi.downloadAcr(id).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `acr_${id.slice(0, 8)}.zip`;
+      a.click(); URL.revokeObjectURL(url);
+    }).catch(() => toast.error("Download failed", "ACR zip not available — run Phase 4 demo first"));
+  }
+
+  async function handleGenerateLetter() {
+    setLetterLoading(true); setDisputeLetter("");
+    try {
+      const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter`);
+      setDisputeLetter(data.dispute_letter || "");
+      toast.success("Letter generated", `Dispute letter for ${data.carrier} ready`);
+    } catch {
+      toast.error("Generation failed", "Set GROQ_API_KEY in .env to enable AI dispute letters");
+    } finally {
+      setLetterLoading(false);
+    }
+  }
 
   // ── Loading ────────────────────────────────────────────────────────────────
   if (cq.isLoading) {
@@ -361,19 +405,49 @@ export default function CaseDetail() {
               <div className="space-y-2 animate-pulse"><div className="h-16 bg-slate-100 rounded-lg" /></div>
             ) : findQ.data ? (
               <div className="space-y-3">
+                {/* Scores row */}
                 <div className="flex items-center gap-3">
                   <div className="text-center">
                     <p className={cn("text-3xl font-bold", findQ.data.confidence >= 0.9 ? "text-emerald-600" : "text-amber-600")}>
                       {(findQ.data.confidence * 100).toFixed(0)}%
                     </p>
-                    <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">confidence</p>
+                    <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">Rule Score</p>
                   </div>
-                  <div className="flex-1 rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2">
-                    <p className="text-xs font-bold text-emerald-700">Overcharge confirmed</p>
-                    <p className="text-[10px] text-emerald-600 mt-0.5">Weighted rule-based scoring</p>
+                  {findQ.data.ai_confidence != null && (
+                    <div className="text-center">
+                      <p className={cn("text-3xl font-bold", findQ.data.ai_confidence >= 0.9 ? "text-blue-600" : "text-amber-600")}>
+                        {(findQ.data.ai_confidence * 100).toFixed(0)}%
+                      </p>
+                      <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">AI Score</p>
+                    </div>
+                  )}
+                  <div className="flex-1 space-y-1.5">
+                    <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2">
+                      <p className="text-xs font-bold text-emerald-700">Overcharge confirmed</p>
+                      <p className="text-[10px] text-emerald-600 mt-0.5">Weighted rule-based scoring (SC-001)</p>
+                    </div>
+                    {findQ.data.risk_level && (
+                      <div className={cn("rounded-lg px-3 py-2 border text-xs font-bold",
+                        findQ.data.risk_level === "HIGH"   ? "bg-red-50    border-red-200    text-red-700"    :
+                        findQ.data.risk_level === "MEDIUM" ? "bg-amber-50  border-amber-200  text-amber-700"  :
+                                                             "bg-slate-50  border-slate-200  text-slate-600"
+                      )}>
+                        AI Risk: {findQ.data.risk_level}
+                      </div>
+                    )}
                   </div>
                 </div>
-                {Object.entries(findQ.data.trace ?? {}).map(([k, v]) => (
+
+                {/* AI Reasoning */}
+                {findQ.data.ai_reasoning && (
+                  <div className="rounded-lg bg-blue-50 border border-blue-100 px-3 py-2.5 flex gap-2">
+                    <Brain className="h-3.5 w-3.5 text-blue-500 mt-0.5 flex-shrink-0" />
+                    <p className="text-[11px] text-blue-800 leading-relaxed">{findQ.data.ai_reasoning}</p>
+                  </div>
+                )}
+
+                {/* Rule trace */}
+                {Object.entries(findQ.data.trace ?? {}).filter(([k]) => k !== "weighted_average").map(([k, v]) => (
                   <div key={k} className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-[10px]">
                     <span className="font-mono text-purple-700 flex-1">{k}</span>
                     <span className="text-slate-400">conf {(v as any).confidence?.toFixed(2)} × wt {(v as any).weight?.toFixed(2)}</span>
@@ -385,6 +459,27 @@ export default function CaseDetail() {
               <p className="text-xs text-slate-400 flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> AI analysis not yet run</p>
             )}
           </SectionCard>
+
+          {/* Evidence seal button */}
+          {evQ.data && evQ.data.completeness_status === "INCOMPLETE" && (
+            <div className="lg:col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-4 flex items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold text-amber-800 text-sm">Evidence bundle is INCOMPLETE</p>
+                  <p className="text-xs text-amber-700 mt-0.5">Seal the bundle before AI reasoning can run (T-006 gate).</p>
+                </div>
+              </div>
+              <button
+                onClick={() => sealMut.mutate()}
+                disabled={sealMut.isPending}
+                className="flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
+              >
+                <Wand2 className="h-3.5 w-3.5" />
+                {sealMut.isPending ? "Sealing…" : "Seal Bundle"}
+              </button>
+            </div>
+          )}
 
           {/* Governance Token */}
           <SectionCard title="Stage 7 — Governance Token" icon={Lock} status={stageStatus(7)}>
@@ -437,6 +532,145 @@ export default function CaseDetail() {
           </SectionCard>
         </div>
       </div>
+
+      {/* ── Variance Records (Phase 4) ───────────────────────────────── */}
+      {(varQ.data && varQ.data.length > 0) && (
+        <div>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Variance Records</p>
+          <div className="space-y-2">
+            {varQ.data.map(v => (
+              <div key={v.id} className={cn(
+                "bg-white rounded-xl border p-4 shadow-sm flex items-center justify-between gap-4",
+                v.status === "OPEN" ? "border-red-200" : "border-slate-200"
+              )}>
+                <div className="flex items-center gap-3">
+                  <div className={cn("h-2 w-2 rounded-full flex-shrink-0", v.status === "OPEN" ? "bg-red-500" : "bg-emerald-500")} />
+                  <div>
+                    <p className="text-xs font-bold text-slate-700">{v.variance_type.replace(/_/g, " ")}</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Expected {formatCurrency(v.expected_value)} · Actual {formatCurrency(v.actual_value)} · Delta {formatCurrency(v.delta)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={cn(
+                    "text-[10px] font-bold px-2 py-0.5 rounded-full",
+                    v.status === "OPEN" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                  )}>{v.status}</span>
+                  {v.status === "OPEN" && (
+                    <>
+                      <button
+                        onClick={() => resolveMut.mutate({ vid: v.id, action: "RESOLVE" })}
+                        disabled={resolveMut.isPending}
+                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-[10px] font-bold"
+                      >Resolve</button>
+                      <button
+                        onClick={() => resolveMut.mutate({ vid: v.id, action: "WAIVE" })}
+                        disabled={resolveMut.isPending}
+                        className="px-3 py-1.5 border border-slate-200 hover:bg-slate-50 text-slate-600 rounded-lg text-[10px] font-bold"
+                      >Waive</button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+            {varQ.data.some(v => v.status === "OPEN") && (
+              <p className="text-[10px] text-red-600 font-semibold px-1">
+                Open variances must be resolved or waived before ACR can be issued (T-011 gate).
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── ACR (Phase 4) ────────────────────────────────────────────── */}
+      {acrQ.data && (
+        <div className="bg-white rounded-xl border border-emerald-200 p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-lg bg-emerald-100 flex items-center justify-center">
+                <Lock className="h-3.5 w-3.5 text-emerald-600" />
+              </div>
+              <p className="text-sm font-bold text-slate-700">Stage 8 — Action Certification Record</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", acrQ.data.is_locked ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
+                {acrQ.data.is_locked ? "WORM LOCKED" : "PENDING LOCK"}
+              </span>
+              <button
+                onClick={handleDownloadAcr}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
+              >
+                <Download className="h-3.5 w-3.5" /> Download ACR
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+              <p className="text-[9px] text-slate-400 uppercase font-semibold">Merkle Root</p>
+              <code className="text-[9px] font-mono text-purple-700 break-all">{acrQ.data.merkle_root?.slice(0, 24)}…</code>
+            </div>
+            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+              <p className="text-[9px] text-slate-400 uppercase font-semibold">ACR Hash</p>
+              <code className="text-[9px] font-mono text-purple-700 break-all">{acrQ.data.acr_hash?.slice(0, 24)}…</code>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ACR download for CLOSED cases without loaded ACR ─────────── */}
+      {!acrQ.data && ["CLOSED", "OUTCOME_RECORDED"].includes(cs.state) && (
+        <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-4 flex items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <Lock className="h-5 w-5 text-emerald-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold text-emerald-800 text-sm">ACR available for download</p>
+              <p className="text-xs text-emerald-700 mt-0.5">Offline-verifiable zip with Merkle proof, Ed25519 signatures, and verify.sh script.</p>
+            </div>
+          </div>
+          <button
+            onClick={handleDownloadAcr}
+            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
+          >
+            <Download className="h-3.5 w-3.5" /> Download ACR.zip
+          </button>
+        </div>
+      )}
+
+      {/* ── AI Dispute Letter ────────────────────────────────────────────── */}
+      {["FINDING_GENERATED","APPROVAL_PENDING","EXECUTION_READY","DISPATCHED","CLOSED"].includes(cs.state) && (
+        <div className="bg-white rounded-xl border border-purple-200 p-4 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+              <Wand2 className="h-4 w-4 text-purple-500" /> AI Dispute Letter
+            </p>
+            <button
+              onClick={handleGenerateLetter}
+              disabled={letterLoading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors"
+            >
+              {letterLoading
+                ? <><div className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />Generating…</>
+                : "Generate Letter"
+              }
+            </button>
+          </div>
+          <p className="text-xs text-slate-400">AI generates a professional carrier dispute letter based on this case's overcharge data.</p>
+          {disputeLetter && (
+            <div className="space-y-2">
+              <pre className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-4 whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-auto">
+                {disputeLetter}
+              </pre>
+              <button
+                onClick={() => navigator.clipboard.writeText(disputeLetter).then(() => toast.success("Copied", "Letter copied to clipboard"))}
+                className="text-xs text-purple-600 hover:text-purple-800 font-semibold"
+              >
+                Copy to clipboard
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Timeline ────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">

@@ -1,4 +1,46 @@
 from pydantic import BaseModel, Field
+from typing import List, Optional
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    email:    str
+    password: str
+
+class LoginResponse(BaseModel):
+    token:      str
+    tenant_id:  str
+    role:       str
+    full_name:  str
+    email:      str
+    expires_in: int   # seconds
+
+class RegisterRequest(BaseModel):
+    email:     str
+    password:  str
+    full_name: str
+    role:      str    # analyst | manager | admin
+
+class RegisterResponse(BaseModel):
+    user_id:    str
+    email:      str
+    full_name:  str
+    role:       str
+    tenant_id:  str
+    created_at: str
+
+class UserItem(BaseModel):
+    user_id:    str
+    email:      str
+    full_name:  str
+    role:       str
+    is_active:  bool
+    created_at: str
+
+class UsersListResponse(BaseModel):
+    tenant_id: str
+    users:     List[UserItem]
 
 
 # ── Requests ──────────────────────────────────────────────────────────────────

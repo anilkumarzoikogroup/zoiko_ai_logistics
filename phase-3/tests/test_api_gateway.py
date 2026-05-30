@@ -164,6 +164,7 @@ class TestPipelineIntegration:
             item_type="BOL", content_bytes=b"full-pipeline-e2e-test",
             actor_sub="ravi@amazon.com",
         )
+        ev.seal_bundle(tenant_id=test_case["tenant_id"], case_id=test_case["id"])
 
         rh  = ReasoningHandler(db_url, broker, "default")
         r   = rh.analyze(
