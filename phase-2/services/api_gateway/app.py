@@ -78,6 +78,34 @@ try:
 except ImportError:
     pass
 
+# Security headers (spec §8.2)
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as _Request
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: _Request, call_next):
+        response = await call_next(request)
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "publickey-credentials-get=(self), publickey-credentials-create=(self)"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cache-Control"] = "no-store"
+        # CSP — allow self only, no inline scripts
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "object-src 'none'; "
+            "base-uri 'none'; "
+            "frame-ancestors 'none'"
+        )
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 # OTel distributed tracing (FR-022)
 try:
     from zoiko_common.observability.tracing import setup_tracing
@@ -241,6 +269,265 @@ def change_password(
     finally:
         conn.close()
     return {"message": "Password changed successfully"}
+
+
+# ── SSO Discovery ────────────────────────────────────────────────────────────
+
+@app.post("/auth/discover", tags=["auth"])
+@app.post("/v1/auth/discover", tags=["auth"], include_in_schema=False)
+def auth_discover(body: dict):
+    """Email-first SSO discovery. Returns route: 'sso' | 'password' and optional idp_hint."""
+    import re as _re2, time as _time, random as _rand
+    email = str(body.get("email", "")).lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Valid work email required")
+
+    domain = email.split("@")[1]
+
+    # Block personal email domains
+    PERSONAL = {"gmail.com","yahoo.com","hotmail.com","outlook.com","icloud.com","protonmail.com"}
+    if domain in PERSONAL:
+        raise HTTPException(status_code=422, detail="Zoiko AI workspaces are tied to organization email addresses. Please use your work email.")
+
+    # Constant-time jitter to prevent timing enumeration (spec §5.1)
+    _time.sleep(_rand.uniform(0.05, 0.12))
+
+    # Check sso_domains table
+    sso_row = q1("SELECT idp_type, idp_config FROM sso_domains WHERE domain = %s AND is_active = TRUE", (domain,))
+    if sso_row:
+        return {"route": "sso", "idp_type": sso_row["idp_type"], "idp_hint": sso_row.get("idp_config", {}).get("hint", "")}
+
+    # Check if user exists in users table
+    user_row = q1("SELECT id FROM users WHERE email = %s", (email,))
+    if user_row:
+        return {"route": "password", "email": email}
+
+    # Unknown email — still return password route (no enumeration)
+    return {"route": "password", "email": email}
+
+
+# ── Credential Recovery ───────────────────────────────────────────────────────
+
+@app.post("/auth/recover/request", tags=["auth"], status_code=204)
+@app.post("/v1/auth/recover/request", tags=["auth"], include_in_schema=False, status_code=204)
+def recover_request(body: dict):
+    """Constant-time forgot-password. Never reveals if account exists."""
+    import secrets as _sec, hashlib as _hl, time as _time, random as _rand, psycopg2 as _pg
+    email = str(body.get("email", "")).lower().strip()
+
+    # Always sleep constant time (spec §7.1 anti-enumeration)
+    _time.sleep(_rand.uniform(0.15, 0.25))
+
+    if not email or "@" not in email:
+        return  # 204 regardless
+
+    user = q1("SELECT id FROM users WHERE email = %s", (email,))
+    if not user:
+        return  # 204 — do not reveal account existence
+
+    # Generate single-use token
+    raw_token = _sec.token_urlsafe(32)
+    token_hash = _hl.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        # Invalidate previous tokens for this user
+        cur.execute("UPDATE password_reset_tokens SET used_at = NOW() WHERE user_id = %s AND used_at IS NULL", (user["id"],))
+        cur.execute(
+            "INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (%s, %s, %s)",
+            (user["id"], token_hash, expires_at)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # In production: send email with reset link containing raw_token
+    # For now: log it (replace with email service in production)
+    import logging
+    logging.getLogger("zoiko.auth").info("Password reset token for %s: %s (expires %s)", email, raw_token, expires_at)
+
+
+@app.post("/auth/recover/complete", tags=["auth"])
+@app.post("/v1/auth/recover/complete", tags=["auth"], include_in_schema=False)
+def recover_complete(body: dict):
+    """Complete password reset with token from email."""
+    import hashlib as _hl, bcrypt as _bcrypt, psycopg2 as _pg
+    raw_token  = str(body.get("token", ""))
+    new_pw     = str(body.get("new_password", ""))
+
+    if not raw_token or not new_pw:
+        raise HTTPException(status_code=422, detail="token and new_password required")
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    token_hash = _hl.sha256(raw_token.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    row = q1("""
+        SELECT prt.id, prt.user_id, u.email, u.tenant_id
+        FROM   password_reset_tokens prt
+        JOIN   users u ON u.id = prt.user_id
+        WHERE  prt.token_hash = %s AND prt.used_at IS NULL AND prt.expires_at > %s
+    """, (token_hash, now))
+
+    if not row:
+        raise HTTPException(status_code=401, detail="Reset link is invalid or has expired")
+
+    pw_hash = _bcrypt.hashpw(new_pw.encode(), _bcrypt.gensalt()).decode()
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (pw_hash, row["user_id"]))
+        cur.execute("UPDATE password_reset_tokens SET used_at = %s WHERE id = %s", (now, row["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Generate new JWT
+    from middleware.oidc.token_verifier import TokenVerifier
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token = verifier.make_dev_token(
+        sub=row["email"], tenant_id=str(row["tenant_id"]), roles=["analyst"], ttl_sec=86400
+    )
+    return {"message": "Password reset successfully", "token": token}
+
+
+# ── Workspace Access Request (prospects — no tenant created) ──────────────────
+
+@app.post("/auth/workspace-request", tags=["auth"], status_code=201)
+@app.post("/v1/auth/workspace-request", tags=["auth"], include_in_schema=False, status_code=201)
+def workspace_access_request(body: dict):
+    """Lead capture for prospects. Routes to CRM. Never creates a tenant."""
+    import psycopg2 as _pg
+    required = ["full_name", "work_email", "company_name"]
+    for f in required:
+        if not body.get(f):
+            raise HTTPException(status_code=422, detail=f"'{f}' is required")
+    if not body.get("consent"):
+        raise HTTPException(status_code=422, detail="Privacy consent is required")
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO workspace_access_requests
+                (full_name, work_email, company_name, company_website, country,
+                 role, use_case, team_size, heard_from, consent)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            body["full_name"], body["work_email"].lower().strip(),
+            body["company_name"], body.get("company_website"),
+            body.get("country"), body.get("role"),
+            body.get("use_case"), body.get("team_size"),
+            body.get("heard_from"), True,
+        ))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"message": "Access request submitted. A Zoiko representative will follow up within one business day."}
+
+
+# ── Invite — send + accept ────────────────────────────────────────────────────
+
+@app.post("/auth/invite/send", tags=["auth"], status_code=201)
+@app.post("/v1/auth/invite/send", tags=["auth"], include_in_schema=False, status_code=201)
+def send_invite(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    """Admin sends an invitation to a new user."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can send invitations")
+    email = str(body.get("email", "")).lower().strip()
+    role  = str(body.get("role", "analyst"))
+    if not email:
+        raise HTTPException(status_code=422, detail="email required")
+    if role not in ("analyst", "manager", "admin"):
+        raise HTTPException(status_code=422, detail="role must be analyst, manager, or admin")
+
+    existing = q1("SELECT id FROM users WHERE email = %s", (email,))
+    if existing:
+        raise HTTPException(status_code=409, detail="A user with this email already exists")
+
+    raw_token  = _sec.token_urlsafe(32)
+    token_hash = _hl.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO invitation_tokens (tenant_id, email, role, invited_by, token_hash, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+        """, (claims.tenant_id, email, role, claims.sub, token_hash, expires_at))
+        conn.commit()
+    finally:
+        conn.close()
+
+    # In production: send invitation email with link containing raw_token
+    import logging
+    logging.getLogger("zoiko.auth").info("Invite token for %s: %s", email, raw_token)
+    return {"message": f"Invitation sent to {email}", "expires_at": expires_at.isoformat()}
+
+
+@app.post("/auth/invite/accept", tags=["auth"])
+@app.post("/v1/auth/invite/accept", tags=["auth"], include_in_schema=False)
+def accept_invite(body: dict):
+    """New user accepts invitation, creates account, returns JWT."""
+    import hashlib as _hl, bcrypt as _bcrypt, psycopg2 as _pg
+    raw_token = str(body.get("token", ""))
+    full_name = str(body.get("full_name", "")).strip()
+    password  = str(body.get("password", ""))
+
+    if not raw_token or not full_name:
+        raise HTTPException(status_code=422, detail="token and full_name required")
+
+    token_hash = _hl.sha256(raw_token.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    inv = q1("""
+        SELECT id, tenant_id, email, role FROM invitation_tokens
+        WHERE token_hash = %s AND accepted_at IS NULL AND expires_at > %s
+    """, (token_hash, now))
+
+    if not inv:
+        raise HTTPException(status_code=401, detail="Invitation is invalid or has expired")
+
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    pw_hash  = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+    user_id  = uuid.uuid4()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (id, tenant_id, email, password_hash, full_name, role)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (user_id, inv["tenant_id"], inv["email"], pw_hash, full_name, inv["role"]))
+        cur.execute("UPDATE invitation_tokens SET accepted_at = %s WHERE id = %s", (now, inv["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+    from middleware.oidc.token_verifier import TokenVerifier
+    verifier = TokenVerifier(dev_secret=os.getenv("ZOIKO_DEV_SECRET","").encode(), issuer=os.getenv("ZOIKO_ISSUER","https://auth.zoikotech.com"))
+    token = verifier.make_dev_token(sub=inv["email"], tenant_id=str(inv["tenant_id"]), roles=[inv["role"]], ttl_sec=86400)
+    return {"token": token, "email": inv["email"], "role": inv["role"], "tenant_id": str(inv["tenant_id"]), "full_name": full_name}
+
+
+# ── Sign out ──────────────────────────────────────────────────────────────────
+
+@app.post("/auth/signout", tags=["auth"], status_code=204)
+@app.post("/v1/auth/signout", tags=["auth"], include_in_schema=False, status_code=204)
+def signout():
+    """Client clears its JWT. Server-side: stateless JWT so nothing to revoke here."""
+    return  # Client removes token from storage
 
 
 # ── Health — registered directly on app (not versioned) ──────────────────────

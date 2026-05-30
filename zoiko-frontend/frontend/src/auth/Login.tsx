@@ -1,34 +1,142 @@
+/**
+ * Zoiko AI Enterprise Authentication
+ * Implements spec v3.0 flows:
+ *   Flow 1 — SSO Discovery (email-first)
+ *   Flow 2 — Password Sign-In Fallback
+ *   Flow 6 — Workspace Access Request
+ *   Flow 7 — Credential Recovery
+ */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShieldCheck, Lock, Zap, GitBranch, BarChart3, Award, Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, ArrowLeft, ShieldCheck } from "lucide-react";
 import { cn } from "@/utils/cn";
 import axios from "axios";
 
-const API_BASE = (import.meta.env.VITE_API_BASE || "/api");
+const API = (import.meta.env.VITE_API_BASE || "/api");
 
-const VALUE_PROPS = [
-  { icon: Zap,         title: "AI-Powered Detection",   sub: "96% confidence on freight overcharge patterns"       },
-  { icon: Lock,        title: "8-Gate Execution",        sub: "Cryptographic + compliance gates before money moves" },
-  { icon: GitBranch,   title: "Immutable Audit Chain",   sub: "Ed25519 + Merkle WORM index — tamper-proof forever"  },
-  { icon: BarChart3,   title: "Full Recovery Pipeline",  sub: "Ingest → Evidence → Governance → Execute → ACR"     },
-];
+// ── Design tokens from spec §6 ────────────────────────────────────────────────
+// brand-navy: #0A1E3A  brand-teal: #00A6A6  action: #174EA6
 
+type Flow = "discover" | "password" | "request" | "recovery" | "recovery-sent" | "request-sent";
+
+// ── Left pane — Trust marks (spec §4.3) ───────────────────────────────────────
+function TrustPane() {
+  return (
+    <div className="hidden lg:flex lg:w-[42%] flex-col justify-between px-10 py-10 relative overflow-hidden"
+         style={{ background: "#0A1E3A" }}>
+      <div className="absolute inset-0 opacity-5"
+           style={{ backgroundImage: "radial-gradient(circle at 20% 80%, #00A6A6 0%, transparent 50%), radial-gradient(circle at 80% 20%, #174EA6 0%, transparent 50%)" }} />
+
+      {/* Logo */}
+      <div className="relative z-10">
+        <img src="/logo-dark.jpg" alt="Zoiko AI" className="h-14 w-auto object-contain"
+             onError={e => { e.currentTarget.style.display="none"; (e.currentTarget.nextElementSibling as HTMLElement|null)?.style?.removeProperty("display"); }} />
+        <div style={{display:"none"}} className="flex flex-col">
+          <span className="text-white font-bold text-xl tracking-tight">Zoiko AI</span>
+          <span className="text-sm font-normal" style={{color:"#00A6A6"}}>Agentic Intelligence Platform</span>
+        </div>
+      </div>
+
+      {/* Trust marks strip (spec §4.3) */}
+      <div className="relative z-10 space-y-6">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-widest mb-3" style={{color:"#667085"}}>Security & compliance</p>
+          <div className="flex flex-wrap gap-2">
+            {["SOC 2 Type II","ISO 27001","GDPR","CCPA","Data residency: US · EU · UK"].map(m => (
+              <span key={m} className="text-[10px] font-medium px-2.5 py-1 rounded-md border"
+                    style={{background:"rgba(255,255,255,0.05)", borderColor:"rgba(255,255,255,0.12)", color:"#94A3B8"}}>
+                {m}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t pt-5" style={{borderColor:"rgba(255,255,255,0.08)"}}>
+          <p className="text-xs" style={{color:"#667085"}}>
+            Governed agentic intelligence — every action cryptographically audited, every approval separation-of-duties enforced.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <ShieldCheck className="h-3.5 w-3.5" style={{color:"#00A6A6"}} />
+          <a href="#" className="text-[11px] font-medium hover:underline" style={{color:"#00A6A6"}}>
+            Security & Trust Center
+          </a>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div className="relative z-10">
+        <p className="text-[10px]" style={{color:"#475569"}}>
+          © 2026 Zoiko Group. All rights reserved.
+        </p>
+        <div className="flex gap-3 mt-1 flex-wrap">
+          {["Security","Privacy","Terms","Acceptable Use","Status"].map(l => (
+            <a key={l} href="#" className="text-[10px] hover:underline" style={{color:"#475569"}}>{l}</a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Flow card wrapper ─────────────────────────────────────────────────────────
+function FlowCard({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="w-full max-w-[440px] mx-auto">
+      {/* Mobile logo */}
+      <div className="lg:hidden mb-8">
+        <img src="/logo-light.png" alt="Zoiko AI" className="h-10 w-auto object-contain"
+             onError={e => { e.currentTarget.style.display="none"; }} />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function Login() {
   const nav = useNavigate();
-
-  const [email,    setEmail]    = useState("");
+  const [flow, setFlow]       = useState<Flow>("discover");
+  const [email, setEmail]     = useState("");
   const [password, setPassword] = useState("");
-  const [showPw,   setShowPw]   = useState(false);
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
+  const [showPw, setShowPw]   = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
 
-  async function handleSignIn(e: React.FormEvent) {
+  // Workspace request form
+  const [req, setReq] = useState({
+    full_name:"", work_email:"", company_name:"", company_website:"",
+    country:"", role:"", use_case:"", team_size:"", heard_from:"", consent: false,
+  });
+
+  // Recovery form
+  const [recEmail, setRecEmail] = useState("");
+
+  async function handleDiscover(e: React.FormEvent) {
     e.preventDefault();
-    if (!email || !password) return;
-    setLoading(true);
-    setError("");
+    setLoading(true); setError("");
     try {
-      const { data } = await axios.post(`${API_BASE}/v1/auth/login`, { email, password });
+      const { data } = await axios.post(`${API}/v1/auth/discover`, { email });
+      if (data.route === "sso") {
+        // SSO: in production redirect to IdP. For now show a message.
+        setError(`Your organization uses SSO via ${data.idp_type}. Contact your IT administrator.`);
+      } else {
+        setFlow("password");
+      }
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.detail : "Service unavailable";
+      setError(typeof msg === "string" ? msg : "Service unavailable");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handlePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true); setError("");
+    try {
+      const { data } = await axios.post(`${API}/v1/auth/login`, { email, password });
       localStorage.setItem("zoiko_jwt",    data.token);
       localStorage.setItem("zoiko_tenant", data.tenant_id);
       localStorage.setItem("zoiko_role",   data.role);
@@ -36,229 +144,261 @@ export default function Login() {
       localStorage.setItem("zoiko_sub",    data.email);
       nav("/");
     } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        const msg = err.response?.data?.detail;
-        setError(typeof msg === "string" ? msg : "Login failed — check your credentials.");
-      } else {
-        setError("Could not reach the server. Make sure the backend is running.");
-      }
+      const msg = axios.isAxiosError(err) ? err.response?.data?.detail : null;
+      setError(typeof msg === "string" ? msg : "Incorrect password. Please try again.");
     } finally {
       setLoading(false);
     }
   }
 
+  async function handleRecovery(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true); setError("");
+    try {
+      await axios.post(`${API}/v1/auth/recover/request`, { email: recEmail });
+      setFlow("recovery-sent");
+    } catch {
+      // Always show same message — no enumeration
+      setFlow("recovery-sent");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleWorkspaceRequest(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true); setError("");
+    try {
+      await axios.post(`${API}/v1/auth/workspace-request`, req);
+      setFlow("request-sent");
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.detail : null;
+      setError(typeof msg === "string" ? msg : "Request failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const btnClass = (disabled: boolean) => cn(
+    "w-full flex items-center justify-center gap-2 rounded-xl py-3 text-sm font-semibold transition-all",
+    disabled
+      ? "bg-slate-200 text-slate-400 cursor-not-allowed"
+      : "text-white hover:-translate-y-0.5 hover:shadow-md"
+  );
+  const inputClass = "w-full rounded-xl border px-4 py-3 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:border-transparent";
+
   return (
-    <div className="min-h-screen flex overflow-hidden">
+    <div className="min-h-screen flex overflow-hidden bg-slate-50">
+      <TrustPane />
 
-      {/* ── Left brand panel ──────────────────────────────────────────────── */}
-      <div className="hidden lg:flex lg:w-[44%] flex-col justify-between bg-[#0a0f1e] px-10 py-10 relative overflow-hidden">
+      {/* Right pane */}
+      <div className="flex-1 flex flex-col justify-center px-6 py-10 overflow-y-auto">
+        <FlowCard>
 
-        <div className="absolute -top-32 -left-32 h-96 w-96 rounded-full bg-blue-600/10 blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 right-0 h-80 w-80 rounded-full bg-violet-600/10 blur-3xl pointer-events-none" />
-
-        {/* Logo */}
-        {/* Logo */}
-        <div className="relative z-10">
-          <img
-            src="/logo-dark.jpg"
-            alt="ZoikoAI"
-            className="h-16 w-auto object-contain"
-            onError={e => {
-              const t = e.currentTarget;
-              t.style.display = "none";
-              const fallback = t.nextElementSibling as HTMLElement | null;
-              if (fallback) fallback.style.display = "flex";
-            }}
-          />
-          {/* Fallback if image not found */}
-          <div className="hidden items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg shadow-blue-500/30">
-              <ShieldCheck className="h-5 w-5 text-white" />
-            </div>
-            <div>
-              <p className="text-white font-bold text-lg tracking-wide leading-none">ZOIKO</p>
-              <p className="text-blue-400 text-[11px] tracking-widest uppercase font-medium">AI Logistics</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Hero copy */}
-        <div className="relative z-10 space-y-6">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/30 bg-blue-500/10 px-3 py-1 mb-5">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[11px] text-blue-300 font-medium tracking-wide">Freight Audit & Recovery Platform</span>
-            </div>
-            <h1 className="text-4xl font-bold text-white leading-tight">
-              Freight Audit &<br />
-              <span className="bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
-                Recovery Platform
-              </span>
-            </h1>
-            <p className="mt-4 text-slate-400 text-sm leading-relaxed max-w-xs">
-              Automatically detects overcharges, orchestrates two-human approval,
-              and executes cryptographically auditable financial recovery.
-            </p>
-          </div>
-
-          <div className="space-y-3">
-            {VALUE_PROPS.map(({ icon: Icon, title, sub }) => (
-              <div key={title} className="flex items-start gap-3">
-                <div className="h-8 w-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                  <Icon className="h-4 w-4 text-blue-400" />
-                </div>
-                <div>
-                  <p className="text-white text-sm font-semibold leading-tight">{title}</p>
-                  <p className="text-slate-500 text-[11px] mt-0.5 leading-snug">{sub}</p>
-                </div>
+          {/* ── Flow 1: SSO Discovery ───────────────────────────────────── */}
+          {flow === "discover" && (
+            <form onSubmit={handleDiscover} className="space-y-5">
+              <div>
+                <h1 className="text-2xl font-semibold text-slate-900" style={{color:"#0A0E1A"}}>Sign in to Zoiko AI</h1>
+                <p className="text-[15px] mt-1.5" style={{color:"#667085"}}>Use your work email to continue.</p>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Platform tagline */}
-        <div className="relative z-10 rounded-xl border border-white/8 bg-white/4 p-4">
-          <p className="text-[10px] text-slate-500 uppercase tracking-widest font-semibold mb-1">Powered by</p>
-          <p className="text-white text-xs font-medium">Zoiko AI Logistics Platform</p>
-          <p className="text-slate-400 text-[11px] mt-0.5">Freight audit · Recovery · Cryptographic proof</p>
-        </div>
-      </div>
-
-      {/* ── Right sign-in panel ───────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col justify-center bg-slate-50 px-6 py-10 overflow-y-auto">
-        <div className="w-full max-w-md mx-auto">
-
-          {/* Mobile logo */}
-          <div className="lg:hidden mb-8">
-            <img
-              src="/logo-light.png"
-              alt="ZoikoAI"
-              className="h-12 w-auto object-contain"
-              onError={e => {
-                const t = e.currentTarget;
-                t.style.display = "none";
-                const fallback = t.nextElementSibling as HTMLElement | null;
-                if (fallback) fallback.style.display = "flex";
-              }}
-            />
-            <div className="hidden items-center gap-2.5">
-              <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">
-                <ShieldCheck className="h-5 w-5 text-white" />
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700" htmlFor="email">Work email</label>
+                <input id="email" type="email" autoComplete="email" required
+                       value={email} onChange={e => { setEmail(e.target.value); setError(""); }}
+                       placeholder="name@company.com"
+                       className={inputClass} style={{borderColor:"#D0D5DD"}} />
               </div>
-              <p className="font-bold text-slate-800">ZOIKO AI Logistics</p>
-            </div>
-          </div>
-
-          <div className="mb-8">
-            <h2 className="text-2xl font-bold text-slate-800">Sign in</h2>
-            <p className="text-slate-400 text-sm mt-1.5">
-              Enter your work email and password to access the platform.
-            </p>
-          </div>
-
-          <form onSubmit={handleSignIn} className="space-y-4">
-
-            {/* Email */}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700" htmlFor="email">
-                Work Email
-              </label>
-              <input
-                id="email"
-                type="email"
-                autoComplete="email"
-                required
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-
-            {/* Password */}
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-700" htmlFor="password">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  id="password"
-                  type={showPw ? "text" : "password"}
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 pr-10 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPw(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                  tabIndex={-1}
-                >
-                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {error && <p className="text-sm rounded-lg px-4 py-2.5" style={{background:"#FEF3F2", color:"#B42318", border:"1px solid #FECDCA"}}>{error}</p>}
+              <button type="submit" disabled={loading || !email}
+                      className={btnClass(loading || !email)}
+                      style={!loading && email ? {background:"#174EA6"} : {}}>
+                {loading ? <><div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />Checking…</> : "Continue"}
+              </button>
+              <div className="flex items-center justify-between pt-1">
+                <button type="button" onClick={() => setFlow("request")}
+                        className="text-sm hover:underline" style={{color:"#174EA6"}}>
+                  Don't have access? Request a workspace
                 </button>
               </div>
-            </div>
+            </form>
+          )}
 
-            {/* Error */}
-            {error && (
-              <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
-                {error}
+          {/* ── Flow 2: Password Sign-In ────────────────────────────────── */}
+          {flow === "password" && (
+            <form onSubmit={handlePassword} className="space-y-5">
+              <div>
+                <button type="button" onClick={() => { setFlow("discover"); setError(""); }}
+                        className="flex items-center gap-1.5 text-sm mb-4 hover:underline" style={{color:"#667085"}}>
+                  <ArrowLeft className="h-3.5 w-3.5" /> Use different email
+                </button>
+                <h1 className="text-2xl font-semibold" style={{color:"#0A0E1A"}}>Enter your password</h1>
+                <p className="text-[15px] mt-1.5" style={{color:"#667085"}}>Signed in as <span className="font-medium text-slate-700">{email}</span></p>
               </div>
-            )}
-
-            {/* Submit */}
-            <button
-              type="submit"
-              disabled={loading || !email || !password}
-              className={cn(
-                "w-full flex items-center justify-center gap-2.5 rounded-xl py-3.5 font-semibold text-sm transition-all duration-200 mt-2",
-                !loading && email && password
-                  ? "bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/30 hover:-translate-y-0.5"
-                  : "bg-slate-200 text-slate-400 cursor-not-allowed"
-              )}
-            >
-              {loading ? (
-                <>
-                  <div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />
-                  Signing in…
-                </>
-              ) : (
-                "Sign in"
-              )}
-            </button>
-          </form>
-
-          {/* Role info */}
-          <div className="mt-8 rounded-xl border border-slate-200 bg-white p-4 space-y-2">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-widest">Access levels</p>
-            <div className="space-y-1.5 text-xs text-slate-600">
-              <p><span className="font-semibold text-blue-600">Analyst</span> — Reviews invoices, proposes recovery</p>
-              <p><span className="font-semibold text-violet-600">Manager</span> — Approves / rejects recovery proposals</p>
-              <p><span className="font-semibold text-slate-700">Admin</span> — Full access + user management</p>
-            </div>
-          </div>
-
-          {/* Footer badges */}
-          <div className="mt-6 flex items-center justify-center gap-6 flex-wrap">
-            {[
-              { icon: Lock,       label: "Ed25519 Signed"  },
-              { icon: Award,      label: "SOC 2 Compliant" },
-              { icon: ShieldCheck, label: "OPA Enforced"   },
-            ].map(({ icon: Icon, label }) => (
-              <div key={label} className="flex items-center gap-1.5 text-slate-400">
-                <Icon className="h-3.5 w-3.5" />
-                <span className="text-[11px] font-medium">{label}</span>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700" htmlFor="password">Password</label>
+                <div className="relative">
+                  <input id="password" type={showPw ? "text" : "password"} autoComplete="current-password" required
+                         value={password} onChange={e => { setPassword(e.target.value); setError(""); }}
+                         placeholder="••••••••" className={cn(inputClass, "pr-10")} style={{borderColor:"#D0D5DD"}} />
+                  <button type="button" onClick={() => setShowPw(v => !v)} tabIndex={-1}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                    {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
+              {error && <p className="text-sm rounded-lg px-4 py-2.5" style={{background:"#FEF3F2", color:"#B42318", border:"1px solid #FECDCA"}}>{error}</p>}
+              <button type="submit" disabled={loading || !password}
+                      className={btnClass(loading || !password)}
+                      style={!loading && password ? {background:"#174EA6"} : {}}>
+                {loading ? <><div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />Signing in…</> : "Sign in"}
+              </button>
+              <div className="text-center">
+                <button type="button" onClick={() => { setRecEmail(email); setFlow("recovery"); setError(""); }}
+                        className="text-sm hover:underline" style={{color:"#667085"}}>
+                  Forgot password?
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* ── Flow 7: Credential Recovery ────────────────────────────── */}
+          {flow === "recovery" && (
+            <form onSubmit={handleRecovery} className="space-y-5">
+              <div>
+                <button type="button" onClick={() => { setFlow("password"); setError(""); }}
+                        className="flex items-center gap-1.5 text-sm mb-4 hover:underline" style={{color:"#667085"}}>
+                  <ArrowLeft className="h-3.5 w-3.5" /> Return to sign in
+                </button>
+                <h1 className="text-2xl font-semibold" style={{color:"#0A0E1A"}}>Reset your password</h1>
+                <p className="text-[15px] mt-1.5" style={{color:"#667085"}}>
+                  Enter your work email. If we find an account, we'll send recovery instructions.
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-slate-700" htmlFor="rec-email">Work email</label>
+                <input id="rec-email" type="email" autoComplete="email" required
+                       value={recEmail} onChange={e => setRecEmail(e.target.value)}
+                       placeholder="name@company.com"
+                       className={inputClass} style={{borderColor:"#D0D5DD"}} />
+              </div>
+              <button type="submit" disabled={loading || !recEmail}
+                      className={btnClass(loading || !recEmail)}
+                      style={!loading && recEmail ? {background:"#174EA6"} : {}}>
+                {loading ? <><div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />Sending…</> : "Send instructions"}
+              </button>
+            </form>
+          )}
+
+          {flow === "recovery-sent" && (
+            <div className="space-y-5">
+              <div className="rounded-xl p-4" style={{background:"#F0FDF4", border:"1px solid #A7F3D0"}}>
+                <p className="text-sm font-semibold" style={{color:"#027A48"}}>Instructions on their way</p>
+                <p className="text-sm mt-1" style={{color:"#065F46"}}>
+                  If an account exists for this email, instructions are on their way. Check your inbox.
+                </p>
+              </div>
+              <button type="button" onClick={() => { setFlow("discover"); setError(""); setRecEmail(""); }}
+                      className="text-sm hover:underline" style={{color:"#174EA6"}}>
+                Return to sign in
+              </button>
+            </div>
+          )}
+
+          {/* ── Flow 6: Workspace Access Request ───────────────────────── */}
+          {flow === "request" && (
+            <form onSubmit={handleWorkspaceRequest} className="space-y-4">
+              <div>
+                <button type="button" onClick={() => { setFlow("discover"); setError(""); }}
+                        className="flex items-center gap-1.5 text-sm mb-4 hover:underline" style={{color:"#667085"}}>
+                  <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
+                </button>
+                <h1 className="text-2xl font-semibold" style={{color:"#0A0E1A"}}>Request access to Zoiko AI</h1>
+                <p className="text-[15px] mt-1.5" style={{color:"#667085"}}>
+                  Tell us about your organization. A Zoiko representative will follow up within one business day.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  {id:"full_name",    label:"Full name",       type:"text",  ph:"Your full name",     half:true},
+                  {id:"work_email",   label:"Work email",      type:"email", ph:"name@company.com",   half:true},
+                  {id:"company_name", label:"Company name",    type:"text",  ph:"Acme Inc.",           half:true},
+                  {id:"company_website",label:"Company website",type:"url",  ph:"https://acme.com",   half:true},
+                ].map(f => (
+                  <div key={f.id} className={cn("space-y-1", f.half ? "" : "col-span-2")}>
+                    <label className="text-xs font-medium text-slate-600">{f.label}</label>
+                    <input type={f.type} required={["full_name","work_email","company_name"].includes(f.id)}
+                           placeholder={f.ph} value={(req as any)[f.id]}
+                           onChange={e => setReq(r => ({...r, [f.id]: e.target.value}))}
+                           className={inputClass} style={{borderColor:"#D0D5DD", fontSize:"14px", padding:"10px 14px"}} />
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  {id:"country",    label:"Country / Region",  opts:["United States","United Kingdom","India","Germany","France","Singapore","Australia","Other"]},
+                  {id:"team_size",  label:"Estimated team size", opts:["1–10","11–50","51–200","201–1000","1000+"]},
+                  {id:"role",       label:"Your role",           opts:["Executive / C-Suite","Director / VP","Manager","Individual contributor","Other"]},
+                  {id:"use_case",   label:"Primary use case",    opts:["Freight audit","Contract management","Compliance","Other"]},
+                ].map(f => (
+                  <div key={f.id} className="space-y-1">
+                    <label className="text-xs font-medium text-slate-600">{f.label}</label>
+                    <select value={(req as any)[f.id]} onChange={e => setReq(r => ({...r, [f.id]: e.target.value}))}
+                            className={inputClass} style={{borderColor:"#D0D5DD", fontSize:"14px", padding:"10px 14px"}}>
+                      <option value="">Select…</option>
+                      {f.opts.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+
+              {/* Privacy consent */}
+              <div className="flex items-start gap-3 rounded-xl p-3" style={{background:"#F8FAFC", border:"1px solid #E2E8F0"}}>
+                <input type="checkbox" id="consent" checked={req.consent}
+                       onChange={e => setReq(r => ({...r, consent: e.target.checked}))}
+                       className="mt-0.5 h-4 w-4 rounded flex-shrink-0" />
+                <label htmlFor="consent" className="text-xs leading-relaxed" style={{color:"#667085"}}>
+                  I agree that Zoiko may contact me about my request and process my information under the{" "}
+                  <a href="#" className="underline" style={{color:"#174EA6"}}>Privacy Notice</a>.
+                </label>
+              </div>
+
+              {error && <p className="text-sm rounded-lg px-4 py-2.5" style={{background:"#FEF3F2", color:"#B42318", border:"1px solid #FECDCA"}}>{error}</p>}
+
+              <button type="submit"
+                      disabled={loading || !req.full_name || !req.work_email || !req.company_name || !req.consent}
+                      className={btnClass(loading || !req.full_name || !req.work_email || !req.company_name || !req.consent)}
+                      style={!loading && req.full_name && req.work_email && req.company_name && req.consent ? {background:"#174EA6"} : {}}>
+                {loading ? <><div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" />Submitting…</> : "Request access"}
+              </button>
+            </form>
+          )}
+
+          {flow === "request-sent" && (
+            <div className="space-y-5">
+              <h1 className="text-2xl font-semibold" style={{color:"#0A0E1A"}}>Request received</h1>
+              <div className="rounded-xl p-4" style={{background:"#F0FDF4", border:"1px solid #A7F3D0"}}>
+                <p className="text-sm font-semibold" style={{color:"#027A48"}}>We'll be in touch</p>
+                <p className="text-sm mt-1" style={{color:"#065F46"}}>
+                  A Zoiko representative will follow up within one business day.
+                </p>
+              </div>
+              <button type="button" onClick={() => { setFlow("discover"); setError(""); }}
+                      className="text-sm hover:underline" style={{color:"#174EA6"}}>
+                Return to sign in
+              </button>
+            </div>
+          )}
+
+          {/* Footer */}
+          <div className="mt-8 pt-6 border-t flex flex-wrap gap-3 justify-center" style={{borderColor:"#E2E8F0"}}>
+            {["Security","Privacy","Terms","Contact"].map(l => (
+              <a key={l} href="#" className="text-[11px] hover:underline" style={{color:"#94A3B8"}}>{l}</a>
             ))}
           </div>
-
-          <p className="text-center text-slate-400 text-[11px] mt-4">
-            {import.meta.env.VITE_USE_MOCK !== "false" ? "Mock mode" : "Live database"} · Zoiko AI Logistics
-          </p>
-        </div>
+        </FlowCard>
       </div>
     </div>
   );
