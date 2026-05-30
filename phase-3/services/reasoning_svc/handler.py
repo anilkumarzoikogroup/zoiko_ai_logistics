@@ -341,23 +341,39 @@ class ReasoningHandler:
                 now,
             ))
 
-            # INSERT finding (with optional AI fields)
-            cur.execute("""
-                INSERT INTO findings
-                    (id, tenant_id, case_id, bundle_id, confidence,
-                     rule_trace, signature, kid, created_at,
-                     ai_confidence, risk_level, ai_reasoning)
-                VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s,
-                        %s, %s, %s)
-                ON CONFLICT (id) DO NOTHING
-            """, (
-                finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
-                SC001_CONFIDENCE, json.dumps(rule_trace),
-                finding_sig, finding_kid, now,
-                ai_result.get("ai_confidence"),
-                ai_result.get("risk_level"),
-                ai_result.get("ai_reasoning"),
-            ))
+            # INSERT finding — AI fields included only when available
+            ai_conf = ai_result.get("ai_confidence")
+            ai_risk = ai_result.get("risk_level")
+            ai_text = ai_result.get("ai_reasoning")
+
+            if ai_conf is not None or ai_risk is not None:
+                cur.execute("""
+                    INSERT INTO findings
+                        (id, tenant_id, case_id, bundle_id, confidence,
+                         rule_trace, signature, kid, created_at,
+                         ai_confidence, risk_level, ai_reasoning)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s,
+                            %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, (
+                    finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
+                    SC001_CONFIDENCE, json.dumps(rule_trace),
+                    finding_sig, finding_kid, now,
+                    ai_conf, ai_risk, ai_text,
+                ))
+            else:
+                # No Groq AI available — insert without AI columns (avoids NOT NULL issues)
+                cur.execute("""
+                    INSERT INTO findings
+                        (id, tenant_id, case_id, bundle_id, confidence,
+                         rule_trace, signature, kid, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, (
+                    finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
+                    SC001_CONFIDENCE, json.dumps(rule_trace),
+                    finding_sig, finding_kid, now,
+                ))
 
             # INSERT decision_proposal with reasoning_trace_id + governance_envelope + action_intent_id
             cur.execute("""
