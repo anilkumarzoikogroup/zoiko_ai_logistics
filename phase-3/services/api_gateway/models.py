@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Any
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -53,6 +53,9 @@ class AnalyzeRequest(BaseModel):
     proposed_action: str  = "CREDIT_MEMO"
     amount:          float = 0.0
     currency:        str   = "USD"
+    carrier:         str   = ""
+    route:           str   = ""
+    contract_rate:   float = 0.0
 
 
 class AnalyzeResponse(BaseModel):
@@ -63,6 +66,25 @@ class AnalyzeResponse(BaseModel):
     amount:          float
     currency:        str
     tenant_id:       str
+
+
+class FindingItem(BaseModel):
+    finding_id:      str
+    bundle_id:       str
+    confidence:      float
+    ai_confidence:   Optional[float] = None
+    risk_level:      Optional[str]   = None
+    ai_reasoning:    Optional[str]   = None
+    proposed_action: str
+    amount:          float
+    currency:        str
+    created_at:      Optional[Any]   = None
+
+
+class GetFindingsResponse(BaseModel):
+    case_id:   str
+    tenant_id: str
+    findings:  List[FindingItem]
 
 
 # ── Governance ────────────────────────────────────────────────────────────────
