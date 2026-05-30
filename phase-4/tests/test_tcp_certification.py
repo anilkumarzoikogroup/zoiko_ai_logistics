@@ -35,10 +35,15 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="module")
 def db_url():
-    import os
+    import os, psycopg2
     url = os.getenv("DB_URL")
     if not url:
-        pytest.skip("DB_URL not set — skipping TCP certification integration tests")
+        pytest.skip("DB_URL not set — skipping TCP certification tests")
+    try:
+        conn = psycopg2.connect(url, connect_timeout=3)
+        conn.close()
+    except Exception:
+        pytest.skip("PostgreSQL not reachable — skipping TCP certification tests")
     return url
 
 
