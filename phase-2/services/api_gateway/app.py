@@ -2111,6 +2111,51 @@ Enclosures:
     }
 
 
+# ── Send dispute letter via email ─────────────────────────────────────────────
+
+@v1_router.post("/cases/{case_id}/dispute-letter/send", tags=["ui"])
+def send_dispute_letter_email(
+    case_id: str,
+    body: dict,
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """
+    Send the dispute letter to a carrier email address.
+    Body: { recipient_email, letter_text, carrier, overcharge, currency }
+    Uses SendGrid sandbox by default (SENDGRID_SANDBOX=false to send for real).
+    """
+    recipient  = body.get("recipient_email", "").strip()
+    letter     = body.get("letter_text", "").strip()
+    carrier    = body.get("carrier", "Carrier")
+    overcharge = float(body.get("overcharge", 0) or 0)
+    currency   = body.get("currency", "INR")
+
+    if not recipient:
+        raise HTTPException(status_code=422, detail="recipient_email is required")
+    if not letter:
+        raise HTTPException(status_code=422, detail="letter_text is required — generate the letter first")
+
+    try:
+        from shared.email_sender import send_dispute_letter as _send_dl
+        _send_dl(
+            to_email   = recipient,
+            carrier    = carrier,
+            case_id    = case_id,
+            letter_text= letter,
+            overcharge = overcharge,
+            currency   = currency,
+        )
+        sandbox = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
+        return {
+            "sent": True,
+            "to":   recipient,
+            "sandbox": sandbox,
+            "message": f"Letter {'validated (sandbox — not delivered)' if sandbox else 'sent'} to {recipient}",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Email send failed: {exc}")
+
+
 # ── Full pipeline: Phase 2 + Phase 3 inline ────────────────────────────────────
 
 def _run_evidence_and_reasoning(
