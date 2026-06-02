@@ -15,10 +15,20 @@ cur = conn.cursor()
 cur.execute("SELECT id FROM tenants WHERE status='ACTIVE' ORDER BY created_at LIMIT 1")
 row = cur.fetchone()
 if not row:
-    print("ERROR: No tenant found.")
-    exit(1)
-
-tenant_id = row[0]
+    # No tenant exists — create the default one automatically
+    print("No tenant found — creating default tenant...")
+    tenant_id = str(uuid.uuid4())
+    company   = os.getenv("ZOIKO_COMPANY_NAME", "Zoiko")
+    slug      = company.lower().replace(" ", "-")
+    cur.execute(
+        "INSERT INTO tenants (id, display_name, slug, status) VALUES (%s, %s, %s, 'ACTIVE')"
+        " ON CONFLICT DO NOTHING",
+        (tenant_id, company, slug),
+    )
+    print(f"  Created tenant: {company} (id={tenant_id})")
+else:
+    tenant_id = str(row[0])
+    print(f"  Using existing tenant: {tenant_id}")
 
 USERS = [
     (os.getenv("ZOIKO_ADMIN_EMAIL",    "admin@zoiko.com"),   os.getenv("ZOIKO_ADMIN_NAME",    "Platform Admin"),  "admin",   os.getenv("ZOIKO_ADMIN_PASSWORD", "changeme123")),

@@ -22,7 +22,7 @@ except Exception:
 with open(".env_tmp.bat", "w", encoding="ascii", errors="replace") as out:
     for k, v in vals.items():
         if v is not None:
-            # Write safe ASCII set command
-            out.write(f"set {k}={v}\r\n")
+            # Quote value to prevent & in URLs being treated as command separator
+            out.write(f'set "{k}={v}"\r\n')
 
 print("OK")
