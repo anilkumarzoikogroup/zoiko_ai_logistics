@@ -1170,6 +1170,10 @@ def ui_create_proposal(
     body: UIProposalRequest,
     claims: ZoikoClaims = Depends(get_claims),
 ):
+    try:
+        case_uuid = uuid.UUID(case_id)  # validate format — returns clean 422 on bad UUID
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid case_id format: '{case_id}'")
     tid = claims.tenant_id
     now = datetime.now(timezone.utc)
 
@@ -1532,6 +1536,8 @@ def ui_download_acr(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 @v1_router.get("/admin/db-stats", tags=["admin"])
 def admin_db_stats(claims: ZoikoClaims = Depends(get_claims)):
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Admin role required")
     rows = q("""
         SELECT relname AS table_name, n_live_tup AS row_count
         FROM   pg_stat_user_tables
@@ -1550,7 +1556,10 @@ async def parse_invoice_file(
 ):
     """Parse a PDF invoice using Groq AI (fallback: regex)."""
     import re as _re2
+    MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB default
     content = await file.read()
+    if len(content) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_FILE_BYTES // 1024 // 1024} MB.")
     text = ""
 
     # ── Step 1: Extract text from PDF ────────────────────────────────────────
@@ -1601,9 +1610,12 @@ async def parse_invoice_file(
             )
             raw = chat.choices[0].message.content.strip()
             # Extract JSON from response
-            json_match = _re2.search(r'\{.*\}', raw, _re2.DOTALL)
+            json_match = _re2.search(r'\{.*?\}', raw, _re2.DOTALL)  # non-greedy: first JSON object only
             if json_match:
-                parsed = json.loads(json_match.group())
+                try:
+                    parsed = json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    parsed = {}
                 carrier  = str(parsed.get("carrier", "")).strip()
                 amount   = float(parsed.get("total_amount", 0) or 0)
                 currency = str(parsed.get("currency", "INR")).strip().upper() or "INR"
@@ -1765,8 +1777,11 @@ async def batch_submit_invoices(
     for f in files:
         item = {"filename": f.filename, "status": "pending", "case_id": None, "error": None}
         try:
-            # Step 1 — parse the file (reuse single parse logic)
+            # Step 1 — parse the file with size guard
+            _max_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
             content = await f.read()
+            if len(content) > _max_bytes:
+                raise ValueError(f"File {f.filename} too large ({len(content)//1024}KB > {_max_bytes//1024//1024}MB limit)")
             text = ""
             try:
                 import pdfplumber, io
@@ -1876,7 +1891,10 @@ async def extract_contract_rates(
     if not groq_key:
         raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured. Set it in .env to use AI contract extraction.")
 
+    MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB default
     content = await file.read()
+    if len(content) > MAX_FILE_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_FILE_BYTES // 1024 // 1024} MB.")
     text = ""
     try:
         import pdfplumber, io
@@ -1915,11 +1933,14 @@ async def extract_contract_rates(
 
         # Extract JSON array from response
         import re as _re3
-        arr_match = _re3.search(r'\[.*\]', raw, _re3.DOTALL)
+        arr_match = _re3.search(r'\[.*?\]', raw, _re3.DOTALL)  # non-greedy: first JSON array only
         if not arr_match:
             raise HTTPException(status_code=422, detail="AI could not identify rate entries in this document.")
 
-        rates = json.loads(arr_match.group())
+        try:
+            rates = json.loads(arr_match.group())
+        except json.JSONDecodeError as _je:
+            raise HTTPException(status_code=422, detail=f"AI returned malformed JSON: {_je}")
 
         # Validate and sanitise each rate
         valid_types = {"fuel_charge", "accessorial", "base_rate", "surcharge"}
