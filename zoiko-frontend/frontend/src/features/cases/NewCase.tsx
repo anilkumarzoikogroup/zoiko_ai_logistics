@@ -67,8 +67,14 @@ export default function NewCase() {
       toast.success("Case submitted", `Overcharge detection pipeline started for ${form.carrier}`);
       nav(`/cases/${c.id}`);
     },
-    onError: () => {
-      toast.error("Submission failed", "Make sure the backend is running on port 8000");
+    onError: (err: unknown) => {
+      const e = err as { response?: { status?: number; data?: { detail?: string } }; message?: string };
+      const detail = e?.response?.data?.detail;
+      const status = e?.response?.status;
+      const msg = typeof detail === "string" ? detail
+                : typeof detail === "object" ? JSON.stringify(detail)
+                : e?.message ?? "Network error — backend may be down";
+      toast.error(`Submission failed (${status ?? "no response"})`, msg);
     },
   });
 
