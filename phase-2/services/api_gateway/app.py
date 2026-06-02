@@ -142,13 +142,15 @@ async def lifespan(app):
 
 app = FastAPI(title="Zoiko Logistics API Gateway", version="2.0.0", lifespan=lifespan)
 
-_cors_origins_env = os.getenv("ZOIKO_CORS_ORIGINS", "http://localhost:5173")
+_cors_origins_env = os.getenv("ZOIKO_CORS_ORIGINS", "*")
 _cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+# allow_credentials must be False when using wildcard origin
+_allow_creds = "*" not in _cors_origins
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
-    allow_credentials=True,
+    allow_credentials=_allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
