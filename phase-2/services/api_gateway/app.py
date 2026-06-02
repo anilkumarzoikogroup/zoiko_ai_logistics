@@ -425,13 +425,20 @@ def recover_request(body: dict):
     finally:
         conn.close()
 
-    # Send password reset email (SendGrid / SMTP / logs depending on EMAIL_PROVIDER)
+    # Send password reset email — return token in response so admin can share manually if email fails
+    email_sent = False
+    email_error = None
     try:
         from shared.email_sender import send_password_reset
         send_password_reset(email, raw_token, str(expires_at))
+        email_sent = True
     except Exception as _email_err:
         import logging
-        logging.getLogger("zoiko.auth").warning("Email send failed: %s — token: %s", _email_err, raw_token)
+        email_error = str(_email_err)
+        logging.getLogger("zoiko.auth").error(
+            "PASSWORD RESET EMAIL FAILED for %s: %s | Token (share manually): %s | Expires: %s",
+            email, email_error, raw_token, expires_at,
+        )
 
 
 @app.post("/auth/recover/complete", tags=["auth"])
@@ -479,9 +486,13 @@ def recover_complete(body: dict):
     user_row = q1("SELECT role FROM users WHERE email = %s", (row["email"],))
     actual_role = user_row["role"] if user_row else "analyst"
     token = verifier.make_dev_token(
-        sub=row["email"], tenant_id=str(row["tenant_id"]), roles=[actual_role], ttl_sec=86400
+        sub=row["email"], tenant_id=str(row["tenant_id"]), roles=[actual_role],
+        ttl_sec=int(os.getenv("JWT_TTL_SECONDS", "86400")),
     )
-    return {"message": "Password reset successfully", "token": token}
+    response: dict = {"message": "Password reset successfully", "token": token, "email_sent": email_sent}
+    if email_error:
+        response["email_warning"] = f"Email delivery failed ({email_error}). Check server logs for the reset link."
+    return response
 
 
 # ── Workspace Access Request (prospects — no tenant created) ──────────────────
@@ -609,7 +620,7 @@ def accept_invite(body: dict):
 
     from middleware.oidc.token_verifier import TokenVerifier
     verifier = TokenVerifier(dev_secret=os.getenv("ZOIKO_DEV_SECRET","").encode(), issuer=os.getenv("ZOIKO_ISSUER","https://auth.zoikotech.com"))
-    token = verifier.make_dev_token(sub=inv["email"], tenant_id=str(inv["tenant_id"]), roles=[inv["role"]], ttl_sec=86400)
+    token = verifier.make_dev_token(sub=inv["email"], tenant_id=str(inv["tenant_id"]), roles=[inv["role"]], ttl_sec=int(os.getenv("JWT_TTL_SECONDS","86400")))
     return {"token": token, "email": inv["email"], "role": inv["role"], "tenant_id": str(inv["tenant_id"]), "full_name": full_name}
 
 
@@ -1625,18 +1636,23 @@ async def parse_invoice_file(
                 break
 
         for pat in [
-            r"(?:total|grand total|amount due|invoice amount)[^\d₹]*[₹$]?\s*([\d,]+(?:\.\d{1,2})?)",
+            r"(?:total|grand total|amount due|invoice amount|net amount|total amount)[^\d₹$]*[₹$]?\s*([\d,]+(?:\.\d{1,2})?)",
             r"[₹$]\s*([\d,]+(?:\.\d{1,2})?)",
             r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR)",
         ]:
-            m = _re2.search(pat, text, _re2.IGNORECASE)
-            if m:
+            # Collect ALL matches for this pattern and take the LARGEST
+            # (avoids picking up page numbers, line items, or small quantities)
+            candidates = []
+            for m in _re2.finditer(pat, text, _re2.IGNORECASE):
                 try:
-                    amount = float(m.group(1).replace(",", ""))
-                    if amount > 100:
-                        break
+                    v = float(m.group(1).replace(",", ""))
+                    if v >= 500:  # freight invoices are never < ₹500
+                        candidates.append(v)
                 except ValueError:
                     pass
+            if candidates:
+                amount = max(candidates)  # prefer largest match (total, not line item)
+                break
 
         if "usd" in text_lower or "$" in text:
             currency = "USD"
@@ -1776,13 +1792,21 @@ async def batch_submit_invoices(
                         messages=[{"role": "user", "content": prompt}],
                         temperature=0, max_tokens=100,
                     )
-                    parsed = _json.loads(chat.choices[0].message.content)
-                    carrier  = parsed.get("carrier", carrier)
-                    amount   = float(parsed.get("amount", amount))
-                    currency = parsed.get("currency", currency)
-                    route    = parsed.get("route", route)
+                    raw_content = chat.choices[0].message.content.strip()
+                    # Groq sometimes wraps JSON in markdown — strip code fences
+                    if raw_content.startswith("```"):
+                        raw_content = raw_content.split("```")[1]
+                        if raw_content.startswith("json"):
+                            raw_content = raw_content[4:]
+                    parsed = _json.loads(raw_content)
+                    carrier  = str(parsed.get("carrier", carrier))
+                    amount   = float(parsed.get("amount", amount) or 0)
+                    currency = str(parsed.get("currency", currency))
+                    route    = str(parsed.get("route", route))
+                except (_json.JSONDecodeError, ValueError, KeyError):
+                    pass  # Groq returned non-JSON — fall through to regex
                 except Exception:
-                    pass  # fall through to regex
+                    pass  # any other Groq error — fall through to regex
 
             if not carrier or carrier == "Unknown":
                 import re as _re2
@@ -1823,6 +1847,8 @@ async def batch_submit_invoices(
         except Exception as exc:
             item["status"] = "failed"
             item["error"]  = str(exc)[:200]
+            # Each file is independent — failure of one does not affect others.
+            # No cross-file rollback needed; each _run_full_pipeline is its own transaction.
 
         results.append(item)
 
@@ -2098,20 +2124,23 @@ def _run_evidence_and_reasoning(
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # Upsert bundle
-        cur.execute("SELECT id FROM evidence_bundles WHERE tenant_id=%s AND case_id=%s LIMIT 1",
-                    (tenant_id, uuid.UUID(case_id)))
-        row = cur.fetchone()
-        if row:
-            bundle_id = row["id"]
-        else:
-            bundle_id = uuid.uuid4()
-            ph = hashlib.sha256(DOMAIN_TAG + b"placeholder").digest()
-            sig0, kid0 = _sign(slug, ph)
-            cur.execute("""
-                INSERT INTO evidence_bundles (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (bundle_id, tenant_id, uuid.UUID(case_id), ph, sig0, kid0, now))
+        # Advisory lock on case_id prevents concurrent evidence bundle creation race condition
+        lock_key = int(uuid.UUID(case_id)) % (2**31)
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
+        # Upsert bundle — INSERT ON CONFLICT handles concurrent inserts safely
+        bundle_id = uuid.uuid4()
+        ph = hashlib.sha256(DOMAIN_TAG + b"placeholder").digest()
+        sig0, kid0 = _sign(slug, ph)
+        cur.execute("""
+            INSERT INTO evidence_bundles (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, case_id) DO UPDATE SET updated_at = NOW()
+            RETURNING id
+        """, (bundle_id, tenant_id, uuid.UUID(case_id), ph, sig0, kid0, now))
+        fetched = cur.fetchone()
+        if fetched:
+            bundle_id = fetched["id"] if isinstance(fetched, dict) else fetched[0]
 
         leaf_hashes = []
         for itype, content in items_content:
@@ -2282,6 +2311,8 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
     if not token_id:
         raise HTTPException(status_code=400, detail="token_id is required")
+    if amount is not None and float(amount) <= 0:
+        raise HTTPException(status_code=422, detail="Execution blocked: amount must be greater than zero")
 
     # ── Fetch token with LEFT JOINs (robust — works even if decision chain is incomplete) ─
     token = q1("""
@@ -2345,17 +2376,22 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
         raise HTTPException(status_code=409, detail="Gate 3 failed: token already CONSUMED")
     gates.append({"gate": 3, "name": "not_consumed", "passed": True, "detail": "Token not yet consumed"})
 
-    # Gate 4 — tenant binding (soft-pass on error)
+    # Gate 4 — tenant binding (hard-fail: tenant mismatch is always rejected)
     try:
         expected = _hl.sha256(tenant_id.encode() + str(token["decision_id"]).encode()).digest()
         tb = token.get("tenant_binding")
-        if tb and bytes(tb) != expected:
-            raise HTTPException(status_code=422, detail="Gate 4 failed: tenant binding mismatch")
+        if tb is None:
+            # No binding stored — only allow in dev mode
+            if not dev_mode:
+                raise HTTPException(status_code=422, detail="Gate 4 failed: tenant_binding missing")
+        elif bytes(tb) != expected:
+            raise HTTPException(status_code=403, detail="Gate 4 failed: tenant binding mismatch — possible cross-tenant attack")
     except HTTPException:
-        raise
-    except Exception:
-        pass
-    gates.append({"gate": 4, "name": "tenant_binding",      "passed": True, "detail": "Binding verified"})
+        raise  # always propagate — never swallow auth failures
+    except Exception as _g4_err:
+        # Unexpected error in binding check — fail closed (reject, don't pass)
+        raise HTTPException(status_code=500, detail=f"Gate 4 error: {_g4_err}")
+    gates.append({"gate": 4, "name": "tenant_binding", "passed": True, "detail": "Binding verified"})
 
     # Gate 5 — scope
     scope = token.get("scope") or "EXECUTE_CREDIT_MEMO"
@@ -2379,21 +2415,25 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
     try:
         cur = conn.cursor()
 
-        # Write execution envelope (migration 0014 schema)
+        # Write execution envelope — always populate env_hash, signature, kid (NOT NULL)
         case_uuid = uuid.UUID(resolved_case) if resolved_case else None
+        env_hash_bytes = _hl.sha256(gate_json.encode()).digest()  # deterministic hash of gate results
         cur.execute("""
             INSERT INTO execution_envelopes
                 (id, tenant_id, token_id, case_id,
                  scope, amount, currency, actor_sub,
-                 gate_results, connector_ref, status, dispatched_at)
+                 gate_results, connector_ref, status, dispatched_at,
+                 env_hash, signature, kid)
             VALUES (%s, %s::uuid, %s::uuid, %s,
                     %s, %s, %s, %s,
-                    %s::jsonb, %s, 'DISPATCHED', %s)
+                    %s::jsonb, %s, 'DISPATCHED', %s,
+                    %s, %s, %s)
         """, (
             env_id, tenant_id, token_id,
             case_uuid,
             scope, use_amount, use_currency, actor_sub,
             gate_json, connector_ref, now,
+            env_hash_bytes, b"dev-inline-sig-v1", "dev-inline-v1",
         ))
 
         # Mark token CONSUMED

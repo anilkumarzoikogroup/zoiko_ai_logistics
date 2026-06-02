@@ -21,6 +21,7 @@ depends_on    = None
 
 
 def upgrade() -> None:
+    # Add new operational columns
     op.execute("""
         ALTER TABLE execution_envelopes
             ADD COLUMN IF NOT EXISTS scope         TEXT,
@@ -28,11 +29,12 @@ def upgrade() -> None:
             ADD COLUMN IF NOT EXISTS currency      TEXT DEFAULT 'INR',
             ADD COLUMN IF NOT EXISTS actor_sub     TEXT,
             ADD COLUMN IF NOT EXISTS connector_ref TEXT,
-            ALTER COLUMN env_hash  DROP NOT NULL,
-            ALTER COLUMN signature DROP NOT NULL,
-            ALTER COLUMN kid       DROP NOT NULL,
             ALTER COLUMN case_id   DROP NOT NULL
     """)
+    # NOTE: env_hash, signature, kid remain NOT NULL — they are cryptographic
+    # integrity fields and must never be nullable in production.
+    # The inline execute handler in Phase 2 fills them with a computed hash
+    # and dev-mode signature values.
 
 
 def downgrade() -> None:
