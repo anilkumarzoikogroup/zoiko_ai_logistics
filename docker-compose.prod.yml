@@ -1,0 +1,137 @@
+version: "3.9"
+
+# Production stack — secrets come from .env (never hardcoded)
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       zoiko
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}        # from .env — no default
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [zoiko]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks: [zoiko]
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: >
+      sh -c "cd /app/phase-0/db && python -m alembic upgrade head"
+    environment:
+      DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [zoiko]
+
+  seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python /app/seed_users.py
+    environment:
+      DB_URL:                postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+      ZOIKO_ADMIN_EMAIL:     ${ZOIKO_ADMIN_EMAIL}
+      ZOIKO_ADMIN_PASSWORD:  ${ZOIKO_ADMIN_PASSWORD}
+      ZOIKO_ADMIN_NAME:      ${ZOIKO_ADMIN_NAME}
+    depends_on: [migrate]
+    networks: [zoiko]
+
+  phase2:
+    build:
+      context: phase-2
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_URL:                   postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+      REDIS_URL:                redis://:${REDIS_PASSWORD}@redis:6379/0
+      KAFKA_BOOTSTRAP:          ${KAFKA_BOOTSTRAP:-}
+      ZOIKO_DEV_SECRET:         ${ZOIKO_DEV_SECRET}
+      ZOIKO_ISSUER:             ${ZOIKO_ISSUER}
+      ZOIKO_CORS_ORIGINS:       ${ZOIKO_CORS_ORIGINS}
+      ZOIKO_FF_SC_001_ENABLED:  "*"
+      ZOIKO_RATE_LIMIT_ENABLED: "true"
+      TOKEN_TTL_MINUTES:        ${TOKEN_TTL_MINUTES:-15}
+      GROQ_API_KEY:             ${GROQ_API_KEY:-}
+      GROQ_MODEL:               ${GROQ_MODEL:-llama-3.1-8b-instant}
+      EMAIL_PROVIDER:           ${EMAIL_PROVIDER:-none}
+      SENDGRID_API_KEY:         ${SENDGRID_API_KEY:-}
+      SMTP_HOST:                ${SMTP_HOST:-}
+      SMTP_PORT:                ${SMTP_PORT:-587}
+      SMTP_USER:                ${SMTP_USER:-}
+      SMTP_PASSWORD:            ${SMTP_PASSWORD:-}
+      EMAIL_FROM:               ${EMAIL_FROM:-noreply@zoikotech.com}
+      APP_URL:                  ${APP_URL:-http://localhost:5173}
+      PYTHONIOENCODING:         utf-8
+    depends_on: [seed]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [zoiko]
+
+  phase3:
+    build:
+      context: phase-3
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_URL:           postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+      REDIS_URL:        redis://:${REDIS_PASSWORD}@redis:6379/0
+      ZOIKO_DEV_SECRET: ${ZOIKO_DEV_SECRET}
+      ZOIKO_ISSUER:     ${ZOIKO_ISSUER}
+      PYTHONIOENCODING: utf-8
+    depends_on: [phase2]
+    networks: [zoiko]
+
+  phase4:
+    build:
+      context: phase-4
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DB_URL:           postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+      REDIS_URL:        redis://:${REDIS_PASSWORD}@redis:6379/0
+      ZOIKO_DEV_SECRET: ${ZOIKO_DEV_SECRET}
+      ZOIKO_ISSUER:     ${ZOIKO_ISSUER}
+      PYTHONIOENCODING: utf-8
+    depends_on: [phase2]
+    networks: [zoiko]
+
+  frontend:
+    build:
+      context: zoiko-frontend/frontend
+      dockerfile: Dockerfile
+      target: prod
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on: [phase2]
+    networks: [zoiko]
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  zoiko:
+    driver: bridge

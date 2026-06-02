@@ -29,10 +29,10 @@ export default function ExecuteRecovery() {
   const reconciledCases = cases?.filter(c => ["OUTCOME_RECORDED", "CLOSED"].includes(c.state)) ?? [];
   const activeTokens    = tokens ?? [];
 
-  const approvedAmt   = [...pendingCases, ...executedCases].reduce((s, c) => s + c.diff, 0) || 480000;
-  const executedAmt   = executedCases.reduce((s, c) => s + c.diff, 0) || 320000;
-  const reconciledAmt = reconciledCases.reduce((s, c) => s + c.diff, 0) || 270000;
-  const pendingAmt    = pendingCases.reduce((s, c) => s + c.diff, 0)   || 160000;
+  const approvedAmt   = [...pendingCases, ...executedCases].reduce((s, c) => s + c.diff, 0);
+  const executedAmt   = executedCases.reduce((s, c) => s + c.diff, 0);
+  const reconciledAmt = reconciledCases.reduce((s, c) => s + c.diff, 0);
+  const pendingAmt    = pendingCases.reduce((s, c) => s + c.diff, 0);
 
   const executeMut = useMutation({
     mutationFn: ({ tokenId, caseId, amount, currency }: { tokenId: string; caseId: string; amount: number; currency: string }) =>
@@ -72,7 +72,7 @@ export default function ExecuteRecovery() {
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Approved</p>
             <p className="mt-2 text-2xl font-bold text-purple-700">{formatCurrency(approvedAmt)}</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <CheckCircle2 className="h-3 w-3" /> {(pendingCases.length + executedCases.length) || 47} cases
+              <CheckCircle2 className="h-3 w-3" /> {pendingCases.length + executedCases.length} cases
             </p>
           </CardContent>
         </Card>
@@ -81,7 +81,7 @@ export default function ExecuteRecovery() {
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Executed</p>
             <p className="mt-2 text-2xl font-bold text-blue-700">{formatCurrency(executedAmt)}</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <Zap className="h-3 w-3" /> {executedCases.length || 30} cases
+              <Zap className="h-3 w-3" /> {executedCases.length} cases
             </p>
           </CardContent>
         </Card>
@@ -90,7 +90,7 @@ export default function ExecuteRecovery() {
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Reconciled</p>
             <p className="mt-2 text-2xl font-bold text-emerald-700">{formatCurrency(reconciledAmt)}</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <Lock className="h-3 w-3" /> {reconciledCases.length || 27} ACR locked
+              <Lock className="h-3 w-3" /> {reconciledCases.length} ACR locked
             </p>
           </CardContent>
         </Card>
@@ -99,7 +99,7 @@ export default function ExecuteRecovery() {
             <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">Pending Execution</p>
             <p className="mt-2 text-2xl font-bold text-amber-700">{formatCurrency(pendingAmt)}</p>
             <p className="mt-1 text-xs text-muted-foreground flex items-center gap-1">
-              <Clock className="h-3 w-3" /> {pendingCases.length || 17} awaiting 8-gate
+              <Clock className="h-3 w-3" /> {pendingCases.length} awaiting 8-gate
             </p>
           </CardContent>
         </Card>

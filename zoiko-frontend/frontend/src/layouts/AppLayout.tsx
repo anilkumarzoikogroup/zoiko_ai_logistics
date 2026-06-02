@@ -1,4 +1,6 @@
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
+import { useAppDispatch, useAppSelector } from "@/store";
+import { logout as logoutAction } from "@/store/authSlice";
 import { cn } from "@/utils/cn";
 import {
   LayoutDashboard, FileText, FolderOpen,
@@ -7,7 +9,7 @@ import {
   BarChart3, TrendingUp,
   Users, Settings, Building2, Bell, Search,
   ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
-  Download, Zap, CheckSquare,
+  Download, Zap, CheckSquare, FlaskConical,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -17,57 +19,55 @@ const ROLE_COLORS: Record<string, string> = {
   admin:   "from-slate-500 to-slate-700",
 };
 
-type NavEntry = { label: string; icon: React.ElementType; to: string; badge?: string };
+type NavEntry = { label: string; icon: React.ElementType; to: string; badge?: string; roles?: string[] };
+type NavGroup = { group: string; roles?: string[]; items: NavEntry[] };
 
-const NAV: { group: string; items: NavEntry[] }[] = [
+const NAV: NavGroup[] = [
   {
     group: "OPERATIONS",
     items: [
-      { label: "Dashboard",        icon: LayoutDashboard, to: "/"              },
-      { label: "Invoices & Cases", icon: FolderOpen,      to: "/cases"         },
-      { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"     },
-      { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions" },
-      { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"  },
-      { label: "Carriers",         icon: Truck,           to: "/payment-control"},
+      { label: "Dashboard",        icon: LayoutDashboard, to: "/"                  },
+      { label: "Invoices & Cases", icon: FolderOpen,      to: "/cases"             },
+      { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"         },
+      { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions"  },
+      { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"      },
+      { label: "Carriers",         icon: Truck,           to: "/payment-control"   },
     ],
   },
   {
     group: "GOVERNANCE",
     items: [
-      { label: "Analyst Review",   icon: BookOpen,     to: "/analyst"   },
-      { label: "Manager Approval", icon: ShieldCheck,  to: "/manager"   },
-      { label: "Execute Recovery", icon: Zap,          to: "/execute"   },
-      { label: "Gov. Tokens",      icon: Key,          to: "/execute"   },
-      { label: "Audit & ACR",      icon: Archive,      to: "/crypto"    },
-      { label: "ACR Verifier",     icon: ShieldCheck,  to: "/verifier"  },
-      { label: "Audit Trail",      icon: ClipboardList,to: "/alerts"    },
-    ],
-  },
-  {
-    group: "FINANCIALS",
-    items: [
-      { label: "Recovery & Payments", icon: CreditCard, to: "/payment-control" },
+      { label: "Analyst Review",   icon: BookOpen,     to: "/analyst", roles: ["analyst","admin"]         },
+      { label: "Manager Approval", icon: ShieldCheck,  to: "/manager", roles: ["manager","admin"]         },
+      { label: "Execute Recovery", icon: Zap,          to: "/execute", roles: ["manager","admin"]         },
+      { label: "Gov. Tokens",      icon: Key,          to: "/execute", roles: ["manager","admin"]         },
+      { label: "Audit & ACR",      icon: Archive,      to: "/crypto"                                      },
+      { label: "ACR Verifier",     icon: ShieldCheck,  to: "/verifier"                                    },
+      { label: "Audit Trail",      icon: ClipboardList,to: "/alerts"                                      },
     ],
   },
   {
     group: "ANALYTICS",
     items: [
-      { label: "Performance",    icon: BarChart3,  to: "/performance" },
-      { label: "Analytics",      icon: TrendingUp, to: "/analytics"   },
+      { label: "Performance", icon: BarChart3,  to: "/performance" },
+      { label: "Analytics",   icon: TrendingUp, to: "/analytics"   },
     ],
   },
   {
     group: "ADMIN",
+    roles: ["admin"],
     items: [
-      { label: "Users & Roles", icon: Users,     to: "/users"     },
-      { label: "Tenants / DB",  icon: Building2, to: "/database"  },
-      { label: "Settings",      icon: Settings,  to: "/settings"  },
+      { label: "Tenants",       icon: Building2,    to: "/tenants"  },
+      { label: "Users & Roles", icon: Users,        to: "/users"    },
+      { label: "DB Stats",      icon: Building2,    to: "/database" },
+      { label: "Settings",      icon: Settings,     to: "/settings" },
+      { label: "Stub Viewer",   icon: FlaskConical, to: "/stubs", badge: "DEV" },
     ],
   },
 ];
 
 function NavItem({ to, label, icon: Icon, collapsed, badge }: {
-  to: string; label: string; icon: React.ElementType; collapsed: boolean; badge?: string;
+  to: string; label: string; icon: React.ElementType; collapsed: boolean; badge?: string; roles?: string[];
 }) {
   return (
     <NavLink
@@ -96,11 +96,12 @@ function NavItem({ to, label, icon: Icon, collapsed, badge }: {
 export default function AppLayout() {
   const nav      = useNavigate();
   const location = useLocation();
-  const user     = localStorage.getItem("zoiko_user")   || "Admin";
-  const role     = localStorage.getItem("zoiko_role")   || "admin";
+  const dispatch = useAppDispatch();
+  const user     = useAppSelector(s => s.auth.user)  || "User";
+  const role     = useAppSelector(s => s.auth.role)  || "analyst"; // default to least-privilege
   const [collapsed, setCollapsed] = useState(false);
 
-  // Derive page title from current path
+  // Derive page title from current path (use all items regardless of role for title lookup)
   const allItems = NAV.flatMap(g => g.items);
   const activeItem = allItems.find(item =>
     item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to)
@@ -108,15 +109,11 @@ export default function AppLayout() {
   const pageTitle = activeItem?.label ?? "Dashboard";
 
   function handleLogout() {
-    localStorage.removeItem("zoiko_role");
-    localStorage.removeItem("zoiko_user");
-    localStorage.removeItem("zoiko_sub");
-    localStorage.removeItem("zoiko_tenant");
-    localStorage.removeItem("zoiko_jwt");
+    dispatch(logoutAction());
     nav("/login");
   }
 
-  const initials = user.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+  const initials = (user || "U").split(" ").map((w: string) => w[0] || "").join("").slice(0, 2).toUpperCase() || "U";
 
   return (
     <div className="flex h-screen bg-slate-100 overflow-hidden">
@@ -181,28 +178,32 @@ export default function AppLayout() {
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 space-y-4 px-2 scrollbar-thin">
-          {NAV.map(({ group, items }) => (
-            <div key={group}>
-              {!collapsed && (
-                <p className="px-3 mb-1.5 text-[9px] font-bold tracking-widest text-slate-600 uppercase">
-                  {group}
-                </p>
-              )}
-              {collapsed && <div className="h-px bg-slate-700/40 mx-2 mb-2 mt-1" />}
-              <div className="space-y-0.5">
-                {items.map(item => (
-                  <NavItem
-                    key={item.label + item.to}
-                    to={item.to}
-                    label={item.label}
-                    icon={item.icon}
-                    collapsed={collapsed}
-                    badge={item.badge}
-                  />
-                ))}
+          {NAV.filter(g => !g.roles || g.roles.includes(role)).map(({ group, items }) => {
+            const visibleItems = items.filter(i => !i.roles || i.roles.includes(role));
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={group}>
+                {!collapsed && (
+                  <p className="px-3 mb-1.5 text-[9px] font-bold tracking-widest text-slate-600 uppercase">
+                    {group}
+                  </p>
+                )}
+                {collapsed && <div className="h-px bg-slate-700/40 mx-2 mb-2 mt-1" />}
+                <div className="space-y-0.5">
+                  {visibleItems.map(item => (
+                    <NavItem
+                      key={item.label + item.to}
+                      to={item.to}
+                      label={item.label}
+                      icon={item.icon}
+                      collapsed={collapsed}
+                      badge={item.badge}
+                    />
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </nav>
 
         {/* Footer: user + collapse */}
@@ -297,7 +298,13 @@ export default function AppLayout() {
               </div>
               <div className="hidden lg:block">
                 <p className="text-xs font-semibold text-slate-700 leading-tight">{user}</p>
-                <p className="text-[10px] text-slate-400 capitalize">{role}</p>
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
+                  background: role==="admin" ? "#1e3a8a" : role==="manager" ? "#4c1d95" : "#064e3b",
+                  color: "#fff", textTransform: "uppercase", letterSpacing: "0.06em",
+                }}>
+                  {role}
+                </span>
               </div>
             </div>
           </div>

@@ -44,10 +44,11 @@ class OutboxRelay:
         published = 0
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            # Column is shipped_at (not published_at) in this schema
             cur.execute("""
                 SELECT id, tenant_id, topic, partition_key, payload, created_at
                 FROM   outbox
-                WHERE  published_at IS NULL
+                WHERE  shipped_at IS NULL
                 ORDER BY created_at ASC
                 LIMIT  %s
                 FOR UPDATE SKIP LOCKED
@@ -58,16 +59,13 @@ class OutboxRelay:
                 try:
                     self._publish_row(row)
                     cur.execute(
-                        "UPDATE outbox SET published_at=%s WHERE id=%s",
+                        "UPDATE outbox SET shipped_at=%s WHERE id=%s",
                         (datetime.now(timezone.utc), row["id"]),
                     )
                     published += 1
                 except Exception as exc:
                     log.error("Outbox relay failed for row %s: %s", row["id"], exc)
-                    cur.execute(
-                        "UPDATE outbox SET error=%s WHERE id=%s",
-                        (str(exc), row["id"]),
-                    )
+                    # No error column in this schema — log only, leave row unshipped for retry
             conn.commit()
         finally:
             conn.close()

@@ -56,7 +56,7 @@ echo.
 
 REM ── Open browser ────────────────────────────────────────────
 timeout /t 5 /nobreak >nul
-start "" "http://localhost:5173"
+start "" "http://localhost:5173/login"
 
 echo ============================================================
 echo  LIVE MODE

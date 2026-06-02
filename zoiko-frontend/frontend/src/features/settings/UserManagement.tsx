@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi, RegisterRequest } from "@/api/zoiko";
 import { useToast } from "@/hooks/useToast";
+import { useAppSelector } from "@/store";
 import { Users, Plus, ShieldCheck, Brain, Settings, X, CheckCircle2, KeyRound } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { api } from "@/api/client";
@@ -15,7 +16,7 @@ const ROLE_META = {
 export default function UserManagement() {
   const qc    = useQueryClient();
   const toast = useToast();
-  const role  = localStorage.getItem("zoiko_role");
+  const role  = useAppSelector(s => s.auth.role);
 
   const [showForm, setShowForm]   = useState(false);
   const [form, setForm]           = useState<RegisterRequest>({ email: "", password: "", full_name: "", role: "analyst" });

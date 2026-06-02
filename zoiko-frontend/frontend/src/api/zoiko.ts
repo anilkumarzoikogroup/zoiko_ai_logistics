@@ -56,7 +56,7 @@ export const zoikoApi = {
   // ---------- Dashboard ----------
   async getStats(): Promise<DashboardStats> {
     if (USE_MOCK) { await delay(); return mocks.mockStats; }
-    const { data } = await api.get<DashboardStats>("/stats");
+    const { data } = await api.get<DashboardStats>("/dashboard/stats");
     return data;
   },
 
@@ -231,20 +231,21 @@ export const zoikoApi = {
       if (c) { c.state = "DISPATCHED"; c.updated_at = new Date().toISOString(); }
       return { envelope_id: `env_${Date.now()}`, case_id: caseId, token_id: tokenId, gates_passed: 8, status: "DISPATCHED", dispatched_at: new Date().toISOString() };
     }
-    const { data } = await api4.post<ExecutionResult>("/execute", { token_id: tokenId, case_id: caseId, amount, currency });
+    // Uses Phase 2 gateway (port 8000) — no separate Phase 4 service needed
+    const { data } = await api.post<ExecutionResult>("/execute", { token_id: tokenId, case_id: caseId, amount, currency });
     return data;
   },
 
   // ---------- Phase 4 — Variances ----------
   async listVariances(caseId: string): Promise<VarianceRecord[]> {
     if (USE_MOCK) { await delay(); return []; }
-    const { data } = await api4.get<VarianceRecord[]>(`/cases/${caseId}/variances`);
+    const { data } = await api.get<VarianceRecord[]>(`/cases/${caseId}/variances`);
     return data;
   },
 
   async resolveVariance(caseId: string, varianceId: string, action: "RESOLVE" | "WAIVE"): Promise<VarianceRecord> {
     if (USE_MOCK) { await delay(300); return {} as VarianceRecord; }
-    const { data } = await api4.patch<VarianceRecord>(`/cases/${caseId}/variances/${varianceId}/resolve`, { action });
+    const { data } = await api.patch<VarianceRecord>(`/cases/${caseId}/variances/${varianceId}/resolve`, { action });
     return data;
   },
 
@@ -261,7 +262,7 @@ export const zoikoApi = {
 
   async downloadAcr(caseId: string): Promise<Blob> {
     if (USE_MOCK) { await delay(800); return new Blob(["mock acr zip"], { type: "application/zip" }); }
-    const response = await api4.get(`/cases/${caseId}/acr/download`, { responseType: "blob" });
+    const response = await api.get(`/cases/${caseId}/acr/download`, { responseType: "blob" });
     return response.data as Blob;
   },
 
@@ -312,4 +313,50 @@ export const zoikoApi = {
     const { data } = await api.get<{ table: string; rows: number }[]>("/admin/db-stats");
     return data;
   },
+
+  // ---------- Tenant management ----------
+  async listTenants(): Promise<TenantItem[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api.get<{ tenants: TenantItem[]; total: number }>("/admin/tenants");
+    return data.tenants;
+  },
+
+  async createTenant(req: TenantCreateRequest): Promise<TenantCreateResponse> {
+    if (USE_MOCK) {
+      await delay(600);
+      return { tenant_id: `t_${Date.now()}`, display_name: req.display_name, slug: req.slug,
+               status: "ACTIVE", admin_user_id: `u_${Date.now()}`, admin_email: req.admin_email,
+               created_at: new Date().toISOString() };
+    }
+    const { data } = await api.post<TenantCreateResponse>("/admin/tenants", req);
+    return data;
+  },
 };
+
+// ── Tenant types ──────────────────────────────────────────────────────────────
+export interface TenantItem {
+  tenant_id:    string;
+  display_name: string;
+  slug:         string;
+  status:       string;
+  user_count:   number;
+  created_at:   string;
+}
+
+export interface TenantCreateRequest {
+  display_name:   string;
+  slug:           string;
+  admin_email:    string;
+  admin_name:     string;
+  admin_password: string;
+}
+
+export interface TenantCreateResponse {
+  tenant_id:     string;
+  display_name:  string;
+  slug:          string;
+  status:        string;
+  admin_user_id: string;
+  admin_email:   string;
+  created_at:    string;
+}

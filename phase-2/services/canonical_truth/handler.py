@@ -58,18 +58,31 @@ class CanonicalHandler:
         try:
             cur = conn.cursor()
 
+            # Fetch predecessor hash — the canonical_hash of the most recent
+            # existing row for this (tenant_id, invoice_number). NULL for first version.
+            cur.execute("""
+                SELECT canonical_hash FROM canonical_invoices
+                WHERE  tenant_id = %s AND invoice_number = %s
+                ORDER  BY created_at DESC
+                LIMIT  1
+            """, (tenant_id, invoice_number))
+            pred_row = cur.fetchone()
+            predecessor_version_hash = bytes(pred_row[0]) if pred_row else None
+
             # UNIQUE (tenant_id, invoice_number) — idempotent upsert
             cur.execute("""
                 INSERT INTO canonical_invoices
                     (id, tenant_id, source_record_id, invoice_number, carrier_id,
-                     total_amount, currency, canonical_hash, signature, kid, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     total_amount, currency, canonical_hash, signature, kid,
+                     predecessor_version_hash, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, invoice_number) DO NOTHING
                 RETURNING id
             """, (
                 inv_id, tenant_id, source_record_id,
                 invoice_number, carrier_id, total_amount, currency,
-                canonical_hash, signature, kid, now,
+                canonical_hash, signature, kid,
+                predecessor_version_hash, now,
             ))
             row = cur.fetchone()
             if row is None:

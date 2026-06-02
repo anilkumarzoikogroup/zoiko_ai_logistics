@@ -152,3 +152,34 @@ class ContractRateRequest(BaseModel):
     currency:     str   = "INR"
     effective_on: str   = "2025-01-01"   # ISO date string
     expires_on:   str | None = None
+
+
+# ── Execution request ─────────────────────────────────────────────────────────
+
+class ExecuteRequest(BaseModel):
+    token_id: str
+    case_id:  Optional[str]   = None
+    amount:   Optional[float] = 0.0
+    currency: Optional[str]   = "INR"
+
+
+# ── Tenant admin models ────────────────────────────────────────────────────────
+
+class TenantCreateRequest(BaseModel):
+    display_name:   str
+    slug:           str
+    admin_email:    str
+    admin_name:     str
+    admin_password: str
+
+class TenantItem(BaseModel):
+    tenant_id:    str
+    display_name: str
+    slug:         str
+    status:       str
+    user_count:   int
+    created_at:   str
+
+class TenantsListResponse(BaseModel):
+    tenants: List[TenantItem]
+    total:   int
