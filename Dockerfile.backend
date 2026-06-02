@@ -63,15 +63,10 @@ RUN useradd -r -u 1001 -s /sbin/nologin zoiko \
  && chown -R zoiko /app
 USER zoiko
 
-EXPOSE 8000 8001
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Phase 2 (port 8000) = main API + inline Phase 3 logic
-# Phase 4 (port 8001) = execution gateway reads Phase 3 tokens from shared DB
-CMD ["/bin/sh", "-c", \
-    "cd /app/phase-4 && python -m uvicorn services.api_gateway.app:app \
-        --host 0.0.0.0 --port 8001 --workers 1 & \
-     cd /app/phase-2 && exec python -m uvicorn services.api_gateway.app:app \
-        --host 0.0.0.0 --port 8000 --workers 2"]
+# Render injects $PORT — fall back to 8000 for local Docker
+CMD ["sh", "-c", "cd /app/phase-2 && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]
