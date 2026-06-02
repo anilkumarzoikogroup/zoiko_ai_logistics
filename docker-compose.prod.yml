@@ -110,18 +110,9 @@ services:
       start_period: 30s
     networks: [zoiko]
 
-  frontend:
-    build:
-      context: zoiko-frontend/frontend
-      dockerfile: Dockerfile
-      target: prod
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      backend:
-        condition: service_healthy
-    networks: [zoiko]
+  # Frontend is deployed on Vercel — not included here.
+  # Set ZOIKO_CORS_ORIGINS to your Vercel URL in .env
+  # e.g. ZOIKO_CORS_ORIGINS=https://zoiko.vercel.app
 
 volumes:
   postgres_data:
