@@ -163,7 +163,7 @@ export default function TenantManagement() {
               The admin can then invite analysts and managers from the Users page.
             </div>
 
-            {mutation.error && (
+            {error && (
               <div style={{ ...banner, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", color: "#dc2626", marginBottom: 12 }}>
                 <XCircle style={{ width: 14, height: 14 }} /> {error}
               </div>

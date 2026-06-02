@@ -500,7 +500,7 @@ export default function CryptoAudit() {
                       </div>
                       <div>
                         <span className="text-muted-foreground">Signature:</span>
-                        <code className="ml-2 text-emerald-700 break-all">{LIVE_PREVIEW.signature}</code>
+                        <code className="ml-2 text-emerald-700 break-all">0xed25519::computed-on-generate…</code>
                       </div>
                     </div>
                   </div>
