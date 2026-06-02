@@ -2145,23 +2145,26 @@ def _run_evidence_and_reasoning(
     try:
         cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # Advisory lock on case_id prevents concurrent evidence bundle creation race condition
+        # Advisory lock prevents concurrent bundle creation for the same case
         lock_key = int(uuid.UUID(case_id)) % (2**31)
         cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
 
-        # Upsert bundle — INSERT ON CONFLICT handles concurrent inserts safely
-        bundle_id = uuid.uuid4()
-        ph = hashlib.sha256(DOMAIN_TAG + b"placeholder").digest()
-        sig0, kid0 = _sign(slug, ph)
-        cur.execute("""
-            INSERT INTO evidence_bundles (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (tenant_id, case_id) DO UPDATE SET updated_at = NOW()
-            RETURNING id
-        """, (bundle_id, tenant_id, uuid.UUID(case_id), ph, sig0, kid0, now))
-        fetched = cur.fetchone()
-        if fetched:
-            bundle_id = fetched["id"] if isinstance(fetched, dict) else fetched[0]
+        # Check if bundle already exists (safe with advisory lock above)
+        cur.execute(
+            "SELECT id FROM evidence_bundles WHERE tenant_id=%s AND case_id=%s LIMIT 1",
+            (tenant_id, uuid.UUID(case_id)),
+        )
+        existing = cur.fetchone()
+        if existing:
+            bundle_id = existing["id"] if isinstance(existing, dict) else existing[0]
+        else:
+            bundle_id = uuid.uuid4()
+            ph = hashlib.sha256(DOMAIN_TAG + b"placeholder").digest()
+            sig0, kid0 = _sign(slug, ph)
+            cur.execute("""
+                INSERT INTO evidence_bundles (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (bundle_id, tenant_id, uuid.UUID(case_id), ph, sig0, kid0, now))
 
         leaf_hashes = []
         for itype, content in items_content:
