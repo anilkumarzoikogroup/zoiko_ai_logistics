@@ -1,25 +1,77 @@
-FROM python:3.11-slim
+# Zoiko AI Logistics — Unified Backend Image (All Phases)
 
-WORKDIR /app
 
-# Install system deps
+# ── Stage 1: install all Python dependencies ──────────────────────────────────
+FROM python:3.11-slim AS deps
+
+WORKDIR /build
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python packages
+# Install root requirements first (layer is cached until requirements.txt changes)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install internal packages
-COPY phase-0/packages/zoiko-common ./phase-0/packages/zoiko-common
-COPY phase-1/packages/zoiko-kms   ./phase-1/packages/zoiko-kms
+# Install internal packages so every phase can import them without relying
+# purely on paths.py (belt-and-suspenders approach)
+COPY phase-0/packages/zoiko-common/ ./phase-0/packages/zoiko-common/
+COPY phase-1/packages/zoiko-kms/    ./phase-1/packages/zoiko-kms/
 RUN pip install --no-cache-dir -e ./phase-0/packages/zoiko-common \
  && pip install --no-cache-dir -e ./phase-1/packages/zoiko-kms
 
-# Copy all source
-COPY . .
+# ── Stage 2: lean runtime image ───────────────────────────────────────────────
+FROM python:3.11-slim AS runtime
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    ZOIKO_DEV_MODE=false \
+    ZOIKO_ISSUER=https://auth.zoikotech.com \
+    OPA_URL="" \
+    KAFKA_BOOTSTRAP="" \
+    KAFKA_ENABLED=false \
+    TOKEN_TTL_MINUTES=15 \
+    JWT_TTL_SECONDS=3600
+
+# Runtime system libs only (no build-essential)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed site-packages + binaries from deps stage
+COPY --from=deps /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
+COPY --from=deps /usr/local/bin/ /usr/local/bin/
+
+# ── Copy all phases ───────────────────────────────────────────────────────────
+COPY phase-0/ ./phase-0/
+COPY phase-1/ ./phase-1/
+COPY phase-2/ ./phase-2/
+COPY phase-3/ ./phase-3/
+COPY phase-4/ ./phase-4/
+COPY opa/     ./opa/
 
 # Non-root user
-RUN useradd -r -u 1001 zoiko && chown -R zoiko /app
+RUN useradd -r -u 1001 -s /sbin/nologin zoiko \
+ && chown -R zoiko /app
 USER zoiko
+
+EXPOSE 8000 8001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Phase 2 (port 8000) = main API + inline Phase 3 logic
+# Phase 4 (port 8001) = execution gateway reads Phase 3 tokens from shared DB
+CMD ["/bin/sh", "-c", \
+    "cd /app/phase-4 && python -m uvicorn services.api_gateway.app:app \
+        --host 0.0.0.0 --port 8001 --workers 1 & \
+     cd /app/phase-2 && exec python -m uvicorn services.api_gateway.app:app \
+        --host 0.0.0.0 --port 8000 --workers 2"]

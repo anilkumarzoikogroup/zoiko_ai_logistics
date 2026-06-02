@@ -1,7 +1,7 @@
 version: "3.9"
 
-# Production stack — secrets come from .env (never hardcoded)
-# Usage: docker compose -f docker-compose.prod.yml up -d
+# Production stack — using unified Dockerfile.backend for all backend services
+# Usage: docker compose -f docker-compose.prod.yml up -d --build
 
 services:
 
@@ -11,7 +11,7 @@ services:
     environment:
       POSTGRES_DB:       zoiko
       POSTGRES_USER:     postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}        # from .env — no default
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -42,6 +42,7 @@ services:
       sh -c "cd /app/phase-0/db && python -m alembic upgrade head"
     environment:
       DB_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+      PYTHONIOENCODING: utf-8
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,10 +54,11 @@ services:
       dockerfile: Dockerfile.backend
     command: python /app/seed_users.py
     environment:
-      DB_URL:                postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
-      ZOIKO_ADMIN_EMAIL:     ${ZOIKO_ADMIN_EMAIL}
-      ZOIKO_ADMIN_PASSWORD:  ${ZOIKO_ADMIN_PASSWORD}
-      ZOIKO_ADMIN_NAME:      ${ZOIKO_ADMIN_NAME}
+      DB_URL:               postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
+      ZOIKO_ADMIN_EMAIL:    ${ZOIKO_ADMIN_EMAIL:-admin@zoiko.com}
+      ZOIKO_ADMIN_PASSWORD: ${ZOIKO_ADMIN_PASSWORD:-changeme123}
+      ZOIKO_ADMIN_NAME:     ${ZOIKO_ADMIN_NAME:-Platform Admin}
+      PYTHONIOENCODING:     utf-8
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,31 +66,34 @@ services:
         condition: service_completed_successfully
     networks: [zoiko]
 
-  phase2:
+  # ── Unified backend: Phase 2 (8000) + Phase 4 (8001) in one container ───────
+  backend:
     build:
-      context: phase-2
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: Dockerfile.backend
     restart: unless-stopped
+    ports:
+      - "8000:8000"
+      - "8001:8001"
     environment:
       DB_URL:                   postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
       REDIS_URL:                redis://:${REDIS_PASSWORD}@redis:6379/0
       KAFKA_BOOTSTRAP:          ${KAFKA_BOOTSTRAP:-}
       ZOIKO_DEV_SECRET:         ${ZOIKO_DEV_SECRET}
-      ZOIKO_ISSUER:             ${ZOIKO_ISSUER}
-      ZOIKO_CORS_ORIGINS:       ${ZOIKO_CORS_ORIGINS}
+      ZOIKO_ISSUER:             ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      ZOIKO_CORS_ORIGINS:       ${ZOIKO_CORS_ORIGINS:-http://localhost}
+      ZOIKO_DEV_MODE:           ${ZOIKO_DEV_MODE:-false}
       ZOIKO_FF_SC_001_ENABLED:  "*"
       ZOIKO_RATE_LIMIT_ENABLED: "true"
       TOKEN_TTL_MINUTES:        ${TOKEN_TTL_MINUTES:-15}
+      JWT_TTL_SECONDS:          ${JWT_TTL_SECONDS:-3600}
       GROQ_API_KEY:             ${GROQ_API_KEY:-}
       GROQ_MODEL:               ${GROQ_MODEL:-llama-3.1-8b-instant}
       EMAIL_PROVIDER:           ${EMAIL_PROVIDER:-none}
       SENDGRID_API_KEY:         ${SENDGRID_API_KEY:-}
-      SMTP_HOST:                ${SMTP_HOST:-}
-      SMTP_PORT:                ${SMTP_PORT:-587}
-      SMTP_USER:                ${SMTP_USER:-}
-      SMTP_PASSWORD:            ${SMTP_PASSWORD:-}
+      SENDGRID_SANDBOX:         ${SENDGRID_SANDBOX:-true}
       EMAIL_FROM:               ${EMAIL_FROM:-noreply@zoikotech.com}
-      APP_URL:                  ${APP_URL:-http://localhost:5173}
+      APP_URL:                  ${APP_URL:-http://localhost}
       PYTHONIOENCODING:         utf-8
     depends_on:
       postgres:
@@ -100,41 +105,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 15s
       retries: 3
-      start_period: 15s
-    networks: [zoiko]
-
-  phase3:
-    build:
-      context: phase-3
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      DB_URL:           postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
-      REDIS_URL:        redis://:${REDIS_PASSWORD}@redis:6379/0
-      ZOIKO_DEV_SECRET: ${ZOIKO_DEV_SECRET}
-      ZOIKO_ISSUER:     ${ZOIKO_ISSUER}
-      PYTHONIOENCODING: utf-8
-    depends_on:
-      phase2:
-        condition: service_healthy
-    networks: [zoiko]
-
-  phase4:
-    build:
-      context: phase-4
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      DB_URL:           postgresql://postgres:${POSTGRES_PASSWORD}@postgres/zoiko
-      REDIS_URL:        redis://:${REDIS_PASSWORD}@redis:6379/0
-      ZOIKO_DEV_SECRET: ${ZOIKO_DEV_SECRET}
-      ZOIKO_ISSUER:     ${ZOIKO_ISSUER}
-      PYTHONIOENCODING: utf-8
-    depends_on:
-      phase2:
-        condition: service_healthy
+      start_period: 30s
     networks: [zoiko]
 
   frontend:
@@ -146,7 +119,7 @@ services:
     ports:
       - "80:80"
     depends_on:
-      phase2:
+      backend:
         condition: service_healthy
     networks: [zoiko]
 
