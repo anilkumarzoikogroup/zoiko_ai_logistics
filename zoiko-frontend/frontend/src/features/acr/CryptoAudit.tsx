@@ -77,7 +77,7 @@ export default function CryptoAudit() {
   function _openPdf(reportData: Record<string, unknown>, title: string) {
     const cases = (reportData.cases as Record<string,unknown>[] | undefined) ?? [];
     const summary = reportData.summary as Record<string,unknown> | undefined;
-    const now = new Date().toLocaleString("en-IN");
+    const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
 
     const rows = cases.map((c: Record<string,unknown>) => `
       <tr>

@@ -126,7 +126,7 @@ export default function ExecuteRecovery() {
                     </div>
                     <p className="text-sm font-semibold mt-0.5">{t.action.replace("EXECUTE_", "")} · {formatCurrency(t.amount, t.currency)}</p>
                     <p className="text-xs text-muted-foreground">
-                      Case {t.case_id.slice(0, 8)} · expires {new Date(t.exp).toLocaleTimeString()}
+                      Case {t.case_id.slice(0, 8)} · expires {new Date(t.exp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
                       {matchedCase && ` · ${matchedCase.carrier}`}
                     </p>
                   </div>

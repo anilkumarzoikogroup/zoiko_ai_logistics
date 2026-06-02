@@ -248,7 +248,7 @@ export default function TenantManagement() {
                       </span>
                     </td>
                     <td style={{ padding: "14px 20px", fontSize: 12, color: "#94a3b8" }}>
-                      {new Date(t.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      {new Date(t.created_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}
                     </td>
                   </tr>
                 );
