@@ -22,6 +22,24 @@ print(f"DB_URL: {os.environ.get('DB_URL','')}")
 print(f"TOKEN_TTL_MINUTES: {os.environ.get('TOKEN_TTL_MINUTES','15')}")
 print()
 
+import threading, time as _time
+
+def _keep_neon_alive():
+    """Ping DB every 4 minutes to prevent Neon serverless cold start."""
+    _time.sleep(30)  # wait for uvicorn to start first
+    while True:
+        try:
+            import psycopg2
+            conn = psycopg2.connect(os.environ.get("DB_URL",""))
+            conn.cursor().execute("SELECT 1")
+            conn.close()
+        except Exception:
+            pass
+        _time.sleep(240)  # every 4 minutes
+
+threading.Thread(target=_keep_neon_alive, daemon=True, name="neon-keepalive").start()
+print("Neon keep-alive thread started (pings every 4 min)")
+
 os.chdir(ROOT / "phase-2")
 subprocess.run([
     sys.executable, "-m", "uvicorn",
