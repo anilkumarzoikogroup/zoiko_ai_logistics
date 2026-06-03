@@ -2382,8 +2382,10 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
     if not token_id:
         raise HTTPException(status_code=400, detail="token_id is required")
-    if amount is not None and float(amount) <= 0:
-        raise HTTPException(status_code=422, detail="Execution blocked: amount must be greater than zero")
+    # Zero amount is allowed — happens when no contract rates set (overcharge = 0)
+    # Block only explicitly negative amounts
+    if amount is not None and float(amount) < 0:
+        raise HTTPException(status_code=422, detail="Execution blocked: amount cannot be negative")
 
     # ── Fetch token with LEFT JOINs (robust — works even if decision chain is incomplete) ─
     token = q1("""

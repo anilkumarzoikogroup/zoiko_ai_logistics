@@ -42,7 +42,11 @@ export default function ExecuteRecovery() {
       qc.invalidateQueries({ queryKey: ["tokens"] });
       toast.success("Execution complete", `Case ${vars.caseId.slice(0, 8)} dispatched through all 8 gates`);
     },
-    onError: () => toast.error("Execution failed", "Check that Phase 4 backend (port 8001) is running"),
+    onError: (err: unknown) => {
+      const e = err as {response?:{data?:{detail?:string}}};
+      const msg = e?.response?.data?.detail ?? "Execution failed — check backend";
+      toast.error("Execution failed", msg);
+    },
   });
 
   function handleDownloadAcr(caseId: string) {
