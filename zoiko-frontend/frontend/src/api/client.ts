@@ -1,5 +1,8 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { generateIdempotencyKey } from "@/utils/cn";
+import { store } from "@/store";
+import { logout } from "@/store/authSlice";
+import { queryClient } from "@/lib/queryClient";
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
@@ -43,7 +46,11 @@ function attachInterceptors(instance: AxiosInstance): AxiosInstance {
     (r) => r,
     (error: AxiosError) => {
       const status = error.response?.status;
-      if (status === 401) console.warn("401 — JWT invalid or expired");
+      if (status === 401) {
+        store.dispatch(logout());
+        queryClient.clear();
+        window.location.href = "/login";
+      }
       if (status === 503) console.warn("503 — OPA unreachable (fail-closed)");
       return Promise.reject(error);
     }

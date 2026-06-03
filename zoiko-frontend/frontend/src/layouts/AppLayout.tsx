@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/store";
 import { logout as logoutAction } from "@/store/authSlice";
+import { queryClient } from "@/lib/queryClient";
 import { cn } from "@/utils/cn";
 import {
   LayoutDashboard, FileText, FolderOpen,
@@ -110,6 +111,7 @@ export default function AppLayout() {
 
   function handleLogout() {
     dispatch(logoutAction());
+    queryClient.clear();
     nav("/login");
   }
 

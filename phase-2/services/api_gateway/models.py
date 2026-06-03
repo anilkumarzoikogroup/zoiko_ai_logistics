@@ -183,3 +183,166 @@ class TenantItem(BaseModel):
 class TenantsListResponse(BaseModel):
     tenants: List[TenantItem]
     total:   int
+
+
+# ── Phase-4 Execution / Reconciliation / ACR models ──────────────────────────
+
+class ExecuteResponse(BaseModel):
+    envelope_id:   str
+    token_id:      str
+    case_id:       str
+    status:        str
+    connector_ref: str
+    dispatched_at: str
+
+class ReconcileRequest(BaseModel):
+    envelope_id: str
+    actor_sub:   str = "system"
+
+class ReconcileResponse(BaseModel):
+    reconciliation_id: str
+    envelope_id:       str
+    status:            str
+    delta:             float
+    reconciled_at:     str
+
+class ACRResponse(BaseModel):
+    acr_id:         str
+    case_id:        str
+    merkle_root:    str
+    artifact_count: int
+    is_locked:      bool
+    issued_at:      str
+    verify_bundle:  dict
+
+class VarianceRecord(BaseModel):
+    id:             str
+    case_id:        str
+    tenant_id:      str
+    variance_type:  str
+    expected_value: Optional[float]
+    actual_value:   Optional[float]
+    delta:          Optional[float]
+    status:         str
+    resolved_by:    Optional[str]
+    resolved_at:    Optional[str]
+    created_at:     str
+
+class ResolveVarianceRequest(BaseModel):
+    action:      str
+    resolved_by: str
+
+class ResolveVarianceResponse(BaseModel):
+    id:          str
+    case_id:     str
+    status:      str
+    resolved_by: str
+    resolved_at: str
+
+
+# ── Phase-3 Evidence / Reasoning / Governance / Token models ─────────────────
+
+class AddEvidenceRequest(BaseModel):
+    item_type:   str
+    content_b64: str
+    entity_id:   Optional[str] = None
+
+class AddEvidenceResponse(BaseModel):
+    item_id:     str
+    bundle_id:   str
+    item_type:   str
+    item_hash:   str
+    bundle_hash: str
+    tenant_id:   str
+
+class GetBundleResponse(BaseModel):
+    bundle_id:           str
+    case_id:             str
+    bundle_hash:         str
+    item_count:          int
+    tenant_id:           str
+    completeness_status: str = "INCOMPLETE"
+
+class SealBundleResponse(BaseModel):
+    bundle_id:           str
+    case_id:             str
+    bundle_hash:         str
+    item_count:          int
+    completeness_status: str
+    tenant_id:           str
+
+class AnalyzeRequest(BaseModel):
+    bundle_id:       str
+    proposer_sub:    str
+    proposed_action: str   = "CREDIT_MEMO"
+    amount:          float = 0.0
+    currency:        str   = "USD"
+    carrier:         str   = ""
+    route:           str   = ""
+    contract_rate:   float = 0.0
+
+class AnalyzeResponse(BaseModel):
+    finding_id:      str
+    proposal_id:     str
+    confidence:      float
+    proposed_action: str
+    amount:          float
+    currency:        str
+    tenant_id:       str
+
+class FindingItem(BaseModel):
+    finding_id:      str
+    bundle_id:       str
+    confidence:      float
+    ai_confidence:   Optional[float] = None
+    risk_level:      Optional[str]   = None
+    ai_reasoning:    Optional[str]   = None
+    proposed_action: str
+    amount:          float
+    currency:        str
+    created_at:      Optional[str]   = None
+
+class GetFindingsResponse(BaseModel):
+    case_id:   str
+    tenant_id: str
+    findings:  List[FindingItem]
+
+class CreateTaskRequest(BaseModel):
+    proposal_id:  str
+    proposer_sub: str
+
+class CreateTaskResponse(BaseModel):
+    task_id:      str
+    proposal_id:  str
+    proposer_sub: str
+    status:       str
+    tenant_id:    str
+
+class DecideRequest(BaseModel):
+    actor_sub: str
+    outcome:   str
+
+class DecideResponse(BaseModel):
+    decision_id:   Optional[str] = None
+    task_id:       str
+    outcome:       str
+    actor_sub:     str
+    decision_hash: str
+    tenant_id:     str
+
+class MintTokenRequest(BaseModel):
+    decision_id: str
+    case_id:     str
+    scope:       str = "EXECUTE_CREDIT_MEMO"
+    actor_sub:   str = "system"
+
+class MintTokenResponse(BaseModel):
+    token_id:       str
+    decision_id:    str
+    case_id:        str
+    scope:          str
+    status:         str
+    token_hash:     str
+    tenant_binding: str
+    expires_at:     str
+    tenant_id:      str

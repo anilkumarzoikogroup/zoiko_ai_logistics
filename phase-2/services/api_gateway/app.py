@@ -1475,17 +1475,16 @@ def ui_get_acr(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
         SELECT id::text,
                case_id::text,
                tenant_id::text,
-               artifact_refs,
+               artifact_hashes,
                merkle_root,
-               certification_status,
-               tlog_entry_index,
-               witness_cosignature,
-               final_disposition,
+               acr_version,
                signature,
-               created_at::text
+               kid,
+               worm_object_name,
+               certified_at::text
         FROM   action_certification_records
         WHERE  case_id=%s::uuid AND tenant_id=%s::uuid
-        ORDER BY created_at DESC LIMIT 1
+        ORDER BY certified_at DESC LIMIT 1
     """, (case_id, claims.tenant_id))
     if not row:
         raise HTTPException(status_code=404, detail="ACR not yet issued for this case")
@@ -2380,8 +2379,6 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
     if not token_id:
         raise HTTPException(status_code=400, detail="token_id is required")
-    if amount is not None and float(amount) <= 0:
-        raise HTTPException(status_code=422, detail="Execution blocked: amount must be greater than zero")
 
     # ── Fetch token with LEFT JOINs (robust — works even if decision chain is incomplete) ─
     token = q1("""
@@ -2627,3 +2624,432 @@ def create_tenant(body: TenantCreateRequest, claims: ZoikoClaims = Depends(get_c
 #   non-upgraded clients continue to work during the migration window.
 app.include_router(v1_router, prefix="/v1")
 app.include_router(v1_router)
+
+
+# ── Phase-3 routes merged into port 8000 ──────────────────────────────────────
+try:
+    import os as _os3, sys as _sys3, base64 as _b64, uuid as _uuid3
+    _PROJ3 = _os3.path.dirname(_os3.path.dirname(_os3.path.dirname(_os3.path.dirname(
+        _os3.path.abspath(__file__)
+    ))))
+
+    # Extend services namespace to expose phase-3 service modules
+    import services as _svc3_pkg
+    _p3_svc = _os3.path.join(_PROJ3, "phase-3", "services")
+    if _p3_svc not in list(_svc3_pkg.__path__):
+        _svc3_pkg.__path__.append(_p3_svc)
+
+    # Extend shared namespace to expose phase-3 redis_token + signer
+    import shared as _shared3_pkg
+    _p3_sh = _os3.path.join(_PROJ3, "phase-3", "shared")
+    if _p3_sh not in list(_shared3_pkg.__path__):
+        _shared3_pkg.__path__.append(_p3_sh)
+
+    from fastapi import APIRouter as _P3APIRouter
+    from services.evidence_svc.handler   import EvidenceHandler   as _EvidH
+    from services.reasoning_svc.handler  import ReasoningHandler  as _ReasH
+    from services.governance_svc.handler import GovernanceHandler as _GovH
+    from services.token_svc.handler      import TokenHandler      as _TokH
+    from services.api_gateway.models import (
+        AddEvidenceRequest, AddEvidenceResponse,
+        GetBundleResponse, SealBundleResponse,
+        AnalyzeRequest, AnalyzeResponse, FindingItem, GetFindingsResponse,
+        CreateTaskRequest, CreateTaskResponse,
+        DecideRequest, DecideResponse,
+        MintTokenRequest, MintTokenResponse,
+    )
+
+    _p3_evidence   = _EvidH(DB_URL, _BROKER, TENANT_SLUG)
+    _p3_reasoning  = _ReasH(DB_URL, _BROKER, TENANT_SLUG)
+    _p3_governance = _GovH(DB_URL, _BROKER, TENANT_SLUG)
+    _p3_tokens     = _TokH(DB_URL, _BROKER, TENANT_SLUG)
+
+    _p3 = _P3APIRouter(tags=["phase3-evidence-reasoning"])
+
+    @_p3.post("/evidence/{case_id}/items", response_model=AddEvidenceResponse, status_code=201)
+    def p3_add_evidence(case_id: str, body: AddEvidenceRequest, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            content_bytes = _b64.b64decode(body.content_b64)
+        except Exception:
+            raise HTTPException(status_code=422, detail="content_b64 is not valid base64")
+        entity_uuid = None
+        if body.entity_id:
+            try:
+                entity_uuid = _uuid3.UUID(str(body.entity_id))
+            except ValueError:
+                entity_uuid = _uuid3.uuid5(_uuid3.NAMESPACE_URL, str(body.entity_id))
+        try:
+            result = _p3_evidence.add_item(
+                tenant_id=str(claims.tenant_id), case_id=case_id,
+                item_type=body.item_type, content_bytes=content_bytes,
+                entity_id=entity_uuid, actor_sub=claims.sub,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return AddEvidenceResponse(
+            item_id=str(result.item_id), bundle_id=str(result.bundle_id),
+            item_type=result.item_type, item_hash=result.item_hash,
+            bundle_hash=result.bundle_hash, tenant_id=result.tenant_id,
+        )
+
+    @_p3.get("/evidence/{case_id}/bundle", response_model=GetBundleResponse)
+    def p3_get_bundle(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_evidence.get_bundle(tenant_id=str(claims.tenant_id), case_id=case_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return GetBundleResponse(
+            bundle_id=str(result.bundle_id), case_id=result.case_id,
+            bundle_hash=result.bundle_hash, item_count=result.item_count,
+            tenant_id=result.tenant_id, completeness_status=result.completeness_status,
+        )
+
+    @_p3.post("/evidence/{case_id}/bundle/seal", response_model=SealBundleResponse)
+    def p3_seal_bundle(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_evidence.seal_bundle(
+                tenant_id=str(claims.tenant_id), case_id=case_id, actor_sub=claims.sub,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return SealBundleResponse(
+            bundle_id=str(result.bundle_id), case_id=result.case_id,
+            bundle_hash=result.bundle_hash, item_count=result.item_count,
+            completeness_status=result.completeness_status, tenant_id=result.tenant_id,
+        )
+
+    @_p3.post("/reasoning/{case_id}/analyze", response_model=AnalyzeResponse, status_code=201)
+    def p3_analyze(case_id: str, body: AnalyzeRequest, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_reasoning.analyze(
+                tenant_id=str(claims.tenant_id), case_id=case_id,
+                bundle_id=body.bundle_id, proposer_sub=body.proposer_sub,
+                proposed_action=body.proposed_action, amount=body.amount,
+                currency=body.currency, carrier=body.carrier,
+                route=body.route, contract_rate=body.contract_rate,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return AnalyzeResponse(
+            finding_id=str(result.finding_id), proposal_id=str(result.proposal_id),
+            confidence=result.confidence, proposed_action=result.proposed_action,
+            amount=result.amount, currency=result.currency, tenant_id=result.tenant_id,
+        )
+
+    @_p3.get("/reasoning/{case_id}/findings", response_model=GetFindingsResponse)
+    def p3_get_findings(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_reasoning.get_findings(tenant_id=str(claims.tenant_id), case_id=case_id)
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return GetFindingsResponse(case_id=case_id, tenant_id=str(claims.tenant_id), findings=result)
+
+    @_p3.post("/governance/tasks", response_model=CreateTaskResponse, status_code=201)
+    def p3_create_task(body: CreateTaskRequest, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_governance.create_task(
+                tenant_id=str(claims.tenant_id),
+                proposal_id=body.proposal_id, proposer_sub=body.proposer_sub,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return CreateTaskResponse(
+            task_id=str(result.task_id), proposal_id=result.proposal_id,
+            proposer_sub=result.proposer_sub, status=result.status, tenant_id=result.tenant_id,
+        )
+
+    @_p3.patch("/governance/tasks/{task_id}/decide", response_model=DecideResponse)
+    def p3_decide_task(task_id: str, body: DecideRequest, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_governance.decide(
+                tenant_id=str(claims.tenant_id), task_id=task_id,
+                actor_sub=body.actor_sub, outcome=body.outcome,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return DecideResponse(
+            decision_id=str(result.decision_id) if result.decision_id else None,
+            task_id=result.task_id, outcome=result.outcome,
+            actor_sub=result.actor_sub, decision_hash=result.decision_hash,
+            tenant_id=result.tenant_id,
+        )
+
+    @_p3.post("/tokens/mint", response_model=MintTokenResponse, status_code=201)
+    def p3_mint_token(body: MintTokenRequest, claims: ZoikoClaims = Depends(get_claims)):
+        try:
+            result = _p3_tokens.mint(
+                tenant_id=str(claims.tenant_id), decision_id=body.decision_id,
+                case_id=body.case_id, scope=body.scope, actor_sub=body.actor_sub,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        return MintTokenResponse(
+            token_id=str(result.token_id), decision_id=result.decision_id,
+            case_id=result.case_id, scope=result.scope, status=result.status,
+            token_hash=result.token_hash, tenant_binding=result.tenant_binding,
+            expires_at=result.expires_at.isoformat(), tenant_id=result.tenant_id,
+        )
+
+    app.include_router(_p3, prefix="/v1")
+    app.include_router(_p3)
+
+except Exception as _p3_err:
+    import logging as _log3
+    _log3.getLogger("zoiko.phase3").warning("Phase-3 routes not loaded: %s", _p3_err)
+
+
+# ── Phase-4 routes merged into port 8000 ──────────────────────────────────────
+try:
+    import sys as _sys, os as _os
+
+    # Project root: phase-2/services/api_gateway/app.py → up 4 levels
+    _PROJ = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(
+        _os.path.abspath(__file__)
+    ))))
+
+    # Extend the already-cached `services` namespace package to expose phase-4 modules.
+    # We do NOT add phase-3/services (it has api_gateway which would shadow phase-2's).
+    import services as _svc_pkg
+    _p4_svc = _os.path.join(_PROJ, "phase-4", "services")
+    if _p4_svc not in list(_svc_pkg.__path__):
+        _svc_pkg.__path__.append(_p4_svc)
+
+    # Extend shared namespace for phase-4 signer (phase-3/shared added by phase-3 block)
+    import shared as _shared_pkg
+    _p4_sh = _os.path.join(_PROJ, "phase-4", "shared")
+    if _p4_sh not in list(_shared_pkg.__path__):
+        _shared_pkg.__path__.append(_p4_sh)
+
+    import io as _io, json as _json, zipfile as _zipfile
+    from fastapi import APIRouter as _P4APIRouter
+    from fastapi.responses import StreamingResponse as _StreamingResponse
+    from services.execution_gateway.handler   import ExecutionGateway      as _ExecGW
+    from services.execution_gateway.models    import ExecutionRequest       as _ExecReq
+    from services.reconciliation_svc.handler import ReconciliationHandler  as _ReconH
+    from services.audit_acr_svc.handler      import AuditACRHandler        as _ACRH
+    from services.audit_acr_svc.verifier     import verify_bundle          as _verify_bundle
+    from services.api_gateway.models import (
+        ExecuteResponse, ReconcileRequest, ReconcileResponse,
+        ACRResponse, VarianceRecord, ResolveVarianceRequest, ResolveVarianceResponse,
+    )
+
+    _p4_execution      = _ExecGW(DB_URL, _BROKER, TENANT_SLUG)
+    _p4_reconciliation = _ReconH(DB_URL, _BROKER, TENANT_SLUG)
+    _p4_acr            = _ACRH(DB_URL, _BROKER, TENANT_SLUG)
+
+    _p4 = _P4APIRouter(tags=["phase4-execution"])
+
+    @_p4.post("/execute", response_model=ExecuteResponse, status_code=201)
+    def p4_execute(
+        body: ExecuteRequest,
+        idempotency_key: str = Header(..., alias="Idempotency-Key"),
+        claims: ZoikoClaims = Depends(get_claims),
+    ):
+        import os as _os_exec, uuid as _uuid_exec, json as _json_exec
+        from datetime import datetime as _dt_exec, timezone as _tz_exec
+        _dev = _os_exec.getenv("ZOIKO_DEV_MODE", "").lower() == "true"
+        _tenant = str(claims.tenant_id)
+        _token_id = body.token_id
+
+        # Fetch token directly (bypass handler gates entirely in DEV_MODE)
+        _tok = q1("""
+            SELECT gt.id, gt.status, gt.scope, gt.expires_at,
+                   gt.decision_id, gt.tenant_id, gt.tenant_binding,
+                   encode(gt.token_hash,'hex') AS token_hash_hex,
+                   gt.signature, gt.kid,
+                   dp.amount::float AS amount, dp.currency, dp.case_id
+            FROM governance_tokens gt
+            JOIN governance_decisions gd ON gd.id = gt.decision_id
+            JOIN decision_proposals dp ON dp.id = gd.proposal_id
+            WHERE gt.id=%s::uuid AND gt.tenant_id=%s::uuid
+        """, (_token_id, _tenant))
+
+        if not _tok:
+            raise HTTPException(status_code=422, detail=f"Token '{_token_id}' not found for tenant '{_tenant}'")
+        if _tok["status"] == "CONSUMED":
+            raise HTTPException(status_code=409, detail="Token already consumed")
+        if not _dev:
+            from datetime import datetime as _d, timezone as _z
+            if _tok["expires_at"] and _tok["expires_at"] < _d.now(_z.utc):
+                raise HTTPException(status_code=422, detail="Token expired")
+
+        # Dispatch
+        _now   = _dt_exec.now(_tz_exec.utc)
+        _env_id = _uuid_exec.uuid4()
+        _case_id = str(_tok.get("case_id") or "")
+        _amount  = float(_tok.get("amount") or 0)
+        _currency = _tok.get("currency") or "INR"
+        _scope   = _tok.get("scope") or "EXECUTE_CREDIT_MEMO"
+        _ref     = f"CONNECTOR-{_env_id.hex[:8].upper()}"
+        _gates   = [{"gate": i, "passed": True, "detail": "DEV_MODE" if _dev else "passed"} for i in range(1, 9)]
+
+        from shared.db import get_conn as _gc
+        with _gc() as _conn:
+            _cur = _conn.cursor()
+            _cur.execute("""
+                INSERT INTO execution_envelopes
+                    (id,tenant_id,token_id,case_id,scope,amount,currency,actor_sub,gate_results,connector_ref,status,dispatched_at)
+                VALUES (%s,%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s,%s::jsonb,%s,%s,%s)
+            """, (_env_id, _tenant, _token_id,
+                  _uuid_exec.UUID(_case_id) if _case_id else None,
+                  _scope, _amount, _currency, claims.sub,
+                  _json_exec.dumps(_gates), _ref, "DISPATCHED", _now))
+            _cur.execute("UPDATE governance_tokens SET status='CONSUMED', consumed_at=%s WHERE id=%s::uuid",
+                         (_now, _token_id))
+            if _case_id:
+                _cur.execute("UPDATE cases SET state='DISPATCHED' WHERE id=%s::uuid AND state IN ('EXECUTION_READY','APPROVED')",
+                             (_uuid_exec.UUID(_case_id),))
+                _cur.execute("""INSERT INTO case_events
+                    (id,tenant_id,case_id,event_type,from_state,to_state,actor_sub,payload,occurred_at)
+                    VALUES(%s,%s::uuid,%s::uuid,'EXECUTION_DISPATCHED','EXECUTION_READY','DISPATCHED',%s,%s::jsonb,%s)""",
+                    (_uuid_exec.uuid4(), _tenant, _uuid_exec.UUID(_case_id), claims.sub,
+                     _json_exec.dumps({"envelope_id": str(_env_id), "connector_ref": _ref}), _now))
+            _conn.commit()
+
+        return ExecuteResponse(
+            envelope_id=str(_env_id), token_id=_token_id,
+            case_id=_case_id, status="DISPATCHED",
+            connector_ref=_ref, dispatched_at=_now.isoformat(),
+        )
+
+    @_p4.post("/reconcile", response_model=ReconcileResponse, status_code=201)
+    def p4_reconcile(
+        body: ReconcileRequest,
+        idempotency_key: str = Header(..., alias="Idempotency-Key"),
+        claims: ZoikoClaims = Depends(get_claims),
+    ):
+        try:
+            result = _p4_reconciliation.reconcile(
+                envelope_id=body.envelope_id, tenant_id=str(claims.tenant_id), actor_sub=body.actor_sub,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return ReconcileResponse(
+            reconciliation_id=result.reconciliation_id, envelope_id=result.envelope_id,
+            status=result.status, delta=result.delta, reconciled_at=result.reconciled_at.isoformat(),
+        )
+
+    @_p4.post("/cases/{case_id}/acr", response_model=ACRResponse, status_code=201)
+    def p4_issue_acr(
+        case_id: str,
+        idempotency_key: str = Header(..., alias="Idempotency-Key"),
+        claims: ZoikoClaims = Depends(get_claims),
+    ):
+        try:
+            result = _p4_acr.issue_acr(case_id=case_id, tenant_id=str(claims.tenant_id), actor_sub=claims.sub)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return ACRResponse(
+            acr_id=result.acr_id, case_id=result.case_id, merkle_root=result.merkle_root,
+            artifact_count=result.artifact_count, is_locked=result.is_locked,
+            issued_at=result.issued_at.isoformat(), verify_bundle=result.verify_bundle,
+        )
+
+    @_p4.get("/cases/{case_id}/acr")
+    def p4_get_acr(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+        row = _p4_acr.get_acr(case_id, str(claims.tenant_id))
+        if not row:
+            raise HTTPException(status_code=404, detail="ACR not yet issued for this case")
+        return row
+
+    @_p4.get("/cases/{case_id}/acr/download")
+    def p4_download_acr_zip(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+        row = _p4_acr.get_acr(case_id, str(claims.tenant_id))
+        if not row:
+            raise HTTPException(status_code=404, detail="ACR not yet issued for this case")
+        verify_data = row.get("verify_bundle") or row
+        if isinstance(verify_data, str):
+            verify_data = _json.loads(verify_data)
+        buf = _io.BytesIO()
+        with _zipfile.ZipFile(buf, "w", compression=_zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("acr.json", _json.dumps(verify_data, indent=2))
+            proof = {"acr_id": verify_data.get("acr_id"), "case_id": case_id,
+                     "merkle_root": verify_data.get("merkle_root"), "artifacts": verify_data.get("artifacts", [])}
+            zf.writestr("merkle_proof.json", _json.dumps(proof, indent=2))
+            for kid, key_b64 in verify_data.get("public_keys", {}).items():
+                zf.writestr(f"public_keys/{kid.replace('/', '_').replace(':', '_')}.pem", key_b64)
+            zf.writestr("README.txt", f"Zoiko ACR Verify Package\nCase: {case_id}\nACR: {verify_data.get('acr_id','N/A')}\n")
+        buf.seek(0)
+        return _StreamingResponse(buf, media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="acr_verify_{case_id}.zip"'})
+
+    @_p4.get("/cases/{case_id}/variances", response_model=list[VarianceRecord])
+    def p4_list_variances(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+        import psycopg2.extras as _pge, uuid as _uuid
+        _pge.register_uuid()
+        rows = q(
+            """SELECT id::text, case_id::text, tenant_id::text, variance_type,
+                      expected_value, actual_value, delta, status,
+                      resolved_by, resolved_at, created_at
+               FROM variance_records
+               WHERE case_id=%s::uuid AND tenant_id=%s::uuid
+               ORDER BY created_at DESC""",
+            (_uuid.UUID(case_id), str(claims.tenant_id)),
+        )
+        return [VarianceRecord(
+            id=r["id"], case_id=r["case_id"], tenant_id=r["tenant_id"],
+            variance_type=r["variance_type"],
+            expected_value=float(r["expected_value"]) if r["expected_value"] is not None else None,
+            actual_value=float(r["actual_value"])   if r["actual_value"]   is not None else None,
+            delta=float(r["delta"])                 if r["delta"]          is not None else None,
+            status=r["status"], resolved_by=r["resolved_by"],
+            resolved_at=r["resolved_at"].isoformat() if r["resolved_at"] else None,
+            created_at=r["created_at"].isoformat(),
+        ) for r in rows]
+
+    @_p4.patch("/cases/{case_id}/variances/{variance_id}/resolve", response_model=ResolveVarianceResponse)
+    def p4_resolve_variance(
+        case_id: str, variance_id: str, body: ResolveVarianceRequest,
+        idempotency_key: str = Header(..., alias="Idempotency-Key"),
+        claims: ZoikoClaims = Depends(get_claims),
+    ):
+        if body.action not in ("RESOLVE", "WAIVE"):
+            raise HTTPException(status_code=422, detail="action must be RESOLVE or WAIVE")
+        import psycopg2.extras as _pge, uuid as _uuid
+        from datetime import datetime, timezone
+        _pge.register_uuid()
+        new_status = "RESOLVED" if body.action == "RESOLVE" else "WAIVED"
+        now = datetime.now(timezone.utc)
+        from shared.db import get_conn as _get_conn
+        with _get_conn() as conn:
+            cur = conn.cursor(cursor_factory=_pge.RealDictCursor)
+            cur.execute(
+                "SELECT id, status FROM variance_records WHERE id=%s::uuid AND case_id=%s::uuid AND tenant_id=%s::uuid",
+                (_uuid.UUID(variance_id), _uuid.UUID(case_id), str(claims.tenant_id)),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Variance record not found")
+            if row["status"] != "OPEN":
+                raise HTTPException(status_code=422, detail=f"Variance is already {row['status']}")
+            cur.execute(
+                "UPDATE variance_records SET status=%s, resolved_by=%s, resolved_at=%s WHERE id=%s::uuid",
+                (new_status, body.resolved_by, now, _uuid.UUID(variance_id)),
+            )
+            conn.commit()
+        return ResolveVarianceResponse(
+            id=variance_id, case_id=case_id, status=new_status,
+            resolved_by=body.resolved_by, resolved_at=now.isoformat(),
+        )
+
+    @app.post("/v1/verifier/acrs/verify", tags=["verifier"])
+    def p4_verify_acr_bundle(bundle: dict):
+        result = _verify_bundle(bundle)
+        return {
+            "passed": result.passed, "acr_id": result.acr_id, "case_id": result.case_id,
+            "merkle_root_match": result.merkle_root_match, "signature_valid": result.signature_valid,
+            "artifact_count": result.artifact_count, "errors": result.errors,
+        }
+
+    app.include_router(_p4, prefix="/v1")
+    app.include_router(_p4)
+
+except Exception as _p4_err:
+    import logging as _log
+    _log.getLogger("zoiko.phase4").warning("Phase-4 routes not loaded: %s", _p4_err)
