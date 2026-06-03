@@ -113,6 +113,8 @@ export default function NewCase() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Guard against double-submission: locked after first mutate() call, released on error
+  const submitting = useRef(false);
 
   useEffect(() => {
     if (!file) { setPreviewUrl(null); return; }
@@ -131,20 +133,25 @@ export default function NewCase() {
     onSuccess: (c) => {
       qc.invalidateQueries({ queryKey: ["cases"] });
       toast.success("Case submitted", `Overcharge detection pipeline started for ${form.carrier}`);
-      nav(`/cases/${c.id}`);
+      // Navigate to the case detail page; use replace so Back doesn't return to this form
+      nav(`/cases/${c.id}`, { replace: true });
     },
     onError: (err: unknown) => {
+      submitting.current = false; // allow retry after failure
       if (axios.isAxiosError(err)) {
         if (!err.response) {
-          toast.error("Request timed out", "The pipeline is taking longer than expected. Check the backend is running on port 8000, then try again.");
+          toast.error("Request timed out", "The pipeline takes ~20s. Check the backend is running on port 8000, then try again.");
         } else if (err.response.status === 401) {
           toast.error("Session expired", "You have been logged out. Please sign in again.");
+        } else if (err.response.status === 500 && !err.response.data?.detail) {
+          toast.error("Backend unreachable", "The server returned an error. Check the backend is running on port 8000 and try again.");
         } else {
           const detail = err.response.data?.detail || "Submission failed. Try again.";
           toast.error("Submission failed", typeof detail === "string" ? detail : JSON.stringify(detail));
         }
       } else {
-        toast.error("Submission failed", "An unexpected error occurred.");
+        // Non-Axios errors: typically a JSON parse failure when proxy returns HTML on backend crash
+        toast.error("Backend unreachable", "Lost connection to the server mid-request. Restart the backend on port 8000 and try again.");
       }
     },
   });
@@ -343,10 +350,15 @@ export default function NewCase() {
         </p>
       </div>
 
-      <form onSubmit={(e) => { e.preventDefault(); if (canSubmit) m.mutate(); }}>
+      <form onSubmit={(e) => {
+        e.preventDefault();
+        if (!canSubmit || submitting.current || m.isPending) return;
+        submitting.current = true;
+        m.mutate();
+      }}>
         <Button
           type="submit"
-          disabled={m.isPending || !canSubmit}
+          disabled={m.isPending || submitting.current || !canSubmit}
           className="w-full gap-2"
           size="lg"
         >
@@ -359,10 +371,12 @@ export default function NewCase() {
         {m.isError && (
           <p className="text-sm text-destructive text-center mt-2">
             {axios.isAxiosError(m.error) && !m.error.response
-              ? "Request timed out — the pipeline takes ~20s. Check the backend is running and try again."
+              ? "Request timed out — pipeline takes ~20s. Check the backend is running and try again."
               : axios.isAxiosError(m.error) && m.error.response?.status === 401
               ? "Session expired — please log in again."
-              : "Submission failed — check the backend terminal for details."}
+              : axios.isAxiosError(m.error) && m.error.response
+              ? `Submission failed — ${(m.error.response.data as any)?.detail || "check the backend terminal for details."}`
+              : "Backend unreachable — restart the backend on port 8000 and try again."}
           </p>
         )}
       </form>
