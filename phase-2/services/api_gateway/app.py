@@ -1813,18 +1813,18 @@ async def parse_invoice_file(
             # Use the brace-counting extractor — the old r'\{[^{}]*\}' regex
             # matched the first INNERMOST object, failing whenever Groq nested
             # any value (e.g. "details": {"total": 123}) and returning {} instead.
-            parsed   = _extract_first_json(raw)
-            carrier  = str(parsed.get("carrier", "")).strip()
-                ai_amount = float(parsed.get("total_amount", 0) or 0)
-                currency = str(parsed.get("currency", "INR")).strip().upper() or "INR"
-                origin   = _normalize_city(str(parsed.get("origin", "")).strip())
-                dest     = _normalize_city(str(parsed.get("destination", "")).strip())
-                if origin == dest:
-                    dest = ""
-                email    = str(parsed.get("email", "")).strip().lower()
-                # PDF amount from regex always wins; use AI amount only for images
-                amount = pdf_amount if pdf_amount else ai_amount
-                ai_parsed = bool(origin or dest or carrier or amount)
+            parsed    = _extract_first_json(raw)
+            carrier   = str(parsed.get("carrier", "")).strip()
+            ai_amount = float(parsed.get("total_amount", 0) or 0)
+            currency  = str(parsed.get("currency", "INR")).strip().upper() or "INR"
+            origin    = _normalize_city(str(parsed.get("origin", "")).strip())
+            dest      = _normalize_city(str(parsed.get("destination", "")).strip())
+            if origin == dest:
+                dest = ""
+            email     = str(parsed.get("email", "")).strip().lower()
+            # PDF amount from regex always wins; use AI amount only for images
+            amount    = pdf_amount if pdf_amount else ai_amount
+            ai_parsed = bool(origin or dest or carrier or amount)
         except Exception:
             ai_parsed = False
 

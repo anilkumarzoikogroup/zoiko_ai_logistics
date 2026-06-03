@@ -19,17 +19,17 @@ _lock = threading.Lock()
 
 
 def _make_pool() -> psycopg2.pool.ThreadedConnectionPool:
-    """Create pool with TCP keepalives so Neon never silently drops idle connections."""
-    # Neon serverless closes idle connections after ~300s.
-    # keepalives_idle=60 sends the first probe after 60s of silence,
-    # well before Neon's timeout, keeping the connection alive indefinitely.
-    return psycopg2.pool.ThreadedConnectionPool(
-        POOL_MIN, POOL_MAX, DB_URL,
-        keepalives=1,
-        keepalives_idle=60,
-        keepalives_interval=10,
-        keepalives_count=5,
-    )
+    """Create pool with TCP keepalives so Neon never silently drops idle connections.
+
+    keepalives_idle / keepalives_interval / keepalives_count are Linux-only
+    socket options (TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT).  psycopg2 on
+    Windows ignores or rejects them, so we only pass them on non-Windows.
+    """
+    import sys as _sys
+    ka_opts: dict = {"keepalives": 1}
+    if _sys.platform != "win32":
+        ka_opts.update(keepalives_idle=60, keepalives_interval=10, keepalives_count=5)
+    return psycopg2.pool.ThreadedConnectionPool(POOL_MIN, POOL_MAX, DB_URL, **ka_opts)
 
 
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
@@ -55,7 +55,7 @@ def _reset_pool() -> None:
 
 @contextmanager
 def get_conn(db_url: str = None):
-    """Checkout a connection; heals stale pool connections automatically."""
+    """Checkout a connection from the pool; auto-heals if the connection is closed."""
     if db_url and db_url != DB_URL:
         conn = psycopg2.connect(db_url)
         conn.autocommit = False
@@ -68,27 +68,22 @@ def get_conn(db_url: str = None):
     pool = _get_pool()
     conn = pool.getconn()
 
-    # Ping the connection; replace it if Neon closed it while idle
-    try:
-        if conn.closed:
-            raise psycopg2.OperationalError("connection closed")
-        conn.cursor().execute("SELECT 1")
-    except Exception:
+    # If Neon silently closed this connection, discard it and get a fresh one.
+    # TCP keepalives (set in _make_pool) prevent this from happening in most
+    # cases, but we guard against it on the checkout path.
+    if conn.closed:
         pool.putconn(conn, close=True)
         try:
-            conn = pool.getconn()
-            conn.cursor().execute("SELECT 1")
-        except Exception:
-            # Whole pool is dead — recreate it
             _reset_pool()
-            pool = _get_pool()
-            conn = pool.getconn()
+        except Exception:
+            pass
+        pool = _get_pool()
+        conn = pool.getconn()
 
     conn.autocommit = False
     try:
         yield conn
     except Exception:
-        # Roll back any open transaction before returning to pool
         try:
             conn.rollback()
         except Exception:
