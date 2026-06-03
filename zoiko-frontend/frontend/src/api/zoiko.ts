@@ -119,8 +119,9 @@ export const zoikoApi = {
       mocks.mockCases.unshift(newCase);
       return newCase;
     }
-    const { data } = await api.post<Case>("/cases/submit", payload);
-    return data;
+    // Submit runs a full Phase 2+3 pipeline (ingest→validate→canonical→case→evidence→finding).
+    // On cloud DB this can take 20-30s — use a 60s timeout so Axios doesn't cut it short.
+    const { data } = await api.post<Case>("/cases/submit", payload, { timeout: 60000 });
   },
 
   // ---------- Phase 2 artifacts ----------

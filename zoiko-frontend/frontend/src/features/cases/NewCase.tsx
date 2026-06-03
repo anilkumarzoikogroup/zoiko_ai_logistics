@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/useToast";
@@ -6,21 +6,40 @@ import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { UploadCloud, FileText, CheckCircle2, X, Pencil, ArrowRight, Info, Lightbulb } from "lucide-react";
+import { UploadCloud, FileText, CheckCircle2, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { USE_MOCK, api } from "@/api/client";
+import axios from "axios";
 
 type Mode = "choose" | "upload" | "manual";
 type ParseState = "idle" | "parsing" | "done" | "error";
 
-const CARRIERS = ["BlueDart", "DTDC", "Delhivery", "Ekart", "FedEx India", "UPS India", "V Express", "Other"];
-const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED"];
+const CARRIERS = [
+  "BlueDart", "DTDC", "Delhivery", "Ekart", "FedEx India", "FedEx",
+  "UPS India", "UPS", "V Express", "Gati", "DHL", "Aramex",
+  "Maersk", "MSC", "CMA CGM", "Other",
+];
+const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD", "AUD", "JPY", "CNY", "SAR"];
 
 const INDIAN_CITIES = [
-  "Hyderabad", "Warangal", "Mumbai", "Delhi", "Bangalore",
-  "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur",
-  "Lucknow", "Surat", "Kochi", "Nagpur", "Vizag",
+  "Hyderabad", "Warangal", "Mumbai", "Delhi", "Bangalore", "Chennai",
+  "Kolkata", "Pune", "Ahmedabad", "Jaipur", "Lucknow", "Surat",
+  "Kochi", "Nagpur", "Vizag", "Gurgaon", "Noida", "Chandigarh",
+  "Coimbatore", "Indore", "Bhopal", "Patna", "Vadodara", "Ludhiana",
+  "Agra", "Nashik", "Thane", "Rajkot", "Amritsar", "Varanasi",
+  "Bhubaneswar", "Guwahati", "Dehradun", "Mysore", "Mangalore",
+  "Madurai", "Thiruvananthapuram", "Tirupati",
 ];
+
+const INTERNATIONAL_CITIES = [
+  "Dubai", "Abu Dhabi", "Singapore", "Hong Kong", "Kuala Lumpur",
+  "Bangkok", "Tokyo", "Seoul", "Shanghai", "Beijing", "Sydney",
+  "Melbourne", "London", "Paris", "Frankfurt", "Amsterdam",
+  "New York", "Los Angeles", "Chicago", "Toronto", "Johannesburg",
+  "Cairo", "Nairobi", "Istanbul", "Riyadh", "Doha", "Kuwait City",
+];
+
+const ALL_CITIES = [...INDIAN_CITIES, ...INTERNATIONAL_CITIES];
 
 interface FormState {
   carrier: string;
@@ -28,13 +47,50 @@ interface FormState {
   to_city: string;
   amount: string;
   currency: string;
+  email: string;
 }
 
-async function realParseInvoice(file: File): Promise<{ carrier: string; route: string; amount: number; currency: string; parsed_by?: string }> {
+interface ParseResult {
+  carrier: string;
+  route: string;
+  origin: string;
+  destination: string;
+  amount: number;
+  currency: string;
+  route_type: "national" | "international" | "unknown";
+  email?: string;
+  parsed_by?: string;
+}
+
+async function realParseInvoice(file: File): Promise<ParseResult> {
   const fd = new FormData();
   fd.append("file", file);
   const { data } = await api.post("/ingestion/parse-invoice", fd);
   return data;
+}
+
+function CityCombobox({
+  id, value, onChange, placeholder, suggestions,
+}: {
+  id: string; value: string; onChange: (v: string) => void;
+  placeholder: string; suggestions: string[];
+}) {
+  return (
+    <>
+      <input
+        id={id}
+        list={`${id}-list`}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoComplete="off"
+        className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+      />
+      <datalist id={`${id}-list`}>
+        {suggestions.map(c => <option key={c} value={c} />)}
+      </datalist>
+    </>
+  );
 }
 
 function splitRoute(route: string): { from_city: string; to_city: string } {
@@ -48,12 +104,22 @@ export default function NewCase() {
   const toast = useToast();
 
   const [mode, setMode]             = useState<Mode>("choose");
-  const [form, setForm]             = useState<FormState>({ carrier: "", from_city: "", to_city: "", amount: "", currency: "INR" });
+  const [form, setForm]             = useState<FormState>({ carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
   const [file, setFile]             = useState<File | null>(null);
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedBy,  setParsedBy]    = useState<string>("");
+  const [routeType, setRouteType]   = useState<"national" | "international" | "unknown" | "">("");
   const [dragOver, setDragOver]     = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!file) { setPreviewUrl(null); return; }
+    const url = URL.createObjectURL(file);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
 
   const m = useMutation({
     mutationFn: () => zoikoApi.createCase({
@@ -67,14 +133,26 @@ export default function NewCase() {
       toast.success("Case submitted", `Overcharge detection pipeline started for ${form.carrier}`);
       nav(`/cases/${c.id}`);
     },
-    onError: () => {
-      toast.error("Submission failed", "Make sure the backend is running on port 8000");
+    onError: (err: unknown) => {
+      if (axios.isAxiosError(err)) {
+        if (!err.response) {
+          toast.error("Request timed out", "The pipeline is taking longer than expected. Check the backend is running on port 8000, then try again.");
+        } else if (err.response.status === 401) {
+          toast.error("Session expired", "You have been logged out. Please sign in again.");
+        } else {
+          const detail = err.response.data?.detail || "Submission failed. Try again.";
+          toast.error("Submission failed", typeof detail === "string" ? detail : JSON.stringify(detail));
+        }
+      } else {
+        toast.error("Submission failed", "An unexpected error occurred.");
+      }
     },
   });
 
   const processFile = useCallback(async (f: File) => {
     setFile(f);
     setMode("upload");
+    setPreviewOpen(true);
     if (USE_MOCK) {
       setParseState("done");
       return;
@@ -82,16 +160,29 @@ export default function NewCase() {
     setParseState("parsing");
     try {
       const parsed = await realParseInvoice(f);
-      const { from_city, to_city } = splitRoute(parsed.route);
+      const from_city = parsed.origin || splitRoute(parsed.route).from_city;
+      const to_city   = parsed.destination || splitRoute(parsed.route).to_city;
+
+      // Carrier: use extracted value; if empty or not in our list → "Other"
+      const resolvedCarrier = parsed.carrier && CARRIERS.includes(parsed.carrier)
+        ? parsed.carrier
+        : parsed.carrier || "Other";
+
+      // Currency: use extracted value if in our list, else keep it (combobox accepts any)
+      const resolvedCurrency = parsed.currency && CURRENCIES.includes(parsed.currency)
+        ? parsed.currency
+        : parsed.currency || "INR";
+
       setForm({
-        carrier:   parsed.carrier || "",
-        from_city: from_city || "",
-        to_city:   to_city   || "",
+        carrier:   resolvedCarrier,
+        from_city: from_city || "Other",
+        to_city:   to_city   || "Other",
         amount:    parsed.amount > 0 ? String(parsed.amount) : "",
-        currency:  parsed.currency || "INR",
+        currency:  resolvedCurrency,
+        email:     parsed.email || "",
       });
       setParsedBy(parsed.parsed_by || "regex");
-      // If nothing was extracted, treat as a soft parse failure
+      setRouteType(parsed.route_type || "unknown");
       const gotData = parsed.carrier || parsed.amount > 0 || from_city;
       setParseState(gotData ? "done" : "error");
     } catch {
@@ -115,53 +206,81 @@ export default function NewCase() {
     setFile(null);
     setParseState("idle");
     setMode("choose");
-    setForm({ carrier: "", from_city: "", to_city: "", amount: "", currency: "INR" });
+    setPreviewOpen(true);
+    setRouteType("");
+    setForm({ carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
     if (inputRef.current) inputRef.current.value = "";
   }
 
   const canSubmit = form.carrier && form.from_city && form.to_city && Number(form.amount) > 0;
+
+  const isParsingNow = parseState === "parsing";
 
   const formFields = (
     <div className="space-y-4">
       {/* Carrier */}
       <div className="space-y-1.5">
         <Label htmlFor="carrier">Carrier / Logistics Provider</Label>
-        <select
-          id="carrier"
-          value={form.carrier}
-          onChange={e => setForm(f => ({ ...f, carrier: e.target.value }))}
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">Select carrier…</option>
-          {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
+        {isParsingNow ? (
+          <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+        ) : (
+          <CityCombobox
+            id="carrier"
+            value={form.carrier}
+            onChange={v => setForm(f => ({ ...f, carrier: v }))}
+            placeholder="e.g. BlueDart, DHL, Maersk…"
+            suggestions={CARRIERS}
+          />
+        )}
       </div>
 
       {/* From → To */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="from_city">From (Origin)</Label>
-          <select
-            id="from_city"
-            value={form.from_city}
-            onChange={e => setForm(f => ({ ...f, from_city: e.target.value }))}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">Select city…</option>
-            {INDIAN_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between">
+          <Label>Origin &amp; Destination</Label>
+          {routeType && routeType !== "unknown" && (
+            <span className={cn(
+              "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full",
+              routeType === "international"
+                ? "bg-blue-100 text-blue-700"
+                : "bg-green-100 text-green-700"
+            )}>
+              {routeType === "international"
+                ? <><Globe className="h-3 w-3" /> International</>
+                : <><MapPin className="h-3 w-3" /> National</>
+              }
+            </span>
+          )}
         </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="to_city">To (Destination)</Label>
-          <select
-            id="to_city"
-            value={form.to_city}
-            onChange={e => setForm(f => ({ ...f, to_city: e.target.value }))}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">Select city…</option>
-            {INDIAN_CITIES.filter(c => c !== form.from_city).map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">From (Origin)</span>
+            {isParsingNow ? (
+              <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+            ) : (
+              <CityCombobox
+                id="from_city"
+                value={form.from_city}
+                onChange={v => setForm(f => ({ ...f, from_city: v }))}
+                placeholder="e.g. Mumbai, Dubai, New York"
+                suggestions={ALL_CITIES.filter(c => c !== form.to_city)}
+              />
+            )}
+          </div>
+          <div className="space-y-1">
+            <span className="text-[11px] text-muted-foreground">To (Destination)</span>
+            {isParsingNow ? (
+              <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+            ) : (
+              <CityCombobox
+                id="to_city"
+                value={form.to_city}
+                onChange={v => setForm(f => ({ ...f, to_city: v }))}
+                placeholder="e.g. Delhi, London, Singapore"
+                suggestions={ALL_CITIES.filter(c => c !== form.from_city)}
+              />
+            )}
+          </div>
         </div>
       </div>
 
@@ -169,25 +288,44 @@ export default function NewCase() {
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label htmlFor="amount">Invoice Amount</Label>
-          <Input
-            id="amount"
-            type="number"
-            placeholder="e.g. 12500"
-            value={form.amount}
-            onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
-          />
+          {isParsingNow ? (
+            <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+          ) : (
+            <Input
+              id="amount"
+              type="number"
+              placeholder="e.g. 12500"
+              value={form.amount}
+              onChange={e => setForm(f => ({ ...f, amount: e.target.value }))}
+            />
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="currency">Currency</Label>
-          <select
+          <CityCombobox
             id="currency"
             value={form.currency}
-            onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          >
-            {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+            onChange={v => setForm(f => ({ ...f, currency: v.toUpperCase() }))}
+            placeholder="INR, USD, EUR…"
+            suggestions={CURRENCIES}
+          />
         </div>
+      </div>
+
+      {/* Email */}
+      <div className="space-y-1.5">
+        <Label htmlFor="email">Contact / Billing Email</Label>
+        {isParsingNow ? (
+          <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+        ) : (
+          <Input
+            id="email"
+            type="email"
+            placeholder="e.g. billing@dhl.com"
+            value={form.email}
+            onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+          />
+        )}
       </div>
 
       {/* Route preview */}
@@ -213,14 +351,18 @@ export default function NewCase() {
           size="lg"
         >
           {m.isPending ? (
-            <><div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> Submitting…</>
+            <><div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> Running pipeline… this takes ~20s</>
           ) : (
             <><ArrowRight className="h-4 w-4" /> Submit for Audit</>
           )}
         </Button>
         {m.isError && (
           <p className="text-sm text-destructive text-center mt-2">
-            Submission failed — make sure the backend is running on port 8000.
+            {axios.isAxiosError(m.error) && !m.error.response
+              ? "Request timed out — the pipeline takes ~20s. Check the backend is running and try again."
+              : axios.isAxiosError(m.error) && m.error.response?.status === 401
+              ? "Session expired — please log in again."
+              : "Submission failed — check the backend terminal for details."}
           </p>
         )}
       </form>
@@ -323,7 +465,7 @@ export default function NewCase() {
             {parseState === "parsing" && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <div className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                Parsing…
+                {file?.type?.startsWith("image/") ? "Reading image with AI…" : "Extracting from PDF…"}
               </div>
             )}
             {parseState === "done" && !USE_MOCK && form.carrier && (
@@ -341,6 +483,61 @@ export default function NewCase() {
               <X className="h-4 w-4" />
             </button>
           </div>
+
+          {/* File preview */}
+          {previewUrl && (
+            <Card className="overflow-hidden border-zoiko-blue/20 shadow-sm">
+              <div
+                className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-zoiko-navy/5 to-zoiko-blue/5 border-b cursor-pointer select-none"
+                onClick={() => setPreviewOpen(v => !v)}
+              >
+                <div className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-zoiko-blue" />
+                  <span className="text-sm font-semibold text-zoiko-navy">Invoice Preview</span>
+                  <span className="text-[10px] bg-zoiko-blue/10 text-zoiko-blue px-2 py-0.5 rounded-full font-medium uppercase tracking-wide">
+                    {file?.type === "application/pdf" ? "PDF" : "Image"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <a
+                    href={previewUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    className="text-muted-foreground hover:text-zoiko-blue transition-colors"
+                    title="Open in new tab"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </a>
+                  {previewOpen
+                    ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                    : <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  }
+                </div>
+              </div>
+
+              {previewOpen && (
+                <div className="bg-slate-50">
+                  {file?.type === "application/pdf" ? (
+                    <iframe
+                      src={previewUrl}
+                      title="Invoice PDF Preview"
+                      className="w-full rounded-b-lg"
+                      style={{ height: "480px", border: "none" }}
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center p-4">
+                      <img
+                        src={previewUrl}
+                        alt="Invoice preview"
+                        className="max-h-96 max-w-full rounded-lg shadow-md object-contain ring-1 ring-black/5"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-3">

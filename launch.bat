@@ -34,9 +34,13 @@ REM ── Migrations ───────────────────�
 echo  Migrations up to date.
 echo.
 
+REM ── Kill any orphan processes on port 8000 before starting ─────
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8000 " ^| findstr "LISTENING"') do taskkill /PID %%a /F >nul 2>&1
+timeout /t 2 /nobreak >nul
+
 REM ── Start Phase 2 (port 8000) ───────────────────────────────
 echo  Starting Phase 2 on port 8000...
-start "Zoiko-Phase2" /d "%ROOT%phase-2" cmd /k "call ..\.venv\Scripts\activate.bat && set DB_URL=!DB_URL! && set ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE! && set ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET! && set ZOIKO_ISSUER=!ZOIKO_ISSUER! && set ZOIKO_FF_SC_001_ENABLED=* && set ZOIKO_COMPANY_NAME=!ZOIKO_COMPANY_NAME! && set ZOIKO_ADMIN_EMAIL=!ZOIKO_ADMIN_EMAIL! && set ZOIKO_ADMIN_PASSWORD=!ZOIKO_ADMIN_PASSWORD! && set ZOIKO_ADMIN_NAME=!ZOIKO_ADMIN_NAME! && set JWT_TTL_SECONDS=!JWT_TTL_SECONDS! && set PYTHONIOENCODING=utf-8 && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8000"
+start "Zoiko-Phase2" /d "%ROOT%phase-2" cmd /k "set DB_URL=!DB_URL! && set ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE! && set ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET! && set ZOIKO_ISSUER=!ZOIKO_ISSUER! && set ZOIKO_FF_SC_001_ENABLED=* && set PYTHONIOENCODING=utf-8 && %ROOT%.venv\Scripts\python.exe -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000"
 timeout /t 3 /nobreak >nul
 
 REM ── Start Phase 3 (port 8002) ───────────────────────────────

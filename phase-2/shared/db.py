@@ -6,7 +6,7 @@ import psycopg2.extras
 import psycopg2.extensions
 import psycopg2.pool
 
-load_dotenv()
+load_dotenv(override=True)  # .env always wins over shell env vars
 
 psycopg2.extras.register_uuid()
 

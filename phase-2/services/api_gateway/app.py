@@ -1554,155 +1554,399 @@ async def parse_invoice_file(
     file: UploadFile = File(...),
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """Parse a PDF invoice using Groq AI (fallback: regex)."""
-    import re as _re2
-    MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB default
+    """Parse a PDF or image invoice using Groq AI (vision for images, text for PDFs). Fallback: regex."""
+    import re as _re2, base64 as _b64, io as _io
+    MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     content = await file.read()
     if len(content) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_FILE_BYTES // 1024 // 1024} MB.")
-    text = ""
 
-    # ── Step 1: Extract text from PDF ────────────────────────────────────────
-    try:
-        import pdfplumber, io
-        with pdfplumber.open(io.BytesIO(content)) as pdf:
-            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
-    except Exception:
-        text = content.decode("utf-8", errors="ignore")
+    # ── City / carrier reference tables ──────────────────────────────────────
+    INDIAN_CITIES_SET = {
+        "hyderabad", "warangal", "mumbai", "bombay", "delhi", "new delhi",
+        "bangalore", "bengaluru", "chennai", "madras", "kolkata", "calcutta",
+        "pune", "ahmedabad", "jaipur", "lucknow", "surat", "kochi", "cochin",
+        "nagpur", "vizag", "visakhapatnam", "gurgaon", "gurugram", "noida",
+        "chandigarh", "coimbatore", "indore", "bhopal", "patna", "vadodara",
+        "ludhiana", "agra", "nashik", "thane", "rajkot", "amritsar", "varanasi",
+        "bhubaneswar", "raipur", "dehradun", "guwahati", "srinagar", "jodhpur",
+        "mysore", "mangalore", "hubli", "tirupati", "madurai", "trivandrum",
+        "thiruvananthapuram",
+    }
+
+    # IATA → city name (airports commonly found on freight invoices)
+    IATA_MAP = {
+        "bom": "Mumbai", "del": "Delhi", "blr": "Bangalore", "maa": "Chennai",
+        "ccu": "Kolkata", "hyd": "Hyderabad", "pnq": "Pune", "amd": "Ahmedabad",
+        "cok": "Kochi", "jfk": "New York", "lax": "Los Angeles", "ord": "Chicago",
+        "lhr": "London", "cdg": "Paris", "fra": "Frankfurt", "ams": "Amsterdam",
+        "dxb": "Dubai", "auh": "Abu Dhabi", "sin": "Singapore", "hkg": "Hong Kong",
+        "icn": "Seoul", "nrt": "Tokyo", "pvg": "Shanghai", "pek": "Beijing",
+        "syd": "Sydney", "mel": "Melbourne", "jnb": "Johannesburg", "cai": "Cairo",
+        "bkk": "Bangkok", "kul": "Kuala Lumpur", "cgk": "Jakarta",
+    }
+
+    CITY_ALIASES = {
+        "bombay": "Mumbai", "new delhi": "Delhi", "bengaluru": "Bangalore",
+        "calcutta": "Kolkata", "madras": "Chennai", "visakhapatnam": "Vizag",
+        "cochin": "Kochi", "gurugram": "Gurgaon", "trivandrum": "Thiruvananthapuram",
+        "hongkong": "Hong Kong", "hong kong sar": "Hong Kong",
+        "uae": "Dubai", "united arab emirates": "Dubai",
+    }
+
+    def _normalize_city(raw: str) -> str:
+        """Strip country suffix, expand IATA codes, normalize aliases, title-case."""
+        # Strip country: "Mumbai, India" → "Mumbai"
+        city = _re2.split(r",\s*|\s+\(", raw)[0].strip()
+        city = _re2.sub(r"\s*\([^)]+\)", "", city).strip()
+        key = city.lower().strip()
+        if key in IATA_MAP:
+            return IATA_MAP[key]
+        if key in CITY_ALIASES:
+            return CITY_ALIASES[key]
+        # Match against known Indian cities (fuzzy prefix)
+        for c in INDIAN_CITIES_SET:
+            if c == key or key.startswith(c) or c.startswith(key):
+                return c.title()
+        return city.title()
+
+    def _is_indian(city: str) -> bool:
+        """Handles 'Mumbai', 'Mumbai, India', 'BOM', etc."""
+        norm = _normalize_city(city).lower()
+        return norm in INDIAN_CITIES_SET or norm in {v.lower() for v in IATA_MAP.values() if _is_in_india_iata(norm)}
+
+    def _is_in_india_iata(city_lower: str) -> bool:
+        indian_iata = {"bom","del","blr","maa","ccu","hyd","pnq","amd","cok"}
+        for code, name in IATA_MAP.items():
+            if code in indian_iata and name.lower() == city_lower:
+                return True
+        return False
 
     KNOWN_CARRIERS = [
-        "BlueDart", "Delhivery", "FedEx India", "DTDC",
-        "Ekart", "UPS India", "V Express", "Gati", "Other"
-    ]
-    KNOWN_CITIES = [
-        "Hyderabad", "Warangal", "Mumbai", "Delhi", "Bangalore",
-        "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur",
-        "Lucknow", "Surat", "Kochi", "Nagpur", "Vizag",
+        "BlueDart", "Delhivery", "FedEx India", "FedEx", "DTDC",
+        "Ekart", "UPS India", "UPS", "V Express", "Gati", "DHL",
+        "Aramex", "Maersk", "MSC", "CMA CGM", "Other"
     ]
 
-    carrier, amount, currency, route = "", 0.0, "INR", ""
+    # ── Detect file type ──────────────────────────────────────────────────────
+    fname = (file.filename or "").lower()
+    ctype = (file.content_type or "").lower()
+    is_image = ctype.startswith("image/") or fname.endswith((".png", ".jpg", ".jpeg", ".webp"))
 
-    # ── Step 2: Try Groq AI first ─────────────────────────────────────────────
-    groq_key = os.getenv("GROQ_API_KEY", "")
+    text = ""
+    image_b64 = ""
+    image_mime = ""
+
+    if is_image:
+        image_mime = ctype if ctype.startswith("image/") else (
+            "image/png" if fname.endswith(".png") else "image/jpeg"
+        )
+        image_b64 = _b64.b64encode(content).decode("utf-8")
+    else:
+        try:
+            import pdfplumber
+            with pdfplumber.open(_io.BytesIO(content)) as pdf:
+                text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        except Exception:
+            text = content.decode("utf-8", errors="ignore")
+
+    carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
     ai_parsed = False
+    groq_key  = os.getenv("GROQ_API_KEY", "")
 
-    if groq_key and text.strip():
+    # ── Pre-extract grand total from PDF text (before AI runs) ───────────────
+    # Regex against labelled final-amount fields is more reliable than AI for
+    # distinguishing grand total from subtotal.  We lock this in early so AI
+    # cannot override it with a subtotal value.
+    def _find_grand_total(t: str) -> float:
+        def _num(raw: str) -> float:
+            try:
+                v = float(raw.replace(",", ""))
+                return v if v >= 100 else 0.0
+            except ValueError:
+                return 0.0
+
+        # Tier 1 — definitive final-amount labels, cross-line with non-greedy match
+        pat1 = (
+            r"(?:grand\s+total|amount\s+due|balance\s+due|net\s+payable"
+            r"|total\s+payable|total\s+due|invoice\s+total"
+            r"|total\s+invoice\s+value|amount\s+payable|final\s+amount"
+            r"|total\s+charges|net\s+amount\s+payable)"
+            r"[\s\S]{0,80}?([\d,]+\.\d{2})"
+        )
+        hits = [v for v in (_num(m.group(1)) for m in _re2.finditer(pat1, t, _re2.IGNORECASE)) if v]
+        if hits:
+            return hits[-1]  # last = bottom of invoice = final total
+
+        # Tier 2 — bare "Total" / "Total Amount" not on a subtotal line
+        pat2 = r"(?:total\s+amount|net\s+total|total)[\s\S]{0,40}?([\d,]+\.\d{2})"
+        for m in _re2.finditer(pat2, t, _re2.IGNORECASE):
+            seg = t[max(0, m.start() - 10): m.start() + 25].lower()
+            if "sub" not in seg:
+                v = _num(m.group(1))
+                if v:
+                    return v
+        return 0.0
+
+    pdf_amount = _find_grand_total(text) if text else 0.0
+
+    # ── Groq AI extraction ───────────────────────────────────────────────────
+    if groq_key and (image_b64 or text.strip()):
         try:
             from groq import Groq as _Groq
             _groq = _Groq(api_key=groq_key)
-            prompt = (
-                f"You are an invoice parser. Extract fields from this freight carrier invoice text.\n\n"
-                f"INVOICE TEXT:\n{text[:3000]}\n\n"
-                f"Return ONLY valid JSON with these fields:\n"
-                f"- carrier: one of {KNOWN_CARRIERS} or 'Other'\n"
-                f"- total_amount: the final invoice total as a number (no commas)\n"
-                f"- currency: INR, USD, EUR, or GBP\n"
-                f"- origin: origin city name\n"
-                f"- destination: destination city name\n\n"
-                f"If a field cannot be determined, use empty string or 0.\n"
-                f"Respond with ONLY the JSON object, no explanation."
+
+            extraction_prompt = (
+                "You are an expert freight/logistics invoice parser. "
+                "Carefully read the invoice and extract exactly these fields.\n\n"
+                "Return ONLY a single valid JSON object — no markdown, no explanation:\n"
+                "{\n"
+                '  "carrier": "<logistics company name, e.g. BlueDart, DHL, FedEx, Maersk, UPS, Aramex — use exact name from invoice>",\n'
+                '  "total_amount": <see amount rules below>,\n'
+                '  "currency": "<3-letter ISO code from invoice: INR, USD, EUR, GBP, AED, SGD, AUD, etc.>",\n'
+                '  "origin": "<shipment ORIGIN city only — no country suffix, e.g. Mumbai, Dubai, New York, Singapore>",\n'
+                '  "destination": "<shipment DESTINATION city only — no country suffix, e.g. Delhi, London, Chicago>",\n'
+                '  "route_type": "<national if both cities are within India, international if any city is outside India>",\n'
+                '  "email": "<any email address visible on the invoice — billing, contact, support or sender email; empty string if none>"\n'
+                "}\n\n"
+                "AMOUNT RULES — follow this priority strictly:\n"
+                "  Priority 1 (highest): Grand Total, Grand Total Amount\n"
+                "  Priority 2: Amount Due, Balance Due, Payment Due, Total Due\n"
+                "  Priority 3: Net Payable, Total Payable, Amount Payable\n"
+                "  Priority 4: Invoice Total, Total Invoice Value, Total Charges\n"
+                "  Priority 5: Total Amount — ONLY when NO subtotal or sub-total line exists anywhere\n\n"
+                "  CRITICAL EXAMPLE — for this invoice structure:\n"
+                "    Subtotal (before tax)   12,119.00\n"
+                "    IGST 18%                 2,197.62\n"
+                "    TOTAL PAYABLE           14,316.62   ← YOU MUST RETURN THIS\n"
+                "  Return 14316.62, NOT 12119.00. The subtotal is NEVER the answer.\n\n"
+                "  FORBIDDEN — NEVER return these values:\n"
+                "  Subtotal, Sub-total, Sub Total, Basic Freight, Assessable Value,\n"
+                "  Taxable Value, Net Amount (before tax), any per-line-item amounts,\n"
+                "  unit prices, or any figure that appears BEFORE a tax/surcharge row.\n\n"
+                "  The answer is always the LAST and LARGEST summary figure — the amount\n"
+                "  the customer actually pays after ALL taxes, surcharges, and fees.\n"
+                "  Return as a plain decimal number only, no symbols or commas, e.g. 14316.62\n\n"
+                "LOCATION RULES:\n"
+                "  1. origin/destination = FROM/TO shipment cities, NOT company/billing address.\n"
+                "  2. Expand IATA codes: BOM→Mumbai, DEL→Delhi, JFK→New York, DXB→Dubai, LHR→London.\n"
+                "  3. City name only — no state, country, or ZIP.\n"
+                "  4. If not found, return empty string."
             )
-            chat = _groq.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=200,
-            )
+
+            if image_b64:
+                # Try vision models in order of preference
+                vision_models = [
+                    os.getenv("GROQ_VISION_MODEL", ""),
+                    "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "llama-3.2-90b-vision-preview",
+                    "llama-3.2-11b-vision-preview",
+                ]
+                vision_models = [m for m in vision_models if m]  # drop empty
+                chat = None
+                for vm in vision_models:
+                    try:
+                        chat = _groq.chat.completions.create(
+                            model=vm,
+                            messages=[{
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
+                                    {"type": "text", "text": extraction_prompt},
+                                ],
+                            }],
+                            temperature=0,
+                            max_tokens=400,
+                        )
+                        break
+                    except Exception:
+                        continue
+                if chat is None:
+                    raise RuntimeError("All vision models failed")
+            else:
+                text_model = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
+                try:
+                    chat = _groq.chat.completions.create(
+                        model=text_model,
+                        messages=[{"role": "user", "content": f"INVOICE TEXT:\n{text[:4000]}\n\n{extraction_prompt}"}],
+                        temperature=0,
+                        max_tokens=400,
+                    )
+                except Exception:
+                    # Fallback to smaller model
+                    chat = _groq.chat.completions.create(
+                        model="llama-3.1-8b-instant",
+                        messages=[{"role": "user", "content": f"INVOICE TEXT:\n{text[:4000]}\n\n{extraction_prompt}"}],
+                        temperature=0,
+                        max_tokens=400,
+                    )
+
             raw = chat.choices[0].message.content.strip()
-            # Extract JSON from response
-            json_match = _re2.search(r'\{.*?\}', raw, _re2.DOTALL)  # non-greedy: first JSON object only
+            # Extract first JSON object from response (handles markdown code fences)
+            json_match = _re2.search(r'\{[^{}]*\}', raw, _re2.DOTALL)
             if json_match:
                 try:
                     parsed = json.loads(json_match.group())
                 except json.JSONDecodeError:
                     parsed = {}
                 carrier  = str(parsed.get("carrier", "")).strip()
-                amount   = float(parsed.get("total_amount", 0) or 0)
+                ai_amount = float(parsed.get("total_amount", 0) or 0)
                 currency = str(parsed.get("currency", "INR")).strip().upper() or "INR"
-                origin   = str(parsed.get("origin", "")).strip()
-                dest     = str(parsed.get("destination", "")).strip()
-                if origin and dest and origin != dest:
-                    route = f"{origin}-{dest}"
-                # Validate carrier against known list
-                if carrier not in KNOWN_CARRIERS:
-                    carrier = "Other" if carrier else ""
-                ai_parsed = True
-        except Exception as _ai_err:
-            ai_parsed = False  # fall through to regex
+                origin   = _normalize_city(str(parsed.get("origin", "")).strip())
+                dest     = _normalize_city(str(parsed.get("destination", "")).strip())
+                if origin == dest:
+                    dest = ""
+                email    = str(parsed.get("email", "")).strip().lower()
+                # PDF amount from regex always wins; use AI amount only for images
+                amount = pdf_amount if pdf_amount else ai_amount
+                ai_parsed = bool(origin or dest or carrier or amount)
+        except Exception:
+            ai_parsed = False
 
-    # ── Step 3: Regex fallback if AI not available or failed ─────────────────
-    if not ai_parsed:
+    # ── Regex fallback (PDF / text only) ─────────────────────────────────────
+    if not ai_parsed and text:
         text_lower = text.lower()
+
         CARRIER_ALIASES = {
             "bluedart": "BlueDart", "blue dart": "BlueDart",
             "delhivery": "Delhivery",
-            "fedex india": "FedEx India", "fedex": "FedEx India",
+            "fedex india": "FedEx India", "fedex": "FedEx",
             "dtdc": "DTDC", "ekart": "Ekart", "gati": "Gati",
-            "ups india": "UPS India", "ups": "UPS India",
+            "ups india": "UPS India", "ups": "UPS",
             "v express": "V Express", "vexpress": "V Express",
-            "dhl": "Other", "aramex": "Other",
+            "dhl": "DHL", "aramex": "Aramex",
+            "maersk": "Maersk", "msc ": "MSC", "cma cgm": "CMA CGM",
         }
         for alias, canonical in CARRIER_ALIASES.items():
             if alias in text_lower:
                 carrier = canonical
                 break
 
-        for pat in [
-            r"(?:total|grand total|amount due|invoice amount|net amount|total amount)[^\d₹$]*[₹$]?\s*([\d,]+(?:\.\d{1,2})?)",
-            r"[₹$]\s*([\d,]+(?:\.\d{1,2})?)",
-            r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR)",
-        ]:
-            # Collect ALL matches for this pattern and take the LARGEST
-            # (avoids picking up page numbers, line items, or small quantities)
-            candidates = []
-            for m in _re2.finditer(pat, text, _re2.IGNORECASE):
-                try:
-                    v = float(m.group(1).replace(",", ""))
-                    if v >= 500:  # freight invoices are never < ₹500
-                        candidates.append(v)
-                except ValueError:
-                    pass
-            if candidates:
-                amount = max(candidates)  # prefer largest match (total, not line item)
-                break
+        # Use the pre-extracted PDF amount if already found
+        if pdf_amount:
+            amount = pdf_amount
 
-        if "usd" in text_lower or "$" in text:
+        def _parse_num(raw: str) -> float:
+            try:
+                v = float(raw.replace(",", ""))
+                return v if v >= 100 else 0.0
+            except ValueError:
+                return 0.0
+
+        def _tier1_amounts(text: str) -> list[float]:
+            """Find all definitive final-amount labels, allowing multi-line gaps."""
+            pat = (
+                r"(?:grand\s+total|amount\s+due|balance\s+due|net\s+payable"
+                r"|total\s+payable|total\s+due|invoice\s+total"
+                r"|total\s+invoice\s+value|amount\s+payable|final\s+amount"
+                r"|total\s+charges|net\s+amount\s+payable)"
+                r"[\s\S]{0,80}?"           # cross newlines, non-greedy
+                r"([\d,]+\.\d{2})"         # require decimal — final amounts always have paise/cents
+            )
+            return [v for v in (_parse_num(m.group(1)) for m in _re2.finditer(pat, text, _re2.IGNORECASE)) if v]
+
+        # Tier 1 — definitive labels; take the last match (totals are at the bottom)
+        # Skip if pdf_amount already resolved above
+        tier1 = [] if amount else _tier1_amounts(text)
+        if tier1:
+            amount = tier1[-1]
+
+        # Tier 2 — bare "Total" or "Total Amount" but never on a subtotal line
+        if not amount:
+            tier2 = []
+            pat2 = (
+                r"(?:total\s+amount|net\s+total|total)"
+                r"[\s\S]{0,40}?([\d,]+\.\d{2})"
+            )
+            for m in _re2.finditer(pat2, text, _re2.IGNORECASE):
+                # Reject if "sub" appears on the same logical line as the label
+                seg = text[max(0, m.start() - 10): m.start() + 30].lower()
+                if "sub" not in seg:
+                    v = _parse_num(m.group(1))
+                    if v:
+                        tier2.append(v)
+            if tier2:
+                amount = tier2[-1]
+
+        # Tier 3 — currency-symbol / currency-code; take max (last resort)
+        if not amount:
+            for pat in [
+                r"[₹$€£]\s*([\d,]+(?:\.\d{1,2})?)",
+                r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR|GBP|AED|SGD)",
+            ]:
+                candidates = [v for v in (_parse_num(m.group(1)) for m in _re2.finditer(pat, text, _re2.IGNORECASE)) if v]
+                if candidates:
+                    amount = max(candidates)
+                    break
+
+        if "usd" in text_lower or "$ " in text:
             currency = "USD"
         elif "eur" in text_lower or "€" in text:
             currency = "EUR"
+        elif "gbp" in text_lower or "£" in text:
+            currency = "GBP"
+        elif "aed" in text_lower:
+            currency = "AED"
 
-        CITY_ALIASES = {
-            "bombay": "Mumbai", "new delhi": "Delhi", "bengaluru": "Bangalore",
-            "calcutta": "Kolkata", "madras": "Chennai", "visakhapatnam": "Vizag",
-            "cochin": "Kochi",
-        }
-        def _normalise_city(raw: str) -> str:
-            raw = raw.strip().lower()
-            if raw in CITY_ALIASES:
-                return CITY_ALIASES[raw]
-            for city in KNOWN_CITIES:
-                if city.lower() in raw or raw in city.lower():
-                    return city
-            return raw.title()
+        # Email regex fallback
+        if not email:
+            email_match = _re2.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
+            if email_match:
+                email = email_match.group(0).lower()
 
         for pat in [
-            r"(?:from|origin)[:\s]+([A-Za-z][a-zA-Z ]+?)\s+(?:to|dest(?:ination)?)[:\s]+([A-Za-z][a-zA-Z ]+?)(?:\n|,|\.|$)",
-            r"([A-Za-z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[-–→]\s*([A-Za-z][a-z]+(?:\s[A-Z][a-z]+)?)",
+            r"(?:from|origin|shipper['\s]?city|pickup\s*(?:city|location))[:\s]+([A-Za-z][a-zA-Z .'-]{2,30}?)\s{0,3}(?:to|dest(?:ination)?|consignee['\s]?city|delivery\s*(?:city|location))[:\s]+([A-Za-z][a-zA-Z .'-]{2,30})(?:\s*\n|,|\.|$)",
+            r"\b([A-Z][a-z]{2,}(?:[\s][A-Z][a-z]+)?)\s*(?:[-–→]|to)\s*([A-Z][a-z]{2,}(?:[\s][A-Z][a-z]+)?)\b",
         ]:
             m = _re2.search(pat, text, _re2.IGNORECASE)
             if m:
-                city_a = _normalise_city(m.group(1))
-                city_b = _normalise_city(m.group(2))
-                if city_a and city_b and city_a != city_b:
-                    route = f"{city_a}-{city_b}"
+                c1 = _normalize_city(m.group(1))
+                c2 = _normalize_city(m.group(2))
+                if c1 and c2 and c1.lower() != c2.lower():
+                    origin, dest = c1, c2
                 break
 
+        # Last resort: extract from filename  (e.g. bluedart_mumbai_delhi.pdf)
+        if not origin:
+            name_parts = _re2.split(r"[_\-\s]+", fname.replace(".pdf","").replace(".png","").replace(".jpg",""))
+            found = []
+            for part in name_parts:
+                norm = _normalize_city(part)
+                if norm and len(norm) > 2:
+                    # Check if it looks like a city (known or at least title-cased word)
+                    if norm.lower() in INDIAN_CITIES_SET or norm.lower() in IATA_MAP:
+                        found.append(norm)
+            if len(found) >= 2:
+                origin, dest = found[0], found[1]
+
+    # ── Email fallback: scan full text if AI missed it ────────────────────────
+    if not email and text:
+        em = _re2.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
+        if em:
+            email = em.group(0).lower()
+
+    # ── Determine route type ──────────────────────────────────────────────────
+    if origin and dest:
+        both_indian = _is_indian(origin) and _is_indian(dest)
+        route_type = "national" if both_indian else "international"
+    elif origin or dest:
+        single = origin or dest
+        route_type = "national" if _is_indian(single) else "international"
+    else:
+        route_type = "unknown"
+
+    route = f"{origin}-{dest}" if (origin and dest) else (origin or dest)
+
     return {
-        "carrier":   carrier,
-        "route":     route,
-        "amount":    amount,
-        "currency":  currency,
-        "parsed_by": "groq_ai" if ai_parsed else "regex",
+        "carrier":          carrier,
+        "route":            route,
+        "origin":           origin,
+        "destination":      dest,
+        "amount":           amount,
+        "currency":         currency,
+        "route_type":       route_type,
+        "email":            email,
+        "parsed_by":        "groq_ai" if ai_parsed else "regex",
         "raw_text_preview": text[:300] if text else "",
     }
 
@@ -2235,13 +2479,19 @@ def _run_evidence_and_reasoning(
 
 
 @v1_router.post("/cases/submit", tags=["ui"], status_code=201)
-async def ui_submit_case(
+def ui_submit_case(
     body: SubmitCaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     claims: ZoikoClaims = Depends(get_claims),
     _ff: None = Depends(require_feature_flag("SC_001_ENABLED")),
 ):
-    """Full pipeline: ingest → validate → canonical → open case → evidence → AI finding."""
+    """Full pipeline: ingest → validate → canonical → open case → evidence → AI finding.
+
+    Sync def (not async) so FastAPI runs this in the thread-pool executor.
+    The pipeline makes ~15 sequential psycopg2 calls against a cloud DB (~20s
+    total); keeping it in async would block the entire event loop for that
+    duration, starving health-checks and other requests.
+    """
     parts  = _re.split(r'\s*[-→–]\s*', body.route.strip(), maxsplit=1)
     origin = parts[0].strip() if parts else body.route
     dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
