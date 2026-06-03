@@ -18,20 +18,45 @@ _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 _lock = threading.Lock()
 
 
+def _make_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    """Create pool with TCP keepalives so Neon never silently drops idle connections."""
+    # Neon serverless closes idle connections after ~300s.
+    # keepalives_idle=60 sends the first probe after 60s of silence,
+    # well before Neon's timeout, keeping the connection alive indefinitely.
+    return psycopg2.pool.ThreadedConnectionPool(
+        POOL_MIN, POOL_MAX, DB_URL,
+        keepalives=1,
+        keepalives_idle=60,
+        keepalives_interval=10,
+        keepalives_count=5,
+    )
+
+
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None or _pool.closed:
         with _lock:
             if _pool is None or _pool.closed:
-                _pool = psycopg2.pool.ThreadedConnectionPool(POOL_MIN, POOL_MAX, DB_URL)
+                _pool = _make_pool()
     return _pool
+
+
+def _reset_pool() -> None:
+    """Force-recreate the connection pool (called when connections are found broken)."""
+    global _pool
+    with _lock:
+        if _pool and not _pool.closed:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+        _pool = _make_pool()
 
 
 @contextmanager
 def get_conn(db_url: str = None):
-    """Context manager — checks out a connection and returns it to the pool on exit."""
+    """Checkout a connection; heals stale pool connections automatically."""
     if db_url and db_url != DB_URL:
-        # Non-default URL: open a direct connection (migration scripts etc.)
         conn = psycopg2.connect(db_url)
         conn.autocommit = False
         try:
@@ -42,9 +67,33 @@ def get_conn(db_url: str = None):
 
     pool = _get_pool()
     conn = pool.getconn()
+
+    # Ping the connection; replace it if Neon closed it while idle
+    try:
+        if conn.closed:
+            raise psycopg2.OperationalError("connection closed")
+        conn.cursor().execute("SELECT 1")
+    except Exception:
+        pool.putconn(conn, close=True)
+        try:
+            conn = pool.getconn()
+            conn.cursor().execute("SELECT 1")
+        except Exception:
+            # Whole pool is dead — recreate it
+            _reset_pool()
+            pool = _get_pool()
+            conn = pool.getconn()
+
     conn.autocommit = False
     try:
         yield conn
+    except Exception:
+        # Roll back any open transaction before returning to pool
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         pool.putconn(conn)
 

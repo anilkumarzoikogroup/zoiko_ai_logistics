@@ -1549,12 +1549,38 @@ def admin_db_stats(claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Invoice file parse ────────────────────────────────────────────────────────
 
+def _extract_first_json(text: str) -> dict:
+    """Extract the outermost JSON object from text, handling nested braces correctly.
+    The old regex r'\\{[^{}]*\\}' breaks when Groq wraps any value in a nested object;
+    this walk finds the matching closing brace instead.
+    """
+    start = text.find("{")
+    if start == -1:
+        return {}
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    return {}
+    return {}
+
+
 @v1_router.post("/ingestion/parse-invoice", tags=["ui"])
 async def parse_invoice_file(
     file: UploadFile = File(...),
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """Parse a PDF or image invoice using Groq AI (vision for images, text for PDFs). Fallback: regex."""
+    """Parse a PDF or image invoice using Groq AI (vision for images, text for PDFs). Fallback: regex.
+
+    File reading is async; the blocking pdfplumber + Groq work runs in the
+    thread-pool executor so the event loop stays free during AI extraction.
+    """
     import re as _re2, base64 as _b64, io as _io
     MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     content = await file.read()
@@ -1693,6 +1719,7 @@ async def parse_invoice_file(
     # ── Groq AI extraction ───────────────────────────────────────────────────
     if groq_key and (image_b64 or text.strip()):
         try:
+            import asyncio as _asyncio
             from groq import Groq as _Groq
             _groq = _Groq(api_key=groq_key)
 
@@ -1765,31 +1792,29 @@ async def parse_invoice_file(
                     raise RuntimeError("All vision models failed")
             else:
                 text_model = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
+                _msg = [{"role": "user", "content": f"INVOICE TEXT:\n{text[:4000]}\n\n{extraction_prompt}"}]
                 try:
-                    chat = _groq.chat.completions.create(
-                        model=text_model,
-                        messages=[{"role": "user", "content": f"INVOICE TEXT:\n{text[:4000]}\n\n{extraction_prompt}"}],
-                        temperature=0,
-                        max_tokens=400,
+                    # Run synchronous Groq SDK in thread pool so event loop stays free
+                    chat = await _asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: _groq.chat.completions.create(
+                            model=text_model, messages=_msg, temperature=0, max_tokens=400,
+                        ),
                     )
                 except Exception:
-                    # Fallback to smaller model
-                    chat = _groq.chat.completions.create(
-                        model="llama-3.1-8b-instant",
-                        messages=[{"role": "user", "content": f"INVOICE TEXT:\n{text[:4000]}\n\n{extraction_prompt}"}],
-                        temperature=0,
-                        max_tokens=400,
+                    chat = await _asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: _groq.chat.completions.create(
+                            model="llama-3.1-8b-instant", messages=_msg, temperature=0, max_tokens=400,
+                        ),
                     )
 
             raw = chat.choices[0].message.content.strip()
-            # Extract first JSON object from response (handles markdown code fences)
-            json_match = _re2.search(r'\{[^{}]*\}', raw, _re2.DOTALL)
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    parsed = {}
-                carrier  = str(parsed.get("carrier", "")).strip()
+            # Use the brace-counting extractor — the old r'\{[^{}]*\}' regex
+            # matched the first INNERMOST object, failing whenever Groq nested
+            # any value (e.g. "details": {"total": 123}) and returning {} instead.
+            parsed   = _extract_first_json(raw)
+            carrier  = str(parsed.get("carrier", "")).strip()
                 ai_amount = float(parsed.get("total_amount", 0) or 0)
                 currency = str(parsed.get("currency", "INR")).strip().upper() or "INR"
                 origin   = _normalize_city(str(parsed.get("origin", "")).strip())
@@ -1918,6 +1943,23 @@ async def parse_invoice_file(
                         found.append(norm)
             if len(found) >= 2:
                 origin, dest = found[0], found[1]
+
+    # ── Carrier fallback: extract from filename when AI/regex found nothing ─────
+    # e.g. "DHL_Invoice_with_Excel.pdf" → "DHL"
+    if not carrier and fname:
+        _FNAME_CARRIERS = {
+            "bluedart": "BlueDart", "blue_dart": "BlueDart",
+            "delhivery": "Delhivery", "fedex": "FedEx", "dtdc": "DTDC",
+            "ekart": "Ekart", "gati": "Gati", "ups": "UPS",
+            "vexpress": "V Express", "v_express": "V Express",
+            "dhl": "DHL", "aramex": "Aramex",
+            "maersk": "Maersk", "msc": "MSC", "cmacgm": "CMA CGM",
+        }
+        fname_lower = fname.lower()
+        for key, canonical in _FNAME_CARRIERS.items():
+            if key in fname_lower:
+                carrier = canonical
+                break
 
     # ── Email fallback: scan full text if AI missed it ────────────────────────
     if not email and text:
