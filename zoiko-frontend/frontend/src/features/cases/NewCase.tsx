@@ -6,7 +6,7 @@ import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { UploadCloud, FileText, CheckCircle2, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin } from "lucide-react";
+import { UploadCloud, FileText, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { USE_MOCK, api } from "@/api/client";
 import axios from "axios";
@@ -164,26 +164,35 @@ export default function NewCase() {
       setParseState("done");
       return;
     }
+    // Client-side carrier hint from filename (e.g. "DHL_Invoice.pdf" → "DHL")
+    // This pre-fills the form even if the backend parse fails.
+    const FNAME_CARRIERS: Record<string, string> = {
+      bluedart: "BlueDart", blue_dart: "BlueDart", delhivery: "Delhivery",
+      fedex: "FedEx", dtdc: "DTDC", ekart: "Ekart", gati: "Gati",
+      ups: "UPS", dhl: "DHL", aramex: "Aramex", maersk: "Maersk",
+      msc: "MSC", vexpress: "V Express",
+    };
+    const fnameLower = f.name.toLowerCase();
+    const carrierFromName = Object.entries(FNAME_CARRIERS).find(([k]) => fnameLower.includes(k))?.[1] ?? "";
+
     setParseState("parsing");
     try {
       const parsed = await realParseInvoice(f);
       const from_city = parsed.origin || splitRoute(parsed.route).from_city;
       const to_city   = parsed.destination || splitRoute(parsed.route).to_city;
 
-      // Carrier: use extracted value; if empty or not in our list → "Other"
       const resolvedCarrier = parsed.carrier && CARRIERS.includes(parsed.carrier)
         ? parsed.carrier
-        : parsed.carrier || "Other";
+        : parsed.carrier || carrierFromName || "Other";
 
-      // Currency: use extracted value if in our list, else keep it (combobox accepts any)
       const resolvedCurrency = parsed.currency && CURRENCIES.includes(parsed.currency)
         ? parsed.currency
         : parsed.currency || "INR";
 
       setForm({
         carrier:   resolvedCarrier,
-        from_city: from_city || "Other",
-        to_city:   to_city   || "Other",
+        from_city: from_city || "",
+        to_city:   to_city   || "",
         amount:    parsed.amount > 0 ? String(parsed.amount) : "",
         currency:  resolvedCurrency,
         email:     parsed.email || "",
@@ -192,7 +201,16 @@ export default function NewCase() {
       setRouteType(parsed.route_type || "unknown");
       const gotData = parsed.carrier || parsed.amount > 0 || from_city;
       setParseState(gotData ? "done" : "error");
-    } catch {
+    } catch (err) {
+      // Pre-fill carrier from filename so the user doesn't start from scratch
+      if (carrierFromName) {
+        setForm(prev => ({ ...prev, carrier: carrierFromName }));
+      }
+      // Tell the user WHY it failed — network error vs. no data extracted
+      const isNetworkErr = axios.isAxiosError(err) ? !err.response : true;
+      if (isNetworkErr) {
+        toast.error("Backend unreachable", "Start the backend (run: python start_phase2.py) then re-upload the file.");
+      }
       setParseState("error");
     }
   }, []);
@@ -492,7 +510,7 @@ export default function NewCase() {
                 {parsedBy === "groq_ai" ? "AI" : "regex"}
               </span>
             )}
-            {parseState === "error" && <span className="text-xs text-amber-600">Could not extract data — fill the fields below</span>}
+            {parseState === "error" && <span className="text-xs text-amber-600">Could not extract — fill fields below or re-upload after starting backend</span>}
             <button onClick={clearFile} className="text-muted-foreground hover:text-foreground ml-1">
               <X className="h-4 w-4" />
             </button>
