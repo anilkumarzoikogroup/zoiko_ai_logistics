@@ -57,18 +57,11 @@ if (Test-Path $ENV_FILE) {
 # --- Step 3: Start backend ---------------------------------------------------
 Write-Host "[3/3] Starting backend on port 8000..." -ForegroundColor Yellow
 
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = $PYTHON
-$psi.Arguments = "-u -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port 8000"
-$psi.WorkingDirectory = $PHASE2
-$psi.UseShellExecute = $false
-$psi.CreateNoWindow = $false    # Show the backend window so you can see logs
-
-foreach ($kv in $envVars.GetEnumerator()) {
-    $psi.EnvironmentVariables[$kv.Key] = $kv.Value
-}
-
-$proc = [System.Diagnostics.Process]::Start($psi)
+# Use start_phase2.py which loads .env and sets all vars correctly
+$proc = Start-Process -FilePath $PYTHON `
+    -ArgumentList "$ROOT\start_phase2.py" `
+    -WorkingDirectory $ROOT `
+    -PassThru -WindowStyle Normal
 Write-Host "  Backend PID: $($proc.Id)" -ForegroundColor Green
 
 # --- Wait and health-check ---------------------------------------------------
