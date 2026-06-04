@@ -1680,6 +1680,8 @@ async def parse_invoice_file(
     invoice_number   = ""
     invoice_date     = ""
     transport_mode   = ""
+    equipment_type   = ""
+    shipper_reference = ""
     charge_lines: list = []
     ai_parsed = False
     groq_key  = os.getenv("GROQ_API_KEY", "")
@@ -1742,6 +1744,8 @@ async def parse_invoice_file(
                 '  "destination": "<shipment DESTINATION city only — no country suffix, e.g. Delhi, London, Chicago>",\n'
                 '  "route_type": "<national if both cities are within India, international if any city is outside India>",\n'
                 '  "transport_mode": "<exact one of: TRUCKLOAD | AIR | SEA | RAIL | COURIER — match from invoice service description; COURIER if overnight/express/docket; empty string if unclear>",\n'
+                '  "equipment_type": "<physical asset type — e.g. 53FT_DRY_VAN, 40FT_CONTAINER, 20FT_CONTAINER, FLATBED, TANKER, PARCEL_VAN; empty string if not mentioned>",\n'
+                '  "shipper_reference": "<shipper/consignor reference, PO number, or AWB/BL number — NOT the invoice number; e.g. PO-2025-456, AWB-12345; empty string if not found>",\n'
                 '  "email": "<any email address visible on the invoice — billing, contact, support or sender email; empty string if none>"\n'
                 "}\n\n"
                 "AMOUNT RULES — follow this priority strictly:\n"
@@ -1835,11 +1839,13 @@ async def parse_invoice_file(
             # matched the first INNERMOST object, failing whenever Groq nested
             # any value (e.g. "details": {"total": 123}) and returning {} instead.
             parsed    = _extract_first_json(raw)
-            invoice_number  = str(parsed.get("invoice_number", "")).strip()
-            invoice_date    = str(parsed.get("invoice_date", "")).strip()
-            _valid_modes    = {"TRUCKLOAD","AIR","SEA","RAIL","COURIER"}
-            _raw_mode       = str(parsed.get("transport_mode", "")).strip().upper()
-            transport_mode  = _raw_mode if _raw_mode in _valid_modes else ""
+            invoice_number    = str(parsed.get("invoice_number", "")).strip()
+            invoice_date      = str(parsed.get("invoice_date", "")).strip()
+            _valid_modes      = {"TRUCKLOAD","AIR","SEA","RAIL","COURIER"}
+            _raw_mode         = str(parsed.get("transport_mode", "")).strip().upper()
+            transport_mode    = _raw_mode if _raw_mode in _valid_modes else ""
+            equipment_type    = str(parsed.get("equipment_type", "")).strip().upper()
+            shipper_reference = str(parsed.get("shipper_reference", "")).strip()
             carrier   = str(parsed.get("carrier", "")).strip()
             # Parse and validate charge_lines array
             _raw_lines = parsed.get("charge_lines", [])
@@ -1985,6 +1991,27 @@ async def parse_invoice_file(
             if len(found) >= 2:
                 origin, dest = found[0], found[1]
 
+    # ── Equipment type fallback — keyword scan ────────────────────────────────────
+    if not equipment_type and text:
+        _tl = text.lower()
+        if any(k in _tl for k in ("53ft","53-ft","dry van","dryvan")): equipment_type = "53FT_DRY_VAN"
+        elif any(k in _tl for k in ("40ft container","40-ft","40ft hc")): equipment_type = "40FT_CONTAINER"
+        elif any(k in _tl for k in ("20ft","20-ft","20ft container")): equipment_type = "20FT_CONTAINER"
+        elif "flatbed" in _tl: equipment_type = "FLATBED"
+        elif "tanker" in _tl: equipment_type = "TANKER"
+        elif any(k in _tl for k in ("parcel","courier van","two-wheeler","bike")): equipment_type = "PARCEL_VAN"
+
+    # ── Shipper reference fallback — look for PO / AWB / BL / Docket ─────────────
+    if not shipper_reference and text:
+        _ref_pat = (
+            r"(?:po\s*(?:no|number|#)?|purchase\s*order|awb|airway\s*bill"
+            r"|b/?l\s*(?:no)?|docket\s*(?:no)?|shipment\s*ref(?:erence)?)"
+            r"[\s:.\-]*([A-Z0-9][-A-Z0-9/]{3,30})"
+        )
+        _rm = _re2.search(_ref_pat, text, _re2.IGNORECASE)
+        if _rm:
+            shipper_reference = _rm.group(1).strip()
+
     # ── Transport mode fallback — keyword scan ────────────────────────────────────
     if not transport_mode and text:
         _tl = text.lower()
@@ -2099,9 +2126,11 @@ async def parse_invoice_file(
     return {
         "invoice_number":   invoice_number,
         "invoice_date":     invoice_date,
-        "charge_lines":     charge_lines,
-        "transport_mode":   transport_mode,
-        "carrier":          carrier,
+        "charge_lines":      charge_lines,
+        "transport_mode":    transport_mode,
+        "equipment_type":    equipment_type,
+        "shipper_reference": shipper_reference,
+        "carrier":           carrier,
         "route":            route,
         "origin":           origin,
         "destination":      dest,
