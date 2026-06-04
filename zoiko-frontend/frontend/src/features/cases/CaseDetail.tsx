@@ -121,8 +121,12 @@ export default function CaseDetail() {
   const qc    = useQueryClient();
   const toast = useToast();
 
-  const [disputeLetter, setDisputeLetter] = useState<string>("");
-  const [letterLoading, setLetterLoading] = useState(false);
+  const [disputeLetter, setDisputeLetter]   = useState<string>("");
+  const [letterLoading, setLetterLoading]   = useState(false);
+  const [sendEmail,     setSendEmail]       = useState("");
+  const [sendLoading,   setSendLoading]     = useState(false);
+  const [sendResult,    setSendResult]      = useState<{sent:boolean;sandbox:boolean;message:string}|null>(null);
+  const [showSendForm,  setShowSendForm]    = useState(false);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
   const eventsQ  = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),        retry: 1 });
@@ -156,7 +160,7 @@ export default function CaseDetail() {
   }
 
   async function handleGenerateLetter() {
-    setLetterLoading(true); setDisputeLetter("");
+    setLetterLoading(true); setDisputeLetter(""); setSendResult(null); setShowSendForm(false);
     try {
       const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter`);
       setDisputeLetter(data.dispute_letter || "");
@@ -165,6 +169,28 @@ export default function CaseDetail() {
       toast.error("Generation failed", "Set GROQ_API_KEY in .env to enable AI dispute letters");
     } finally {
       setLetterLoading(false);
+    }
+  }
+
+  async function handleSendLetter() {
+    if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
+    setSendLoading(true); setSendResult(null);
+    try {
+      const theCase = cq.data;
+      const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter/send`, {
+        recipient_email: sendEmail.trim(),
+        letter_text:     disputeLetter,
+        carrier:         theCase?.carrier ?? "",
+        overcharge:      theCase?.diff ?? 0,
+        currency:        theCase?.currency ?? "INR",
+      });
+      setSendResult(data);
+      toast.success(data.sandbox ? "Sandbox — validated" : "Email sent!", data.message);
+    } catch (err: unknown) {
+      const e = err as {response?:{data?:{detail?:string}}};
+      toast.error("Send failed", e?.response?.data?.detail ?? "Check SENDGRID_API_KEY in .env");
+    } finally {
+      setSendLoading(false);
     }
   }
 
@@ -661,12 +687,50 @@ export default function CaseDetail() {
               <pre className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-4 whitespace-pre-wrap font-sans leading-relaxed max-h-64 overflow-auto">
                 {disputeLetter}
               </pre>
-              <button
-                onClick={() => navigator.clipboard.writeText(disputeLetter).then(() => toast.success("Copied", "Letter copied to clipboard"))}
-                className="text-xs text-purple-600 hover:text-purple-800 font-semibold"
-              >
-                Copy to clipboard
-              </button>
+              <div className="flex items-center gap-3 flex-wrap">
+                <button
+                  onClick={() => navigator.clipboard.writeText(disputeLetter).then(() => toast.success("Copied", "Letter copied to clipboard"))}
+                  className="text-xs text-purple-600 hover:text-purple-800 font-semibold"
+                >
+                  Copy to clipboard
+                </button>
+                <button
+                  onClick={() => { setShowSendForm(v => !v); setSendResult(null); }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors"
+                >
+                  ✉ Send to Carrier
+                </button>
+              </div>
+
+              {showSendForm && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
+                  <p className="text-xs font-bold text-slate-700">Send dispute letter directly to carrier</p>
+                  <div className="flex gap-2">
+                    <input
+                      type="email"
+                      placeholder="carrier-accounts@delhivery.com"
+                      value={sendEmail}
+                      onChange={e => setSendEmail(e.target.value)}
+                      className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      onClick={handleSendLetter}
+                      disabled={sendLoading || !sendEmail.trim()}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
+                    >
+                      {sendLoading ? "Sending…" : "Send Email"}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    📌 <strong>Sandbox mode ON</strong> — email is validated but not actually delivered. Set <code>SENDGRID_SANDBOX=false</code> in .env to send for real.
+                  </p>
+                  {sendResult && (
+                    <div className={`rounded-lg p-3 text-xs font-semibold ${sendResult.sandbox ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
+                      {sendResult.sandbox ? "🧪 Sandbox:" : "✅"} {sendResult.message}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

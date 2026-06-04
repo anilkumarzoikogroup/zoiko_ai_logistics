@@ -1,5 +1,8 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import { generateIdempotencyKey } from "@/utils/cn";
+import { store } from "@/store";
+import { logout } from "@/store/authSlice";
+import { queryClient } from "@/lib/queryClient";
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
@@ -59,8 +62,8 @@ function attachInterceptors(instance: AxiosInstance): AxiosInstance {
   return instance;
 }
 
-const api  = attachInterceptors(axios.create({ baseURL: API_BASE,  timeout: 15000 }));
-const api3 = attachInterceptors(axios.create({ baseURL: API3_BASE, timeout: 15000 }));
-const api4 = attachInterceptors(axios.create({ baseURL: API4_BASE, timeout: 15000 }));
+const api  = attachInterceptors(axios.create({ baseURL: API_BASE,  timeout: 60000 }));  // 60s for Neon cold starts
+const api3 = attachInterceptors(axios.create({ baseURL: API3_BASE, timeout: 60000 }));
+const api4 = attachInterceptors(axios.create({ baseURL: API4_BASE, timeout: 60000 }));
 
 export { api, api3, api4, USE_MOCK };

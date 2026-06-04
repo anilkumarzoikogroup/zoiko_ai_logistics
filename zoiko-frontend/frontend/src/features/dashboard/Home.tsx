@@ -484,7 +484,7 @@ export default function Home() {
                   </td>
                   <td style={{ padding: "11px 16px" }}><StateBadge state={c.state} /></td>
                   <td style={{ padding: "11px 16px", fontSize: 11, color: "#94a3b8" }}>
-                    {new Date(c.opened_at).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    {new Date(c.opened_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" })}
                   </td>
                 </tr>
               ))}

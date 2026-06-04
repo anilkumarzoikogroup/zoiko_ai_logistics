@@ -77,19 +77,41 @@ export default function CryptoAudit() {
   function _openPdf(reportData: Record<string, unknown>, title: string) {
     const cases = (reportData.cases as Record<string,unknown>[] | undefined) ?? [];
     const summary = reportData.summary as Record<string,unknown> | undefined;
-    const now = new Date().toLocaleString("en-IN");
+    const now = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour12: true });
 
-    const rows = cases.map((c: Record<string,unknown>) => `
+    const IST_OPTS: Intl.DateTimeFormatOptions = { timeZone:"Asia/Kolkata", day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit", hour12:true };
+
+    const STATUS_COLOR: Record<string,string> = {
+      FINDING_GENERATED: "#7c3aed", APPROVAL_PENDING: "#d97706",
+      EXECUTION_READY: "#2563eb", DISPATCHED: "#059669",
+      OUTCOME_RECORDED: "#059669", CLOSED: "#16a34a",
+      EVIDENCE_PENDING: "#64748b", ABORTED: "#dc2626",
+    };
+
+    const rows = cases.map((c: Record<string,unknown>) => {
+      const invoiceAmt  = Number(c.amount    ?? 0);
+      const overchargeAmt = Number(c.overcharge ?? 0);
+      const confidence  = c.confidence ? `${(Number(c.confidence)*100).toFixed(0)}%` : "—";
+      const dateStr     = c.opened_at ? new Date(String(c.opened_at)).toLocaleString("en-IN", IST_OPTS) : "—";
+      const state       = String(c.state ?? "—");
+      const stateColor  = STATUS_COLOR[state] ?? "#64748b";
+      const stateLabel  = state.replace(/_/g," ");
+      const cur         = String(c.currency ?? "INR");
+      const sym         = cur === "INR" ? "₹" : (cur === "USD" ? "$" : cur+" ");
+      return `
       <tr>
-        <td>${String(c.id ?? "").slice(0,8)}…</td>
-        <td>${c.carrier ?? "—"}</td>
-        <td>${c.state ?? "—"}</td>
-        <td style="text-align:right">₹${Number(c.amount ?? 0).toLocaleString("en-IN")}</td>
-        <td style="text-align:right;color:${Number(c.overcharge)>0?"#dc2626":"#64748b"}">
-          ${Number(c.overcharge) > 0 ? "₹" + Number(c.overcharge).toLocaleString("en-IN") : "—"}
+        <td style="font-family:monospace;font-size:10px">${String(c.id ?? "").slice(0,8)}…</td>
+        <td style="font-weight:600">${c.carrier ?? "—"}</td>
+        <td><span style="background:${stateColor}18;color:${stateColor};padding:2px 7px;border-radius:99px;font-size:9px;font-weight:700;white-space:nowrap">${stateLabel}</span></td>
+        <td style="text-align:right;font-weight:600">${invoiceAmt > 0 ? sym+invoiceAmt.toLocaleString("en-IN") : "—"}</td>
+        <td style="text-align:right;color:${overchargeAmt>0?"#dc2626":"#94a3b8"};font-weight:${overchargeAmt>0?700:400}">
+          ${overchargeAmt > 0 ? sym+overchargeAmt.toLocaleString("en-IN") : "—"}
         </td>
-        <td>${c.currency ?? "—"}</td>
-      </tr>`).join("");
+        <td style="text-align:center;color:#7c3aed;font-weight:700">${confidence}</td>
+        <td style="color:#64748b;font-size:10px">${dateStr}</td>
+        <td style="text-align:center;font-weight:600">${cur}</td>
+      </tr>`;
+    }).join("");
 
     const carrierSummary = reportData.carrier_summary as Record<string, {count:number; overcharge:number}> | undefined;
     const carrierRows = carrierSummary
@@ -139,17 +161,24 @@ export default function CryptoAudit() {
         </div>
       </div>
 
-      ${summary ? `
-      <div class="summary">
+      ${summary ? (() => {
+        const totalAmt  = (reportData.cases as Record<string,unknown>[])?.reduce((s,c)=>s+Number(c.amount??0),0)??0;
+        const overAmt   = (reportData.cases as Record<string,unknown>[])?.reduce((s,c)=>s+Number(c.overcharge??0),0)??0;
+        const recRate   = overAmt>0 ? Math.round((Number(summary.total_recovered??0)/overAmt)*100)+"%" : "—";
+        return `
+      <div class="summary" style="grid-template-columns:repeat(5,1fr)">
         <div class="kpi"><div class="kpi-label">Total Cases</div><div class="kpi-value">${summary.total_cases ?? 0}</div></div>
-        <div class="kpi"><div class="kpi-label">Approved Cases</div><div class="kpi-value">${summary.approved_cases ?? 0}</div></div>
-        <div class="kpi"><div class="kpi-label">Total Recovered</div><div class="kpi-value">₹${Number(summary.total_recovered ?? 0).toLocaleString("en-IN")}</div></div>
-      </div>` : ""}
+        <div class="kpi"><div class="kpi-label">Total Invoiced</div><div class="kpi-value" style="font-size:14px">₹${totalAmt.toLocaleString("en-IN")}</div></div>
+        <div class="kpi"><div class="kpi-label">Total Overcharge</div><div class="kpi-value" style="font-size:14px;color:#dc2626">₹${overAmt.toLocaleString("en-IN")}</div></div>
+        <div class="kpi"><div class="kpi-label">Total Recovered</div><div class="kpi-value" style="font-size:14px;color:#059669">₹${Number(summary.total_recovered ?? 0).toLocaleString("en-IN")}</div></div>
+        <div class="kpi"><div class="kpi-label">Recovery Rate</div><div class="kpi-value">${recRate}</div></div>
+      </div>`;
+      })() : ""}
 
       ${cases.length > 0 ? `
       <h2>Cases</h2>
       <table>
-        <thead><tr><th>Case ID</th><th>Carrier</th><th>Status</th><th>Amount</th><th>Overcharge</th><th>Currency</th></tr></thead>
+        <thead><tr><th>Case ID</th><th>Carrier</th><th>Status</th><th style="text-align:right">Invoice Amount</th><th style="text-align:right">Overcharge</th><th style="text-align:center">AI Confidence</th><th>Date (IST)</th><th style="text-align:center">Currency</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>` : ""}
 
@@ -235,7 +264,7 @@ export default function CryptoAudit() {
         reportData.cases = allCases.map(c => ({
           id: c.id, carrier: c.carrier, state: c.state,
           amount: c.amount, overcharge: c.diff, currency: c.currency,
-          opened_at: c.opened_at,
+          confidence: c.confidence, opened_at: c.opened_at,
         }));
       }
       if (includes.has("tokens") || reportType === "sod_log") {

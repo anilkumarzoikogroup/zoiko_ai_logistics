@@ -2,20 +2,13 @@ version: "3.9"
 
 # ── Zoiko Logistics — Full local development stack ───────────────────────────
 #
-# Services:
-#   postgres   — PostgreSQL 15 (all 25 tables, single DB)
-#   redis      — Redis 7 (idempotency + token consumed lock)
-#   zookeeper  — Kafka dependency
-#   kafka      — Single-broker Kafka (17 topics auto-created)
-#   opa        — Open Policy Agent (fail-closed freight policy)
-#   api-gw-p2  — Phase 2 API Gateway (port 8000)
-#   api-gw-p4  — Phase 4 Execution Gateway (port 8001)
-#   frontend   — Vite dev server (port 5173)
+# All secrets come from .env (copy .env.example → .env and fill in values).
+# Never hardcode passwords here.
 #
 # Quick start:
+#   cp .env.example .env   # fill in values
 #   docker compose -f docker-compose.dev.yml up -d postgres redis
 #   docker compose -f docker-compose.dev.yml up api-gw-p2
-#   cd zoiko-frontend/frontend && npm run dev
 
 networks:
   zoiko-net:
@@ -28,20 +21,20 @@ volumes:
 
 services:
 
-  # ── Infrastructure ──────────────────────────────────────────────────────────
+  # ── Infrastructure ────────────────────────────────────────────────────────
 
   postgres:
     image: postgres:15-alpine
     environment:
       POSTGRES_DB:       zoiko
-      POSTGRES_USER:     postgres
-      POSTGRES_PASSWORD: "1234"
+      POSTGRES_USER:     ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -80,7 +73,6 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      # Auto-create all 17 Zoiko topics on first publish
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: 3
       KAFKA_DEFAULT_REPLICATION_FACTOR: 1
@@ -112,22 +104,34 @@ services:
       timeout: 3s
       retries: 5
 
-  # ── Backend services ────────────────────────────────────────────────────────
+  # ── Backend services ──────────────────────────────────────────────────────
 
   api-gw-p2:
     build:
       context: .
-      dockerfile: phase-2/Dockerfile
+      dockerfile: Dockerfile.backend
     ports:
       - "8000:8000"
+      - "8001:8001"
     environment:
-      DB_URL:              "postgresql://postgres:1234@postgres:5432/zoiko"
+      DB_URL:              "postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/zoiko"
       REDIS_URL:           "redis://redis:6379"
       KAFKA_BOOTSTRAP:     "kafka:29092"
       OPA_URL:             "http://opa:8181"
-      ZOIKO_DEV_MODE:      "true"
-      ZOIKO_DEV_SECRET:    "zoiko-dev-secret-for-testing-only"
-      ZOIKO_ISSUER:        "https://auth.zoikotech.com"
+      ZOIKO_DEV_MODE:      "${ZOIKO_DEV_MODE:-true}"
+      ZOIKO_DEV_SECRET:    "${ZOIKO_DEV_SECRET}"
+      ZOIKO_ISSUER:        "${ZOIKO_ISSUER:-https://auth.zoikotech.com}"
+      GROQ_API_KEY:        "${GROQ_API_KEY:-}"
+      GROQ_MODEL:          "${GROQ_MODEL:-llama-3.1-8b-instant}"
+      JWT_TTL_SECONDS:     "${JWT_TTL_SECONDS:-86400}"
+      TOKEN_TTL_MINUTES:   "${TOKEN_TTL_MINUTES:-1440}"
+      ZOIKO_FF_SC_001_ENABLED: "*"
+      ZOIKO_RATE_LIMIT_ENABLED: "true"
+      ZOIKO_CORS_ORIGINS:  "${ZOIKO_CORS_ORIGINS:-http://localhost:5173}"
+      EMAIL_PROVIDER:      "${EMAIL_PROVIDER:-none}"
+      SENDGRID_API_KEY:    "${SENDGRID_API_KEY:-}"
+      SENDGRID_SANDBOX:    "${SENDGRID_SANDBOX:-true}"
+      EMAIL_FROM:          "${EMAIL_FROM:-noreply@zoikotech.com}"
       PYTHONIOENCODING:    "utf-8"
     depends_on:
       postgres: {condition: service_healthy}
@@ -135,32 +139,6 @@ services:
     networks: [zoiko-net]
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  api-gw-p4:
-    build:
-      context: .
-      dockerfile: phase-4/Dockerfile
-    ports:
-      - "8001:8001"
-    environment:
-      DB_URL:              "postgresql://postgres:1234@postgres:5432/zoiko"
-      REDIS_URL:           "redis://redis:6379"
-      KAFKA_BOOTSTRAP:     "kafka:29092"
-      OPA_URL:             "http://opa:8181"
-      ZOIKO_DEV_MODE:      "true"
-      ZOIKO_DEV_SECRET:    "zoiko-dev-secret-for-testing-only"
-      ZOIKO_ISSUER:        "https://auth.zoikotech.com"
-      PYTHONIOENCODING:    "utf-8"
-    depends_on:
-      postgres:  {condition: service_healthy}
-      redis:     {condition: service_healthy}
-      api-gw-p2: {condition: service_healthy}
-    networks: [zoiko-net]
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -173,8 +151,8 @@ services:
     ports:
       - "5173:5173"
     environment:
-      VITE_USE_MOCK:  "false"
-      VITE_API_BASE:  "/api"
+      VITE_USE_MOCK: "${VITE_USE_MOCK:-false}"
+      VITE_API_BASE: "${VITE_API_BASE:-/api}"
     volumes:
       - ./zoiko-frontend/frontend/src:/app/src:ro
     depends_on:

@@ -103,10 +103,10 @@ export default function PaymentControl() {
                       <td className="px-4 py-3 text-xs text-muted-foreground">{tok.currency}</td>
                       <td className="px-4 py-3 font-bold text-emerald-700">{formatCurrency(tok.amount)}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">
-                        {new Date(tok.issued_at).toLocaleString("en-IN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                        {new Date(tok.issued_at).toLocaleString("en-IN",{timeZone:"Asia/Kolkata",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:true})}
                       </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">
-                        {new Date(tok.exp).toLocaleString("en-IN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
+                        {new Date(tok.exp).toLocaleString("en-IN",{timeZone:"Asia/Kolkata",month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:true})}
                       </td>
                       <td className="px-4 py-3">
                         <span className={cn("text-[10px] font-bold px-2.5 py-1 rounded-full", sm.cls)}>

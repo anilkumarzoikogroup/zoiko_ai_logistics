@@ -1,7 +1,6 @@
-# Zoiko AI Logistics — Unified Backend Image (All Phases)
+# Zoiko AI Logistics — Unified Backend (Phase 2 + Phase 4 on port 8000)
 
-
-# ── Stage 1: install all Python dependencies ──────────────────────────────────
+# ── Stage 1: install dependencies ─────────────────────────────────────────────
 FROM python:3.11-slim AS deps
 
 WORKDIR /build
@@ -14,18 +13,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install root requirements first (layer is cached until requirements.txt changes)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install internal packages so every phase can import them without relying
-# purely on paths.py (belt-and-suspenders approach)
 COPY phase-0/packages/zoiko-common/ ./phase-0/packages/zoiko-common/
 COPY phase-1/packages/zoiko-kms/    ./phase-1/packages/zoiko-kms/
 RUN pip install --no-cache-dir -e ./phase-0/packages/zoiko-common \
  && pip install --no-cache-dir -e ./phase-1/packages/zoiko-kms
 
-# ── Stage 2: lean runtime image ───────────────────────────────────────────────
+# ── Stage 2: lean runtime ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
 WORKDIR /app
@@ -41,16 +37,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TOKEN_TTL_MINUTES=15 \
     JWT_TTL_SECONDS=3600
 
-# Runtime system libs only (no build-essential)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed site-packages + binaries from deps stage
 COPY --from=deps /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
 
-# ── Copy all phases ───────────────────────────────────────────────────────────
 COPY phase-0/ ./phase-0/
 COPY phase-1/ ./phase-1/
 COPY phase-2/ ./phase-2/
@@ -58,18 +51,14 @@ COPY phase-3/ ./phase-3/
 COPY phase-4/ ./phase-4/
 COPY opa/     ./opa/
 
-# Startup script — runs Phase 2 (8000) + Phase 4 (8001) together
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
-
-# Non-root user
 RUN useradd -r -u 1001 -s /sbin/nologin zoiko \
  && chown -R zoiko /app
 USER zoiko
 
-EXPOSE 8000 8001
+EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-CMD ["/app/start.sh"]
+# Phase 2 app now includes Phase 4 routes — single port, Render-ready
+CMD ["sh", "-c", "cd /app/phase-2 && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]

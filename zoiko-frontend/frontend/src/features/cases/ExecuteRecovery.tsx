@@ -42,7 +42,10 @@ export default function ExecuteRecovery() {
       qc.invalidateQueries({ queryKey: ["tokens"] });
       toast.success("Execution complete", `Case ${vars.caseId.slice(0, 8)} dispatched through all 8 gates`);
     },
-    onError: () => toast.error("Execution failed", "Check that Phase 4 backend (port 8001) is running"),
+    onError: (err: unknown) => {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error("Execution failed", detail || "Unknown error — check backend terminal");
+    },
   });
 
   function handleDownloadAcr(caseId: string) {
@@ -126,7 +129,7 @@ export default function ExecuteRecovery() {
                     </div>
                     <p className="text-sm font-semibold mt-0.5">{t.action.replace("EXECUTE_", "")} · {formatCurrency(t.amount, t.currency)}</p>
                     <p className="text-xs text-muted-foreground">
-                      Case {t.case_id.slice(0, 8)} · expires {new Date(t.exp).toLocaleTimeString()}
+                      Case {t.case_id.slice(0, 8)} · expires {new Date(t.exp).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}
                       {matchedCase && ` · ${matchedCase.carrier}`}
                     </p>
                   </div>

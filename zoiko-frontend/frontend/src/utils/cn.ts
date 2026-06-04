@@ -13,14 +13,38 @@ export function formatCurrency(amount: number, currency: string = "INR"): string
   }).format(amount);
 }
 
+const IST = "Asia/Kolkata";
+
 export function formatDate(iso: string | Date): string {
   const d = typeof iso === "string" ? new Date(iso) : iso;
   return d.toLocaleString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
+    timeZone: IST,
+    day:    "2-digit",
+    month:  "short",
+    year:   "numeric",
+    hour:   "2-digit",
     minute: "2-digit",
+    hour12: true,
+  });
+}
+
+export function formatTime(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  return d.toLocaleTimeString("en-IN", {
+    timeZone: IST,
+    hour:   "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+export function formatDateOnly(iso: string | Date): string {
+  const d = typeof iso === "string" ? new Date(iso) : iso;
+  return d.toLocaleDateString("en-IN", {
+    timeZone: IST,
+    day:   "numeric",
+    month: "short",
+    year:  "numeric",
   });
 }
 

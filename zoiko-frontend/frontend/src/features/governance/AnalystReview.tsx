@@ -3,11 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { zoikoApi } from "@/api/zoiko";
 import { formatCurrency, cn } from "@/utils/cn";
 import {
-  ThumbsUp, CheckCircle2, ArrowRight, ChevronRight,
-  Zap, BarChart3, FileText, Clock, AlertTriangle,
+  ThumbsUp, CheckCircle2, ChevronRight,
+  Zap, BarChart3, AlertTriangle,
 } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/useToast";
+import { useAppSelector } from "@/store";
 
 const PIPELINE_STEPS = [
   { label: "Submit Invoice",  active: false },
@@ -71,7 +72,7 @@ export default function AnalystReview() {
     },
   });
 
-  const user = localStorage.getItem("zoiko_user") || "Analyst";
+  const user = useAppSelector(s => s.auth.user) || "Analyst";
 
   return (
     <div className="space-y-5">

@@ -4,10 +4,11 @@ import { zoikoApi } from "@/api/zoiko";
 import { formatCurrency, cn } from "@/utils/cn";
 import {
   CheckCircle2, XCircle, ShieldAlert, ChevronRight,
-  Lock, Users, Zap, Clock, AlertTriangle,
+  Lock, Users, Zap, Clock,
 } from "lucide-react";
 import { useState } from "react";
 import { useToast } from "@/hooks/useToast";
+import { useAppSelector } from "@/store";
 
 export default function ManagerApproval() {
   const nav   = useNavigate();
@@ -35,7 +36,7 @@ export default function ManagerApproval() {
     },
   });
 
-  const user = localStorage.getItem("zoiko_user") || "Manager";
+  const user = useAppSelector(s => s.auth.user) || "Manager";
 
   return (
     <div className="space-y-5">

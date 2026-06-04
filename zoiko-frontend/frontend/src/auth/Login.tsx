@@ -5,11 +5,12 @@ import { login as loginAction } from "@/store/authSlice";
 import {
   Eye, EyeOff, Mail, Lock, Shield, FileText, BarChart2, Rocket,
   Users, ArrowLeft, CheckCircle2, Moon, Sun, ShieldCheck, Zap, Globe,
+  UserPlus, Building2, Phone,
 } from "lucide-react";
 import axios from "axios";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
-type Flow = "login" | "recovery" | "recovery-sent";
+type Flow = "login" | "recovery" | "recovery-sent" | "register" | "register-sent";
 type Role = "analyst" | "manager" | "admin";
 
 const FEATURES = [
@@ -55,8 +56,30 @@ export default function Login() {
   const [remember, setRemember] = useState(false);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState("");
-  const [recEmail, setRecEmail] = useState("");
-  const [dark, setDark]         = useState(true);
+  const [recEmail, setRecEmail]   = useState("");
+  const [dark, setDark]           = useState(true);
+  const [reg, setReg]             = useState({ name:"", email:"", company:"", phone:"" });
+
+  async function handleRegister(e: React.FormEvent) {
+    e.preventDefault(); setLoading(true); setError("");
+    try {
+      await axios.post(`${API}/v1/auth/workspace-request`, {
+        full_name:        reg.name,
+        work_email:       reg.email,
+        company_name:     reg.company,
+        company_website:  "",
+        country:          "India",
+        role:             "Logistics Manager",
+        use_case:         "Freight overcharge detection",
+        team_size:        "10-50",
+        heard_from:       "Direct",
+        consent:          true,
+      });
+      setFlow("register-sent");
+    } catch {
+      setError("Request failed. Please try again.");
+    } finally { setLoading(false); }
+  }
   const [time, setTime]         = useState(new Date());
 
   useEffect(() => {
@@ -350,11 +373,67 @@ export default function Login() {
                     Sign in with Google
                   </button>
 
-                  <p style={{textAlign:"center",fontSize:"12px",color:"#94A3B8",paddingBottom:"4px"}}>
-                    Don't have an account?{" "}
-                    <a href="mailto:admin@zoikotech.com" style={{color:"#2563EB",fontWeight:700,textDecoration:"none"}}>Contact Administrator</a>
-                  </p>
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:"8px",paddingBottom:"4px"}}>
+                    <span style={{fontSize:"12px",color:"#94A3B8"}}>Don't have an account?</span>
+                    <button type="button" onClick={()=>{setFlow("register");setError("");}}
+                            style={{display:"flex",alignItems:"center",gap:"5px",background:"none",border:"1.5px solid #2563EB",borderRadius:"8px",padding:"5px 12px",color:"#2563EB",fontSize:"12px",fontWeight:700,cursor:"pointer",transition:"all .2s"}}
+                            onMouseEnter={e=>(e.currentTarget.style.background="#EFF6FF")}
+                            onMouseLeave={e=>(e.currentTarget.style.background="none")}>
+                      <UserPlus size={12}/> Register
+                    </button>
+                  </div>
                 </>}
+
+                {/* ── REGISTER ────────────────────────────────── */}
+                {flow === "register" && (
+                  <div style={{paddingBottom:"8px"}}>
+                    <button onClick={()=>{setFlow("login");setError("");}} style={{display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#94A3B8",fontSize:"13px",cursor:"pointer",marginBottom:"12px",padding:0}}>
+                      <ArrowLeft size={14}/> Back to sign in
+                    </button>
+                    <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 4px"}}>Request Access</h2>
+                    <p style={{color:card.sub,fontSize:"12px",marginBottom:"16px"}}>Submit your details. Our team will set up your account.</p>
+                    <form onSubmit={handleRegister} style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+                      {[
+                        {icon:Users,     key:"name",    label:"Full Name",    ph:"Ravi Kumar",             type:"text"  },
+                        {icon:Mail,      key:"email",   label:"Work Email",   ph:"ravi@yourcompany.com",   type:"email" },
+                        {icon:Building2, key:"company", label:"Company Name", ph:"Amazon India",           type:"text"  },
+                        {icon:Phone,     key:"phone",   label:"Phone",        ph:"+91 98765 43210",        type:"tel"   },
+                      ].map(f=>(
+                        <div key={f.key}>
+                          <label style={{fontSize:"10px",fontWeight:700,color:card.label,letterSpacing:"0.1em",display:"block",marginBottom:"5px"}}>{f.label.toUpperCase()}</label>
+                          <div style={{position:"relative"}}>
+                            <div style={{position:"absolute",left:"12px",top:"50%",transform:"translateY(-50%)",width:"24px",height:"24px",borderRadius:"6px",background:"rgba(100,116,139,0.08)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                              <f.icon size={12} color="#94A3B8"/>
+                            </div>
+                            <input type={f.type} required placeholder={f.ph}
+                                   value={(reg as Record<string,string>)[f.key]}
+                                   onChange={e=>setReg(r=>({...r,[f.key]:e.target.value}))}
+                                   style={{...inputStyle(false),paddingLeft:"44px",fontSize:"13px"}}/>
+                          </div>
+                        </div>
+                      ))}
+                      {error && <div style={{borderRadius:"10px",padding:"8px 12px",background:"#FEF2F2",color:"#DC2626",fontSize:"12px",border:"1px solid #FECACA"}}>{error}</div>}
+                      <button type="submit" disabled={loading}
+                              style={{width:"100%",borderRadius:"12px",padding:"13px",fontSize:"14px",fontWeight:700,color:"white",border:"none",cursor:loading?"not-allowed":"pointer",background:loading?"#93C5FD":"linear-gradient(135deg,#1D4ED8,#3B82F6)",boxShadow:"0 8px 24px rgba(37,99,235,0.35)",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}>
+                        {loading ? "Submitting…" : <><UserPlus size={15}/> Request Access</>}
+                      </button>
+                    </form>
+                  </div>
+                )}
+
+                {flow === "register-sent" && (
+                  <div style={{textAlign:"center",padding:"16px 0 24px"}}>
+                    <div style={{width:"60px",height:"60px",borderRadius:"50%",background:"linear-gradient(135deg,#ECFDF5,#D1FAE5)",border:"2px solid #6EE7B7",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}>
+                      <CheckCircle2 size={28} color="#10B981"/>
+                    </div>
+                    <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 6px"}}>Request Submitted!</h2>
+                    <p style={{color:card.sub,fontSize:"13px",marginBottom:"6px"}}>Our team will review your request and contact you within 24 hours.</p>
+                    <p style={{color:"#94A3B8",fontSize:"12px",marginBottom:"16px"}}>Check your email: <strong>{reg.email}</strong></p>
+                    <button onClick={()=>{setFlow("login");setError("");}} style={{background:"none",border:"none",color:"#2563EB",fontSize:"13px",fontWeight:700,cursor:"pointer"}}>
+                      Return to sign in
+                    </button>
+                  </div>
+                )}
 
                 {/* ── RECOVERY ────────────────────────────────── */}
                 {flow === "recovery" && (

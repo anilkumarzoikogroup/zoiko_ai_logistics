@@ -43,7 +43,7 @@ function kafkaEventToAlert(e: KafkaEvent, i: number): Alert {
     .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
     .join(" · ")}`;
   const time = new Date(e.published_at).toLocaleString("en-IN", {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    timeZone: "Asia/Kolkata", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: true,
   });
   return { id: `evt_${i}`, severity, title, desc, time, source: "Zoiko Pipeline" };
 }
