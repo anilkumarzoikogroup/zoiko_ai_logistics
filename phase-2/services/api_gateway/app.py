@@ -1677,6 +1677,7 @@ async def parse_invoice_file(
             text = content.decode("utf-8", errors="ignore")
 
     carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
+    invoice_number = ""
     ai_parsed = False
     groq_key  = os.getenv("GROQ_API_KEY", "")
 
@@ -1728,6 +1729,7 @@ async def parse_invoice_file(
                 "Carefully read the invoice and extract exactly these fields.\n\n"
                 "Return ONLY a single valid JSON object — no markdown, no explanation:\n"
                 "{\n"
+                '  "invoice_number": "<the invoice/bill/reference number printed on the document — e.g. INV-2025-001, DHL-90881, BL-12345; empty string if not found>",\n'
                 '  "carrier": "<logistics company name, e.g. BlueDart, DHL, FedEx, Maersk, UPS, Aramex — use exact name from invoice>",\n'
                 '  "total_amount": <see amount rules below>,\n'
                 '  "currency": "<3-letter ISO code from invoice: INR, USD, EUR, GBP, AED, SGD, AUD, etc.>",\n'
@@ -1814,6 +1816,7 @@ async def parse_invoice_file(
             # matched the first INNERMOST object, failing whenever Groq nested
             # any value (e.g. "details": {"total": 123}) and returning {} instead.
             parsed    = _extract_first_json(raw)
+            invoice_number = str(parsed.get("invoice_number", "")).strip()
             carrier   = str(parsed.get("carrier", "")).strip()
             ai_amount = float(parsed.get("total_amount", 0) or 0)
             currency  = str(parsed.get("currency", "INR")).strip().upper() or "INR"
@@ -1944,6 +1947,16 @@ async def parse_invoice_file(
             if len(found) >= 2:
                 origin, dest = found[0], found[1]
 
+    # ── Invoice number fallback — regex when AI missed it ────────────────────────
+    if not invoice_number and text:
+        _inv_pat = (
+            r"(?:invoice\s*(?:no|number|#|num)|bill\s*(?:no|number|#)|ref(?:erence)?\s*(?:no|#|:))"
+            r"[\s:.\-]*([A-Z0-9][-A-Z0-9/]{3,30})"
+        )
+        _m = _re2.search(_inv_pat, text, _re2.IGNORECASE)
+        if _m:
+            invoice_number = _m.group(1).strip()
+
     # ── Carrier fallback: extract from filename when AI/regex found nothing ─────
     # e.g. "DHL_Invoice_with_Excel.pdf" → "DHL"
     if not carrier and fname:
@@ -1980,6 +1993,7 @@ async def parse_invoice_file(
     route = f"{origin}-{dest}" if (origin and dest) else (origin or dest)
 
     return {
+        "invoice_number":   invoice_number,
         "carrier":          carrier,
         "route":            route,
         "origin":           origin,
@@ -2550,7 +2564,8 @@ def ui_submit_case_async(
             parts  = _re.split(r'\s*[-→–]\s*', _body.route.strip(), maxsplit=1)
             origin = parts[0].strip() if parts else _body.route
             dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
-            inv_no = f"UI-{_u.uuid4().hex[:8].upper()}"
+            # Use invoice number from PDF parse if available; fall back to generated ID
+            inv_no = _body.invoice_number.strip() if _body.invoice_number.strip() else f"UI-{_u.uuid4().hex[:8].upper()}"
             slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (_tenant,))
             slug = slug_row["slug"] if slug_row else "default"
             broker = _BROKER
@@ -2620,7 +2635,8 @@ def ui_submit_case(
     parts  = _re.split(r'\s*[-→–]\s*', body.route.strip(), maxsplit=1)
     origin = parts[0].strip() if parts else body.route
     dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
-    inv_no = f"UI-{uuid.uuid4().hex[:8].upper()}"
+    # Use PDF-extracted invoice number if provided; fall back to generated ID
+    inv_no = body.invoice_number.strip() if body.invoice_number.strip() else f"UI-{uuid.uuid4().hex[:8].upper()}"
 
     slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (claims.tenant_id,))
     slug = slug_row["slug"] if slug_row else "default"

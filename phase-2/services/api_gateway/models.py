@@ -128,10 +128,11 @@ class HealthResponse(BaseModel):
 # ── Frontend UI request models ─────────────────────────────────────────────────
 
 class SubmitCaseRequest(BaseModel):
-    carrier:  str
-    route:    str
-    amount:   float
-    currency: str = "INR"
+    carrier:        str
+    route:          str
+    amount:         float
+    currency:       str   = "INR"
+    invoice_number: str   = ""   # Optional — if blank, server generates UI-XXXXXXXX
 
 
 class UIProposalRequest(BaseModel):
