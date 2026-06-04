@@ -92,7 +92,7 @@ export const zoikoApi = {
     return data;
   },
 
-  async createCase(payload: { invoice_number?: string; invoice_date?: string; carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
+  async createCase(payload: { invoice_number?: string; invoice_date?: string; charge_lines?: {description:string;amount:number;type:string}[]; carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
     if (USE_MOCK) {
       await delay(500);
       const CONTRACT_BASE: Record<string, number> = {

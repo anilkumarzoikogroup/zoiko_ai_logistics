@@ -1679,6 +1679,7 @@ async def parse_invoice_file(
     carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
     invoice_number = ""
     invoice_date   = ""
+    charge_lines: list = []
     ai_parsed = False
     groq_key  = os.getenv("GROQ_API_KEY", "")
 
@@ -1733,6 +1734,7 @@ async def parse_invoice_file(
                 '  "invoice_number": "<the invoice/bill/reference number printed on the document — e.g. INV-2025-001, DHL-90881, BL-12345; empty string if not found>",\n'
                 '  "invoice_date": "<invoice/bill date in YYYY-MM-DD format — e.g. 2025-06-01; empty string if not found>",\n'
                 '  "carrier": "<logistics company name, e.g. BlueDart, DHL, FedEx, Maersk, UPS, Aramex — use exact name from invoice>",\n'
+                '  "charge_lines": [<array of charge line objects — see charge_lines rules below>],\n'
                 '  "total_amount": <see amount rules below>,\n'
                 '  "currency": "<3-letter ISO code from invoice: INR, USD, EUR, GBP, AED, SGD, AUD, etc.>",\n'
                 '  "origin": "<shipment ORIGIN city only — no country suffix, e.g. Mumbai, Dubai, New York, Singapore>",\n'
@@ -1762,7 +1764,20 @@ async def parse_invoice_file(
                 "  1. origin/destination = FROM/TO shipment cities, NOT company/billing address.\n"
                 "  2. Expand IATA codes: BOM→Mumbai, DEL→Delhi, JFK→New York, DXB→Dubai, LHR→London.\n"
                 "  3. City name only — no state, country, or ZIP.\n"
-                "  4. If not found, return empty string."
+                "  4. If not found, return empty string.\n\n"
+                "CHARGE LINES RULES:\n"
+                "  Extract EVERY individual line item from the invoice into charge_lines array.\n"
+                "  Each element must be: {\"description\": \"<line label>\", \"amount\": <number>, \"type\": \"<type>\"}\n"
+                "  type must be exactly one of: BASE | FUEL | ACCESSORIAL | TAX | DISCOUNT | OTHER\n"
+                "  Rules for type classification:\n"
+                "    BASE        — Basic freight, base rate, freight charge, standard charge\n"
+                "    FUEL        — Fuel surcharge, FSC, fuel levy, energy surcharge\n"
+                "    ACCESSORIAL — Handling, accessorial, pickup, delivery, detention, demurrage, insurance, COD\n"
+                "    TAX         — GST, IGST, CGST, SGST, VAT, tax, cess\n"
+                "    DISCOUNT    — Discount, rebate, credit\n"
+                "    OTHER       — Anything that does not fit above categories\n"
+                "  IMPORTANT: do NOT include the grand total / total payable as a charge line.\n"
+                "  If no line items are visible, return an empty array []."
             )
 
             if image_b64:
@@ -1821,6 +1836,21 @@ async def parse_invoice_file(
             invoice_number = str(parsed.get("invoice_number", "")).strip()
             invoice_date   = str(parsed.get("invoice_date", "")).strip()
             carrier   = str(parsed.get("carrier", "")).strip()
+            # Parse and validate charge_lines array
+            _raw_lines = parsed.get("charge_lines", [])
+            if isinstance(_raw_lines, list):
+                _valid_types = {"BASE", "FUEL", "ACCESSORIAL", "TAX", "DISCOUNT", "OTHER"}
+                charge_lines = [
+                    {
+                        "description": str(cl.get("description", "")).strip(),
+                        "amount":      float(cl.get("amount", 0) or 0),
+                        "type":        cl.get("type", "OTHER").upper()
+                                       if cl.get("type", "OTHER").upper() in _valid_types
+                                       else "OTHER",
+                    }
+                    for cl in _raw_lines
+                    if isinstance(cl, dict) and float(cl.get("amount", 0) or 0) > 0
+                ]
             ai_amount = float(parsed.get("total_amount", 0) or 0)
             currency  = str(parsed.get("currency", "INR")).strip().upper() or "INR"
             origin    = _normalize_city(str(parsed.get("origin", "")).strip())
@@ -1950,6 +1980,39 @@ async def parse_invoice_file(
             if len(found) >= 2:
                 origin, dest = found[0], found[1]
 
+    # ── Charge lines fallback — regex when AI missed them ────────────────────────
+    if not charge_lines and text:
+        def _classify_charge(desc: str) -> str:
+            dl = desc.lower()
+            if any(k in dl for k in ("fuel", "fsc", "energy surcharge")): return "FUEL"
+            if any(k in dl for k in ("basic freight", "base freight", "freight charge", "base rate")): return "BASE"
+            if any(k in dl for k in ("gst", "igst", "cgst", "sgst", "vat", "tax", "cess")): return "TAX"
+            if any(k in dl for k in ("handling", "accessorial", "pickup", "delivery", "detention",
+                                     "demurrage", "insurance", "cod", "docket")): return "ACCESSORIAL"
+            if any(k in dl for k in ("discount", "rebate", "credit")): return "DISCOUNT"
+            return "OTHER"
+
+        _line_pat = _re2.compile(
+            r"^[ \t]*(.{4,50}?)[ \t]{2,}([\d,]+\.?\d{0,2})[ \t]*$",
+            _re2.MULTILINE
+        )
+        _skip = {"total", "subtotal", "sub-total", "grand total", "amount due",
+                 "total payable", "net payable", "balance due"}
+        for _m in _line_pat.finditer(text):
+            _desc = _m.group(1).strip()
+            if any(s in _desc.lower() for s in _skip):
+                continue
+            try:
+                _amt = float(_m.group(2).replace(",", ""))
+            except ValueError:
+                continue
+            if _amt > 0:
+                charge_lines.append({
+                    "description": _desc,
+                    "amount":      _amt,
+                    "type":        _classify_charge(_desc),
+                })
+
     # ── Invoice date fallback — regex when AI missed it ──────────────────────────
     if not invoice_date and text:
         # Matches formats: 01-Jun-2025, 01/06/2025, 2025-06-01, June 1 2025, 1 Jun 25
@@ -2017,6 +2080,7 @@ async def parse_invoice_file(
     return {
         "invoice_number":   invoice_number,
         "invoice_date":     invoice_date,
+        "charge_lines":     charge_lines,
         "carrier":          carrier,
         "route":            route,
         "origin":           origin,

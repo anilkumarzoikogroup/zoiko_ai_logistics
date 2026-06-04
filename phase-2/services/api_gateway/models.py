@@ -134,6 +134,7 @@ class SubmitCaseRequest(BaseModel):
     currency:       str   = "INR"
     invoice_number: str   = ""   # Optional — blank → server generates UI-XXXXXXXX
     invoice_date:   str   = ""   # YYYY-MM-DD — used for contract effective_from check
+    charge_lines:   list  = []   # [{description, amount, type}] for SC-001 reasoning
 
 
 class UIProposalRequest(BaseModel):

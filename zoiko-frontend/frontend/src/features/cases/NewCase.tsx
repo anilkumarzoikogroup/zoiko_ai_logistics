@@ -41,6 +41,8 @@ const INTERNATIONAL_CITIES = [
 
 const ALL_CITIES = [...INDIAN_CITIES, ...INTERNATIONAL_CITIES];
 
+interface ChargeLine { description: string; amount: number; type: string; }
+
 interface FormState {
   invoice_number: string;
   invoice_date:   string;
@@ -50,11 +52,13 @@ interface FormState {
   amount: string;
   currency: string;
   email: string;
+  charge_lines: ChargeLine[];
 }
 
 interface ParseResult {
   invoice_number?: string;
   invoice_date?:   string;
+  charge_lines?:   ChargeLine[];
   carrier: string;
   route: string;
   origin: string;
@@ -108,7 +112,7 @@ export default function NewCase() {
   const toast = useToast();
 
   const [mode, setMode]             = useState<Mode>("choose");
-  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
+  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
   const [file, setFile]             = useState<File | null>(null);
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedBy,  setParsedBy]    = useState<string>("");
@@ -131,6 +135,7 @@ export default function NewCase() {
     mutationFn: () => zoikoApi.createCase({
       invoice_number: form.invoice_number,
       invoice_date:   form.invoice_date,
+      charge_lines:   form.charge_lines,
       carrier:        form.carrier,
       route:          `${form.from_city} → ${form.to_city}`,
       amount:         Number(form.amount),
@@ -198,12 +203,13 @@ export default function NewCase() {
       setForm({
         invoice_number: parsed.invoice_number || "",
         invoice_date:   parsed.invoice_date   || "",
-        carrier:   resolvedCarrier,
-        from_city: from_city || "",
-        to_city:   to_city   || "",
-        amount:    parsed.amount > 0 ? String(parsed.amount) : "",
-        currency:  resolvedCurrency,
-        email:     parsed.email || "",
+        carrier:        resolvedCarrier,
+        from_city:      from_city || "",
+        to_city:        to_city   || "",
+        amount:         parsed.amount > 0 ? String(parsed.amount) : "",
+        currency:       resolvedCurrency,
+        email:          parsed.email || "",
+        charge_lines:   parsed.charge_lines || [],
       });
       setParsedBy(parsed.parsed_by || "regex");
       setRouteType(parsed.route_type || "unknown");
@@ -241,7 +247,7 @@ export default function NewCase() {
     setMode("choose");
     setPreviewOpen(true);
     setRouteType("");
-    setForm({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
+    setForm({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -378,6 +384,37 @@ export default function NewCase() {
           />
         </div>
       </div>
+
+      {/* Charge Lines — read-only summary of what AI extracted */}
+      {form.charge_lines.length > 0 && (
+        <div className="space-y-1.5">
+          <Label>
+            Charge Breakdown
+            <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+              ({form.charge_lines.length} line{form.charge_lines.length !== 1 ? "s" : ""} extracted — used for overcharge detection)
+            </span>
+          </Label>
+          <div className="rounded-md border bg-secondary/30 px-3 py-2 space-y-1">
+            {form.charge_lines.map((cl, i) => (
+              <div key={i} className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground truncate max-w-[60%]">{cl.description}</span>
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "text-[9px] font-bold px-1.5 py-0.5 rounded",
+                    cl.type === "FUEL"        ? "bg-orange-100 text-orange-700" :
+                    cl.type === "ACCESSORIAL" ? "bg-purple-100 text-purple-700" :
+                    cl.type === "TAX"         ? "bg-blue-100 text-blue-700"     :
+                    cl.type === "BASE"        ? "bg-green-100 text-green-700"   :
+                    cl.type === "DISCOUNT"    ? "bg-red-100 text-red-700"       :
+                                               "bg-slate-100 text-slate-600"
+                  )}>{cl.type}</span>
+                  <span className="font-medium tabular-nums">{cl.amount.toFixed(2)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Email */}
       <div className="space-y-1.5">
