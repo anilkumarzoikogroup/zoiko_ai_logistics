@@ -626,6 +626,90 @@ def accept_invite(body: dict):
     return {"token": token, "email": inv["email"], "role": inv["role"], "tenant_id": str(inv["tenant_id"]), "full_name": full_name}
 
 
+# ── Organization signup — public, no auth required ────────────────────────────
+
+@app.post("/auth/org-signup", tags=["auth"], status_code=201)
+@app.post("/v1/auth/org-signup", tags=["auth"], include_in_schema=False, status_code=201)
+def org_signup(body: dict):
+    """
+    Public endpoint: create a new tenant + admin user in one transaction.
+    On success returns JWT so the user can immediately access the dashboard.
+    Body: { org_name, admin_name, admin_email, admin_password }
+    """
+    import bcrypt as _bcrypt, psycopg2 as _pg
+
+    org_name     = str(body.get("org_name", "")).strip()
+    admin_name   = str(body.get("admin_name", "")).strip()
+    admin_email  = str(body.get("admin_email", "")).lower().strip()
+    admin_pw     = str(body.get("admin_password", ""))
+
+    for field, label in [
+        (org_name, "org_name"), (admin_name, "admin_name"),
+        (admin_email, "admin_email"), (admin_pw, "admin_password"),
+    ]:
+        if not field:
+            raise HTTPException(status_code=422, detail=f"'{label}' is required")
+    if len(admin_pw) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if "@" not in admin_email:
+        raise HTTPException(status_code=422, detail="Valid email required")
+
+    slug = org_name.lower().replace(" ", "-").replace("_", "-")
+
+    existing_tenant = q1("SELECT id FROM tenants WHERE slug = %s", (slug,))
+    if existing_tenant:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Organization '{org_name}' already registered. Please contact your admin or use sign in."
+        )
+    existing_user = q1("SELECT id FROM users WHERE email = %s", (admin_email,))
+    if existing_user:
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in instead.")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    now       = datetime.now(timezone.utc)
+    pw_hash   = _bcrypt.hashpw(admin_pw.encode(), _bcrypt.gensalt()).decode()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, admin_email, pw_hash, admin_name, "admin", now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Generate JWT
+    from middleware.oidc.token_verifier import TokenVerifier
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl     = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token   = verifier.make_dev_token(
+        sub=admin_email, tenant_id=str(tenant_id),
+        roles=["admin"], ttl_sec=ttl,
+    )
+
+    return {
+        "token":      token,
+        "tenant_id":  str(tenant_id),
+        "role":       "admin",
+        "full_name":  admin_name,
+        "email":      admin_email,
+        "expires_in": ttl,
+        "org_name":   org_name,
+    }
+
+
 # ── Sign out ──────────────────────────────────────────────────────────────────
 
 @app.post("/auth/signout", tags=["auth"], status_code=204)
@@ -633,6 +717,191 @@ def accept_invite(body: dict):
 def signout():
     """Client clears its JWT. Server-side: stateless JWT so nothing to revoke here."""
     return  # Client removes token from storage
+
+
+# ── Profile — user & tenant settings ──────────────────────────────────────────
+
+@app.get("/auth/me")
+@app.get("/v1/auth/me", include_in_schema=False)
+def get_profile(claims: ZoikoClaims = Depends(get_claims)):
+    row = q1(
+        "SELECT full_name, email, role, title, is_active, created_at FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        (claims.sub, claims.tenant_id),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "full_name":  row["full_name"],
+        "email":      row["email"],
+        "role":       row["role"],
+        "title":      row["title"] or "",
+        "is_active":  row["is_active"],
+        "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+    }
+
+@app.put("/auth/me")
+@app.put("/v1/auth/me", include_in_schema=False)
+def update_profile(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    title = str(body.get("title", "")).strip()
+    full_name = str(body.get("full_name", "")).strip()
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        parts = []
+        params = []
+        if title:
+            parts.append("title = %s")
+            params.append(title)
+        if full_name:
+            parts.append("full_name = %s")
+            params.append(full_name)
+        if parts:
+            params.extend([claims.sub, claims.tenant_id])
+            cur.execute(
+                f"UPDATE users SET {', '.join(parts)} WHERE email = %s AND tenant_id = %s::uuid",
+                params,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return {"message": "Profile updated"}
+
+@app.get("/auth/tenant")
+@app.get("/v1/auth/tenant", include_in_schema=False)
+def get_tenant_info(claims: ZoikoClaims = Depends(get_claims)):
+    row = q1(
+        "SELECT display_name, slug, address, city, state, pincode, phone, email, status, created_at "
+        "FROM tenants WHERE id = %s::uuid",
+        (claims.tenant_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return row
+
+@app.put("/auth/tenant")
+@app.put("/v1/auth/tenant", include_in_schema=False)
+def update_tenant_info(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can update tenant info")
+    allowed = {"address", "city", "state", "pincode", "phone", "email"}
+    updates = {k: str(body[k]).strip() for k in body if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=422, detail="No valid fields to update")
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        cur.execute(
+            f"UPDATE tenants SET {set_clause} WHERE id = %s::uuid",
+            list(updates.values()) + [claims.tenant_id],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"message": "Tenant info updated", "updated": list(updates.keys())}
+
+
+# ── Carriers CRUD ──────────────────────────────────────────────────────────────
+
+@app.get("/carriers")
+@app.get("/v1/carriers", include_in_schema=False)
+def list_carriers(claims: ZoikoClaims = Depends(get_claims)):
+    rows = q(
+        "SELECT id::text, name, email, address, contact_person, contact_phone, created_at "
+        "FROM carriers WHERE tenant_id = %s::uuid ORDER BY name ASC",
+        (claims.tenant_id,),
+    )
+    return [
+        {
+            "id":             str(r["id"]),
+            "name":           r["name"],
+            "email":          r["email"] or "",
+            "address":        r["address"] or "",
+            "contact_person": r["contact_person"] or "",
+            "contact_phone":  r["contact_phone"] or "",
+            "created_at":     r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+        }
+        for r in rows
+    ]
+
+@app.post("/carriers")
+@app.post("/v1/carriers", include_in_schema=False, status_code=201)
+def create_carrier(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg, uuid as _uuid
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Carrier name is required")
+    existing = q1(
+        "SELECT id FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+        (claims.tenant_id, name),
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Carrier '{name}' already exists")
+    carrier_id = _uuid.uuid4()
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO carriers (id, tenant_id, name, email, address, contact_person, contact_phone) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (
+                carrier_id, claims.tenant_id, name,
+                str(body.get("email", "")).strip(),
+                str(body.get("address", "")).strip(),
+                str(body.get("contact_person", "")).strip(),
+                str(body.get("contact_phone", "")).strip(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"id": str(carrier_id), "name": name, "message": "Carrier created"}
+
+@app.put("/carriers/{carrier_id}")
+@app.put("/v1/carriers/{carrier_id}", include_in_schema=False)
+def update_carrier(carrier_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    allowed = {"name", "email", "address", "contact_person", "contact_phone"}
+    updates = {}
+    for k in body:
+        if k in allowed:
+            updates[k] = str(body[k]).strip()
+    if not updates:
+        raise HTTPException(status_code=422, detail="No valid fields to update")
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        cur.execute(
+            f"UPDATE carriers SET {set_clause} WHERE id = %s::uuid AND tenant_id = %s::uuid",
+            list(updates.values()) + [carrier_id, claims.tenant_id],
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Carrier not found")
+    finally:
+        conn.close()
+    return {"message": "Carrier updated", "updated": list(updates.keys())}
+
+@app.delete("/carriers/{carrier_id}")
+@app.delete("/v1/carriers/{carrier_id}", include_in_schema=False)
+def delete_carrier(carrier_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM carriers WHERE id = %s::uuid AND tenant_id = %s::uuid",
+            (carrier_id, claims.tenant_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Carrier not found")
+    finally:
+        conn.close()
+    return {"message": "Carrier deleted"}
 
 
 # ── Health — registered directly on app (not versioned) ──────────────────────
@@ -1977,12 +2246,12 @@ async def extract_contract_rates(
 @v1_router.post("/cases/{case_id}/dispute-letter", tags=["ui"])
 def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     """
-    Generate a professional dispute letter for a case.
+    Generate a professional dispute letter for a case, auto-filled with
+    real tenant/carrier data from the database.
     Uses Groq AI when GROQ_API_KEY is set, otherwise generates a
-    professional template letter from the case data.
+    template letter from the case data.
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
-    # v2-dispute-letter-loaded
 
     # Fetch case + validation + finding data
     row = q1("""
@@ -2022,15 +2291,52 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     contract_amt = billed - overcharge
     ref          = case_id[:8].upper()
 
+    # ── Fetch sender (tenant) details ───────────────────────────────────────────
+    tenant_row = q1(
+        "SELECT display_name, address, city, state, pincode, phone, email "
+        "FROM tenants WHERE id = %s::uuid",
+        (claims.tenant_id,),
+    )
+    company_name = (tenant_row.get("display_name") or "Your Company") if tenant_row else "Your Company"
+    company_addr = (tenant_row.get("address") or "").strip() if tenant_row else ""
+    company_city = (tenant_row.get("city") or "").strip() if tenant_row else ""
+    company_st   = (tenant_row.get("state") or "").strip() if tenant_row else ""
+    company_pin  = (tenant_row.get("pincode") or "").strip() if tenant_row else ""
+    company_ph   = (tenant_row.get("phone") or "").strip() if tenant_row else ""
+    company_em   = (tenant_row.get("email") or "").strip() if tenant_row else ""
+    company_city_line = (", ".join(filter(None, [company_city, company_st, company_pin])))
+
+    # ── Fetch sender (user) details ─────────────────────────────────────────────
+    user_row = q1(
+        "SELECT full_name, title, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        (claims.sub, claims.tenant_id),
+    )
+    sender_name    = (user_row.get("full_name") or claims.sub) if user_row else claims.sub
+    sender_title   = (user_row.get("title") or "Logistics Manager").strip() if user_row else "Logistics Manager"
+    sender_email   = (user_row.get("email") or claims.sub) if user_row else claims.sub
+
+    # ── Fetch carrier details ───────────────────────────────────────────────────
+    carrier_row = q1(
+        "SELECT email, address FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+        (claims.tenant_id, carrier),
+    )
+    carrier_email    = (carrier_row.get("email") or "").strip() if carrier_row else ""
+    carrier_addr     = (carrier_row.get("address") or "").strip() if carrier_row else ""
+
     # ── Try Groq AI ───────────────────────────────────────────────────────────
     if groq_key:
         try:
             from groq import Groq as _Groq
             _groq  = _Groq(api_key=groq_key)
             prompt = (
-                f"Write a professional freight overcharge dispute letter from a logistics company to a carrier.\n\n"
+                f"Write a professional freight overcharge dispute letter from {company_name} to {carrier}.\n\n"
+                f"Sender: {sender_name}, {sender_title}, {company_name}\n"
+                f"Sender Address: {company_addr}, {company_city_line}\n"
+                f"Sender Contact: {company_ph}, {sender_email}\n\n"
+                f"Carrier: {carrier}\n"
+                f"Carrier Address: {carrier_addr}\n"
+                f"Carrier Email: {carrier_email}\n\n"
                 f"Details:\n"
-                f"- Carrier: {carrier}\n"
                 f"- Invoice Number: {invoice_no}\n"
                 f"- Route: {route}\n"
                 f"- Amount Billed: {currency} {billed:,.2f}\n"
@@ -2040,7 +2346,7 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
                 f"- Case Reference: {ref}\n\n"
                 f"The letter should: state the overcharge clearly, cite contracted vs billed rate, "
                 f"request a credit memo within 30 days, reference the cryptographic audit record (ACR-{ref}) as proof, "
-                f"be professional and firm. Use [Company Name] and [Your Name] as placeholders."
+                f"be professional and firm. Use {company_name} as company name and {sender_name} as sender name."
             )
             chat   = _groq.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
@@ -2052,6 +2358,7 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
                 "overcharge": overcharge, "currency": currency,
                 "dispute_letter": chat.choices[0].message.content.strip(),
                 "generated_by": "groq_ai",
+                "carrier_email": carrier_email,
             }
         except Exception:
             pass  # fall through to template
@@ -2059,15 +2366,15 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     # ── Template fallback (no GROQ key needed) ────────────────────────────────
     from datetime import date as _date
     today = _date.today().strftime("%B %d, %Y")
-    letter = f"""[Company Name]
-[Address]
-[City, State, PIN]
+    letter = f"""{company_name}
+{company_addr}
+{company_city_line}
 
 {today}
 
 Accounts Receivable
 {carrier}
-[Carrier Address]
+{carrier_addr}
 
 Subject: Formal Dispute of Invoice {invoice_no} — Overcharge of {currency} {overcharge:,.2f}
 Reference: Zoiko Case {ref}
@@ -2087,16 +2394,16 @@ This overcharge has been verified by our cryptographic audit pipeline and is rec
 
 We formally request that {carrier} issue a credit memo for {currency} {overcharge:,.2f} within 30 days of this letter. Failure to resolve this dispute may result in escalation to our legal and compliance teams.
 
-Please direct your response to [Your Name] at [your email] or [phone number].
+Please direct your response to {sender_name} at {sender_email} or {company_ph}.
 
 We value our partnership with {carrier} and trust this matter will be resolved promptly.
 
 Sincerely,
 
-[Your Name]
-[Title]
-[Company Name]
-[Company Phone / Email]
+{sender_name}
+{sender_title}
+{company_name}
+{company_ph} / {company_em}
 
 Enclosures:
   - Zoiko Audit Certification Record (ACR-{ref})
@@ -2110,6 +2417,7 @@ Enclosures:
         "currency":       currency,
         "dispute_letter": letter,
         "generated_by":   "template",
+        "carrier_email":  carrier_email,
     }
 
 
@@ -2124,7 +2432,6 @@ def send_dispute_letter_email(
     """
     Send the dispute letter to a carrier email address.
     Body: { recipient_email, letter_text, carrier, overcharge, currency }
-    Uses SendGrid sandbox by default (SENDGRID_SANDBOX=false to send for real).
     """
     recipient  = body.get("recipient_email", "").strip()
     letter     = body.get("letter_text", "").strip()
@@ -2147,12 +2454,19 @@ def send_dispute_letter_email(
             overcharge = overcharge,
             currency   = currency,
         )
-        sandbox = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
+        provider = os.getenv("EMAIL_PROVIDER", "none").lower().strip()
+        sandbox  = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
+        if provider == "none":
+            message = f"Letter logged to console (EMAIL_PROVIDER=none). Set SENDGRID/SMTP in .env to send for real. To: {recipient}"
+        elif provider == "sendgrid" and sandbox:
+            message = f"Letter validated (sandbox — not delivered) to {recipient}. Set SENDGRID_SANDBOX=false to send for real."
+        else:
+            message = f"Letter sent to {recipient}"
         return {
             "sent": True,
             "to":   recipient,
-            "sandbox": sandbox,
-            "message": f"Letter {'validated (sandbox — not delivered)' if sandbox else 'sent'} to {recipient}",
+            "sandbox": (provider == "sendgrid" and sandbox),
+            "message": message,
         }
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Email send failed: {exc}")
@@ -2558,7 +2872,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
 @v1_router.get("/admin/tenants", tags=["admin"])
 def list_tenants(claims: ZoikoClaims = Depends(get_claims)):
-    """List all tenants with user counts. Admin role required."""
+    """List tenants visible to the current admin — only their own tenant."""
     if "admin" not in claims.roles:
         raise HTTPException(status_code=403, detail="Admin role required")
     rows = q("""
@@ -2570,9 +2884,10 @@ def list_tenants(claims: ZoikoClaims = Depends(get_claims)):
                COUNT(u.id)::int  AS user_count
         FROM   tenants t
         LEFT   JOIN users u ON u.tenant_id = t.id
+        WHERE  t.id = %s::uuid
         GROUP  BY t.id, t.display_name, t.slug, t.status, t.created_at
         ORDER  BY t.created_at DESC
-    """, ())
+    """, (claims.tenant_id,))
     return {"tenants": rows, "total": len(rows)}
 
 

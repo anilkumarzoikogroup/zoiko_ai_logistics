@@ -1,0 +1,42 @@
+name: Deploy Vercel (main only)
+
+on:
+  push:
+    branches: [main]
+
+env:
+  VERCEL_ORG_ID:     ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    name: Deploy frontend to Vercel production
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: zoiko-frontend/frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: zoiko-frontend/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_USE_MOCK: "false"
+          VITE_API_BASE: /api
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Deploy to Vercel (production)
+        run: vercel --prod --token=${{ secrets.VERCEL_TOKEN }} --yes

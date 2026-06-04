@@ -22,3 +22,5 @@ node_modules/
 .terraform/
 *.tfvars
 !*.tfvars.example
+.vercel
+.env*

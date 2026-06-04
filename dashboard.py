@@ -230,7 +230,7 @@ STEPS = [
     ("5", "Manager\nApproval",   "Phase 3 👤"),
     ("6", "Token &\nExecute",    "Phase 4"),
 ]
-
++
 def render_stepper(js):
     step = current_step(js)
     cols = st.columns(len(STEPS))

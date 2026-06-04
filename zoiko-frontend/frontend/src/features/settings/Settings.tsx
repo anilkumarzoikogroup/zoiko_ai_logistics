@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { zoikoApi } from "@/api/zoiko";
+import { zoikoApi, RegisterRequest } from "@/api/zoiko";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,29 +10,20 @@ import { formatCurrency } from "@/utils/cn";
 import { cn } from "@/utils/cn";
 import {
   Users, FileText, Link2, Key, Bell, CreditCard,
-  Shield, Check, X, Plus, MoreHorizontal, Trash2, AlertTriangle,
+  Shield, Check, X, Plus, Trash2, AlertTriangle, Truck, Building2, Pencil,
 } from "lucide-react";
+import { useAppSelector } from "@/store";
 
-type Tab = "team" | "contracts" | "integrations" | "apikeys" | "notifications" | "billing";
+type Tab = "team" | "contracts" | "integrations" | "apikeys" | "notifications" | "billing" | "carriers";
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
   { id: "team",          label: "Team & Roles",    icon: Users      },
   { id: "contracts",     label: "Contracts",       icon: FileText   },
+  { id: "carriers",      label: "Carriers",        icon: Truck      },
   { id: "integrations",  label: "Integrations",    icon: Link2      },
   { id: "apikeys",       label: "API Keys",        icon: Key        },
   { id: "notifications", label: "Notifications",   icon: Bell       },
   { id: "billing",       label: "Billing",         icon: CreditCard },
-];
-
-const TEAM_MEMBERS = [
-  { name: "Ravi Kumar",    email: "ravi.kumar@amazon.in",    role: "analyst",  mfa: true,  status: "active",   joined: "Jan 10, 2025" },
-  { name: "Ramu Sharma",   email: "ramu.sharma@amazon.in",   role: "manager",  mfa: true,  status: "active",   joined: "Jan 10, 2025" },
-  { name: "Priya Mehta",   email: "priya.mehta@amazon.in",   role: "analyst",  mfa: false, status: "active",   joined: "Jan 12, 2025" },
-  { name: "Ajay Singh",    email: "ajay.singh@amazon.in",    role: "analyst",  mfa: true,  status: "active",   joined: "Jan 13, 2025" },
-  { name: "Deepa Reddy",   email: "deepa.reddy@amazon.in",   role: "manager",  mfa: true,  status: "active",   joined: "Jan 14, 2025" },
-  { name: "Kiran Babu",    email: "kiran.babu@amazon.in",    role: "analyst",  mfa: false, status: "inactive", joined: "Jan 15, 2025" },
-  { name: "Sneha Iyer",    email: "sneha.iyer@amazon.in",    role: "analyst",  mfa: true,  status: "active",   joined: "Jan 16, 2025" },
-  { name: "Admin",         email: "admin@amazon.in",         role: "admin",    mfa: true,  status: "active",   joined: "Jan 10, 2025" },
 ];
 
 const ROLE_DESCRIPTIONS: Record<string, { color: string; bg: string; desc: string }> = {
@@ -53,6 +44,34 @@ const INTEGRATIONS = [
 ];
 
 function TeamTab() {
+  const qc      = useQueryClient();
+  const toast   = useToast();
+  const role    = useAppSelector(s => s.auth.role);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm]         = useState<RegisterRequest>({ email: "", password: "", full_name: "", role: "analyst" });
+  const [formErr, setFormErr]   = useState("");
+
+  const usersQ = useQuery({
+    queryKey: ["settings-users"],
+    queryFn:  () => zoikoApi.listUsers(),
+    enabled:  role === "admin",
+  });
+
+  const createM = useMutation({
+    mutationFn: (req: RegisterRequest) => zoikoApi.registerUser(req),
+    onSuccess: (u) => {
+      qc.invalidateQueries({ queryKey: ["settings-users"] });
+      toast.success("User created", `${u.full_name} (${u.role}) can now log in.`);
+      setForm({ email: "", password: "", full_name: "", role: "analyst" });
+      setShowForm(false);
+      setFormErr("");
+    },
+    onError: (e: any) => {
+      const msg = e?.response?.data?.detail;
+      setFormErr(typeof msg === "string" ? msg : "Failed to create user.");
+    },
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -60,7 +79,10 @@ function TeamTab() {
           <p className="font-semibold">Team Members</p>
           <p className="text-sm text-muted-foreground mt-0.5">Roles are enforced by OPA policies — changes take effect immediately.</p>
         </div>
-        <Button size="sm" className="gap-2"><Plus className="h-4 w-4" /> Invite Member</Button>
+        <Button size="sm" className="gap-2" onClick={() => { setShowForm(v => !v); setFormErr(""); }}>
+          {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          {showForm ? "Cancel" : "Add Member"}
+        </Button>
       </div>
 
       {/* Role legend */}
@@ -76,32 +98,92 @@ function TeamTab() {
         ))}
       </div>
 
+      {/* Add member form */}
+      {showForm && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-5 space-y-3">
+          <p className="text-sm font-bold text-slate-700">New Team Member</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Full Name</label>
+              <input type="text" placeholder="Ramu Sharma"
+                value={form.full_name}
+                onChange={e => setForm(f => ({ ...f, full_name: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Work Email</label>
+              <input type="email" placeholder="ramu@amazon.in"
+                value={form.email}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Password</label>
+              <input type="password" placeholder="Min 8 characters"
+                value={form.password}
+                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Role</label>
+              <select value={form.role}
+                onChange={e => setForm(f => ({ ...f, role: e.target.value as RegisterRequest["role"] }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="analyst">Analyst — proposes recoveries</option>
+                <option value="manager">Manager — approves recoveries</option>
+              </select>
+            </div>
+          </div>
+          {formErr && (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{formErr}</p>
+          )}
+          <button
+            disabled={createM.isPending || !form.email || !form.password || !form.full_name}
+            onClick={() => createM.mutate(form)}
+            className={cn(
+              "w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors",
+              !createM.isPending && form.email && form.password && form.full_name
+                ? "bg-blue-600 hover:bg-blue-700 text-white"
+                : "bg-slate-200 text-slate-400 cursor-not-allowed"
+            )}
+          >
+            {createM.isPending ? (
+              <><div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" /> Creating…</>
+            ) : (
+              <><Plus className="h-4 w-4" /> Create User</>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* Members table */}
       <Card>
         <CardContent className="pt-0">
+          {usersQ.isLoading ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">Loading team members…</div>
+          ) : usersQ.data && usersQ.data.length > 0 ? (
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b text-[10px] uppercase tracking-wide text-muted-foreground">
                 <th className="text-left py-3 font-medium">Name</th>
                 <th className="text-left py-3 font-medium">Email</th>
                 <th className="text-left py-3 font-medium">Role</th>
-                <th className="text-center py-3 font-medium">MFA</th>
-                <th className="text-left py-3 font-medium">Status</th>
+                <th className="text-center py-3 font-medium">Status</th>
                 <th className="text-left py-3 font-medium">Joined</th>
                 <th className="py-3" />
               </tr>
             </thead>
             <tbody className="divide-y">
-              {TEAM_MEMBERS.map(m => {
-                const roleCfg = ROLE_DESCRIPTIONS[m.role];
+              {usersQ.data.map(m => {
+                const roleCfg = ROLE_DESCRIPTIONS[m.role] ?? ROLE_DESCRIPTIONS.analyst;
                 return (
-                  <tr key={m.email} className="hover:bg-secondary/30">
+                  <tr key={m.user_id} className="hover:bg-secondary/30">
                     <td className="py-3">
                       <div className="flex items-center gap-2.5">
                         <div className={cn("h-7 w-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0", m.role === "admin" ? "bg-slate-700" : m.role === "manager" ? "bg-purple-600" : "bg-blue-600")}>
-                          {m.name.split(" ").map(w => w[0]).join("").slice(0,2).toUpperCase()}
+                          {m.full_name.split(" ").map((w: string) => w[0]).join("").slice(0,2).toUpperCase()}
                         </div>
-                        <span className="font-medium">{m.name}</span>
+                        <span className="font-medium">{m.full_name}</span>
                       </div>
                     </td>
                     <td className="py-3 text-xs text-muted-foreground">{m.email}</td>
@@ -111,27 +193,31 @@ function TeamTab() {
                       </span>
                     </td>
                     <td className="py-3 text-center">
-                      {m.mfa
+                      {m.is_active
                         ? <Check className="h-4 w-4 text-emerald-600 mx-auto" />
                         : <X className="h-4 w-4 text-amber-500 mx-auto" />
                       }
                     </td>
-                    <td className="py-3">
-                      <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", m.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600")}>
-                        {m.status}
-                      </span>
+                    <td className="py-3 text-xs text-muted-foreground">
+                      {new Date(m.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
                     </td>
-                    <td className="py-3 text-xs text-muted-foreground">{m.joined}</td>
-                    <td className="py-3">
-                      <button className="text-muted-foreground hover:text-foreground">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </button>
+                    <td className="py-3 text-right">
+                      <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", m.is_active ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600")}>
+                        {m.is_active ? "ACTIVE" : "INACTIVE"}
+                      </span>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
+          ) : (
+            <div className="py-10 text-center text-muted-foreground space-y-2">
+              <Users className="h-8 w-8 mx-auto text-slate-300" />
+              <p className="font-medium">No team members yet</p>
+              <p className="text-xs">Click "Add Member" above to invite users to your organization.</p>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -386,6 +472,171 @@ function PlaceholderTab({ label }: { label: string }) {
   );
 }
 
+function CarriersTab() {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: "", email: "", address: "", contact_person: "", contact_phone: "" });
+
+  const carriersQ = useQuery({
+    queryKey: ["carriers"],
+    queryFn: zoikoApi.listCarriers,
+  });
+
+  const createM = useMutation({
+    mutationFn: () => zoikoApi.createCarrier(form),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["carriers"] });
+      toast.success("Carrier added", r.name);
+      resetForm();
+    },
+    onError: (e: any) => toast.error("Failed", e?.response?.data?.detail || "Error"),
+  });
+
+  const updateM = useMutation({
+    mutationFn: () => zoikoApi.updateCarrier(editId!, form),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["carriers"] });
+      toast.success("Carrier updated", form.name);
+      resetForm();
+    },
+    onError: (e: any) => toast.error("Failed", e?.response?.data?.detail || "Error"),
+  });
+
+  const deleteM = useMutation({
+    mutationFn: (id: string) => zoikoApi.deleteCarrier(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["carriers"] });
+      toast.info("Carrier removed", "");
+    },
+    onError: (e: any) => toast.error("Failed", e?.response?.data?.detail || "Error"),
+  });
+
+  function resetForm() {
+    setShowForm(false);
+    setEditId(null);
+    setForm({ name: "", email: "", address: "", contact_person: "", contact_phone: "" });
+  }
+
+  function editCarrier(c: any) {
+    setEditId(c.id);
+    setForm({ name: c.name, email: c.email, address: c.address, contact_person: c.contact_person, contact_phone: c.contact_phone });
+    setShowForm(true);
+  }
+
+  const saving = createM.isPending || updateM.isPending;
+  const canSave = form.name.trim().length > 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="font-semibold">Carrier Contacts</p>
+          <p className="text-sm text-muted-foreground mt-0.5">Store carrier email & address so dispute letters are auto-populated.</p>
+        </div>
+        <Button size="sm" className="gap-2" onClick={() => { resetForm(); setShowForm(v => !v); }}>
+          {showForm ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+          {showForm ? "Cancel" : "Add Carrier"}
+        </Button>
+      </div>
+
+      {showForm && (
+        <div className="rounded-xl border border-blue-200 bg-blue-50/40 p-5 space-y-3">
+          <p className="text-sm font-bold text-slate-700">{editId ? "Edit" : "New"} Carrier</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Carrier Name *</label>
+              <input type="text" placeholder="Delhivery"
+                value={form.name}
+                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Email</label>
+              <input type="email" placeholder="accounts@delhivery.com"
+                value={form.email}
+                onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <label className="text-xs font-medium text-slate-600">Address</label>
+              <input type="text" placeholder="123 Carrier St, New Delhi"
+                value={form.address}
+                onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Contact Person</label>
+              <input type="text" placeholder="Ravi Sharma"
+                value={form.contact_person}
+                onChange={e => setForm(f => ({ ...f, contact_person: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-slate-600">Phone</label>
+              <input type="text" placeholder="+91 98765 43210"
+                value={form.contact_phone}
+                onChange={e => setForm(f => ({ ...f, contact_phone: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+          </div>
+          <button
+            disabled={saving || !canSave}
+            onClick={() => editId ? updateM.mutate() : createM.mutate()}
+            className={cn(
+              "w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors",
+              saving || !canSave ? "bg-slate-200 text-slate-400 cursor-not-allowed" : "bg-blue-600 hover:bg-blue-700 text-white"
+            )}
+          >
+            {saving ? <><div className="h-4 w-4 rounded-full border-2 border-white/40 border-t-white animate-spin" /> Saving…</> : <>{editId ? "Update" : "Save"} Carrier</>}
+          </button>
+        </div>
+      )}
+
+      <Card>
+        <CardContent className="pt-0">
+          {carriersQ.isLoading ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">Loading carriers…</div>
+          ) : carriersQ.data && carriersQ.data.length > 0 ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <th className="text-left py-3 font-medium">Carrier</th>
+                  <th className="text-left py-3 font-medium">Email</th>
+                  <th className="text-left py-3 font-medium">Contact</th>
+                  <th className="py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {carriersQ.data.map(c => (
+                  <tr key={c.id} className="hover:bg-secondary/30">
+                    <td className="py-3 font-semibold">{c.name}</td>
+                    <td className="py-3 text-xs text-muted-foreground">{c.email || "—"}</td>
+                    <td className="py-3">
+                      <span className="text-xs text-muted-foreground">{c.contact_person ? `${c.contact_person} ${c.contact_phone ? `· ${c.contact_phone}` : ""}` : "—"}</span>
+                    </td>
+                    <td className="py-3 text-right">
+                      <button onClick={() => editCarrier(c)} className="text-muted-foreground hover:text-blue-600 mx-1" title="Edit"><Pencil className="h-3.5 w-3.5 inline" /></button>
+                      <button onClick={() => deleteM.mutate(c.id)} className="text-muted-foreground hover:text-red-600 mx-1" title="Delete"><Trash2 className="h-3.5 w-3.5 inline" /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="py-10 text-center text-muted-foreground space-y-2">
+              <Truck className="h-8 w-8 mx-auto text-slate-300" />
+              <p className="font-medium">No carriers configured</p>
+              <p className="text-xs">Add carriers so dispute letters auto-populate their email and address.</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>("team");
 
@@ -420,6 +671,7 @@ export default function Settings() {
       <div>
         {activeTab === "team"          && <TeamTab />}
         {activeTab === "contracts"     && <ContractsTab />}
+        {activeTab === "carriers"      && <CarriersTab />}
         {activeTab === "integrations"  && <IntegrationsTab />}
         {activeTab === "apikeys"       && <ApiKeysTab />}
         {activeTab === "notifications" && <PlaceholderTab label="Notification" />}
