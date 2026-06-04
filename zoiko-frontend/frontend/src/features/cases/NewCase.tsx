@@ -43,6 +43,7 @@ const ALL_CITIES = [...INDIAN_CITIES, ...INTERNATIONAL_CITIES];
 
 interface FormState {
   invoice_number: string;
+  invoice_date:   string;
   carrier: string;
   from_city: string;
   to_city: string;
@@ -53,6 +54,7 @@ interface FormState {
 
 interface ParseResult {
   invoice_number?: string;
+  invoice_date?:   string;
   carrier: string;
   route: string;
   origin: string;
@@ -106,7 +108,7 @@ export default function NewCase() {
   const toast = useToast();
 
   const [mode, setMode]             = useState<Mode>("choose");
-  const [form, setForm]             = useState<FormState>({ invoice_number: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
+  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
   const [file, setFile]             = useState<File | null>(null);
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedBy,  setParsedBy]    = useState<string>("");
@@ -128,6 +130,7 @@ export default function NewCase() {
   const m = useMutation({
     mutationFn: () => zoikoApi.createCase({
       invoice_number: form.invoice_number,
+      invoice_date:   form.invoice_date,
       carrier:        form.carrier,
       route:          `${form.from_city} → ${form.to_city}`,
       amount:         Number(form.amount),
@@ -194,6 +197,7 @@ export default function NewCase() {
 
       setForm({
         invoice_number: parsed.invoice_number || "",
+        invoice_date:   parsed.invoice_date   || "",
         carrier:   resolvedCarrier,
         from_city: from_city || "",
         to_city:   to_city   || "",
@@ -237,7 +241,7 @@ export default function NewCase() {
     setMode("choose");
     setPreviewOpen(true);
     setRouteType("");
-    setForm({ invoice_number: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
+    setForm({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "" });
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -262,6 +266,21 @@ export default function NewCase() {
             placeholder="e.g. INV-2025-001, DHL-90881"
             value={form.invoice_number}
             onChange={e => setForm(f => ({ ...f, invoice_number: e.target.value }))}
+          />
+        )}
+      </div>
+
+      {/* Invoice Date */}
+      <div className="space-y-1.5">
+        <Label htmlFor="invoice_date">Invoice Date</Label>
+        {isParsingNow ? (
+          <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+        ) : (
+          <Input
+            id="invoice_date"
+            type="date"
+            value={form.invoice_date}
+            onChange={e => setForm(f => ({ ...f, invoice_date: e.target.value }))}
           />
         )}
       </div>

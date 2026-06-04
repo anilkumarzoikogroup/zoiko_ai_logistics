@@ -1678,6 +1678,7 @@ async def parse_invoice_file(
 
     carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
     invoice_number = ""
+    invoice_date   = ""
     ai_parsed = False
     groq_key  = os.getenv("GROQ_API_KEY", "")
 
@@ -1730,6 +1731,7 @@ async def parse_invoice_file(
                 "Return ONLY a single valid JSON object — no markdown, no explanation:\n"
                 "{\n"
                 '  "invoice_number": "<the invoice/bill/reference number printed on the document — e.g. INV-2025-001, DHL-90881, BL-12345; empty string if not found>",\n'
+                '  "invoice_date": "<invoice/bill date in YYYY-MM-DD format — e.g. 2025-06-01; empty string if not found>",\n'
                 '  "carrier": "<logistics company name, e.g. BlueDart, DHL, FedEx, Maersk, UPS, Aramex — use exact name from invoice>",\n'
                 '  "total_amount": <see amount rules below>,\n'
                 '  "currency": "<3-letter ISO code from invoice: INR, USD, EUR, GBP, AED, SGD, AUD, etc.>",\n'
@@ -1817,6 +1819,7 @@ async def parse_invoice_file(
             # any value (e.g. "details": {"total": 123}) and returning {} instead.
             parsed    = _extract_first_json(raw)
             invoice_number = str(parsed.get("invoice_number", "")).strip()
+            invoice_date   = str(parsed.get("invoice_date", "")).strip()
             carrier   = str(parsed.get("carrier", "")).strip()
             ai_amount = float(parsed.get("total_amount", 0) or 0)
             currency  = str(parsed.get("currency", "INR")).strip().upper() or "INR"
@@ -1947,6 +1950,25 @@ async def parse_invoice_file(
             if len(found) >= 2:
                 origin, dest = found[0], found[1]
 
+    # ── Invoice date fallback — regex when AI missed it ──────────────────────────
+    if not invoice_date and text:
+        # Matches formats: 01-Jun-2025, 01/06/2025, 2025-06-01, June 1 2025, 1 Jun 25
+        _date_pat = (
+            r"(?:invoice\s*date|bill\s*date|date\s*of\s*issue|date)[:\s]+?"
+            r"(\d{1,2}[-/\s]\w+[-/\s]\d{2,4}|\d{4}[-/]\d{2}[-/]\d{2}|\w+\s+\d{1,2},?\s+\d{4})"
+        )
+        _dm = _re2.search(_date_pat, text, _re2.IGNORECASE)
+        if _dm:
+            _raw_date = _dm.group(1).strip()
+            # Normalise to YYYY-MM-DD
+            import datetime as _dt
+            for _fmt in ("%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d", "%B %d %Y", "%d %b %Y", "%b %d %Y"):
+                try:
+                    invoice_date = _dt.datetime.strptime(_raw_date, _fmt).strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    continue
+
     # ── Invoice number fallback — regex when AI missed it ────────────────────────
     if not invoice_number and text:
         _inv_pat = (
@@ -1994,6 +2016,7 @@ async def parse_invoice_file(
 
     return {
         "invoice_number":   invoice_number,
+        "invoice_date":     invoice_date,
         "carrier":          carrier,
         "route":            route,
         "origin":           origin,

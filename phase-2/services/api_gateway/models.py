@@ -132,7 +132,8 @@ class SubmitCaseRequest(BaseModel):
     route:          str
     amount:         float
     currency:       str   = "INR"
-    invoice_number: str   = ""   # Optional — if blank, server generates UI-XXXXXXXX
+    invoice_number: str   = ""   # Optional — blank → server generates UI-XXXXXXXX
+    invoice_date:   str   = ""   # YYYY-MM-DD — used for contract effective_from check
 
 
 class UIProposalRequest(BaseModel):
