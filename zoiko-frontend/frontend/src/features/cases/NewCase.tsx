@@ -381,7 +381,7 @@ export default function NewCase() {
           size="lg"
         >
           {m.isPending ? (
-            <><div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> Running pipeline… this takes ~20s</>
+            <><div className="h-4 w-4 rounded-full border-2 border-white border-t-transparent animate-spin" /> Submitting… please wait</>
           ) : (
             <><ArrowRight className="h-4 w-4" /> Submit for Audit</>
           )}

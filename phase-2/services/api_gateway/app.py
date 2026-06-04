@@ -2557,26 +2557,50 @@ def ui_submit_case(
                  body.carrier, float(body.amount), body.currency, origin, dest, 0.0)
     case_r = CaseHandler(DB_URL, broker).open_case(str(claims.tenant_id), can_r.canonical_invoice_id, claims.sub)
 
-    # ── Phase 3 pipeline (auto-advance to FINDING_GENERATED) ─────────────────
+    # ── Phase 3 pipeline — run in background thread so response returns fast ────
+    # The evidence + reasoning step takes ~8-12s against a cloud DB.  Running it
+    # synchronously meant the whole submit took ~25s, which caused browsers and
+    # the Vite proxy to drop the connection before the 201 arrived — the backend
+    # logged "201 Created" but the frontend got "lost connection mid-request".
+    # Moving Phase 3 to a daemon thread cuts the client-visible wait to ~3-5s.
+    import threading as _threading
     diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(body.amount) * 0.2
-    try:
-        _run_evidence_and_reasoning(
-            tenant_id  = str(claims.tenant_id),
-            case_id    = str(case_r.case_id),
-            slug       = slug,
-            carrier    = body.carrier,
-            amount     = diff,
-            currency   = body.currency,
-            route      = body.route,
-            actor_sub  = claims.sub,
-            broker     = broker,
-        )
-    except Exception as _e:
-        import traceback; traceback.print_exc()
 
-    rows = _cases_q("WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid",
-                    (str(case_r.case_id), str(claims.tenant_id)))
-    return rows[0] if rows else {"id": str(case_r.case_id), "state": "FINDING_GENERATED"}
+    def _bg():
+        try:
+            _run_evidence_and_reasoning(
+                tenant_id = str(claims.tenant_id),
+                case_id   = str(case_r.case_id),
+                slug      = slug,
+                carrier   = body.carrier,
+                amount    = diff,
+                currency  = body.currency,
+                route     = body.route,
+                actor_sub = claims.sub,
+                broker    = broker,
+            )
+        except Exception:
+            import traceback; traceback.print_exc()
+
+    _threading.Thread(target=_bg, daemon=True, name=f"p3-{case_r.case_id}").start()
+
+    # Return immediately using data already in memory — avoids a second round-trip
+    # to Neon (~12s) and brings total response time from ~25s down to ~5s.
+    # The frontend navigates to the case page which re-fetches the live state.
+    now_str = datetime.now(timezone.utc).isoformat()
+    return {
+        "id":           str(case_r.case_id),
+        "tenant_id":    str(claims.tenant_id),
+        "state":        "EVIDENCE_PENDING",
+        "carrier":      body.carrier,
+        "shipment_ref": body.route,
+        "amount":       float(body.amount),
+        "currency":     body.currency,
+        "diff":         diff,
+        "confidence":   0.0,
+        "opened_at":    now_str,
+        "updated_at":   now_str,
+    }
 
 
 # ── Route registration ────────────────────────────────────────────────────────

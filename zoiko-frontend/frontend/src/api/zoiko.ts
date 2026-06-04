@@ -119,8 +119,9 @@ export const zoikoApi = {
       mocks.mockCases.unshift(newCase);
       return newCase;
     }
-    // Submit runs a full Phase 2+3 pipeline (ingest→validate→canonical→case→evidence→finding).
-    // On cloud DB this can take 20-30s — use a 60s timeout so Axios doesn't cut it short.
+    // Phase 2 runs synchronously against Neon cloud DB (10-25s depending on latency).
+    // Phase 3 (evidence/reasoning) runs in a background thread on the server.
+    // 60s timeout gives plenty of headroom even on slow days.
     const { data } = await api.post<Case>("/cases/submit", payload, { timeout: 60000 });
   },
 
