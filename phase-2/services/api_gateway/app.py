@@ -2520,6 +2520,89 @@ def _run_evidence_and_reasoning(
                               payload={"case_id": case_id, "confidence": SC001}, tenant_id=tenant_id))
 
 
+# ── In-memory job store for async submit ─────────────────────────────────────
+# Maps job_id → {"status": "pending"|"done"|"error", "case": dict|None, "error": str|None}
+_SUBMIT_JOBS: dict = {}
+
+@v1_router.post("/cases/submit-async", tags=["ui"], status_code=202)
+def ui_submit_case_async(
+    body: SubmitCaseRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+    _ff: None = Depends(require_feature_flag("SC_001_ENABLED")),
+):
+    """Non-blocking submit: returns a job_id immediately (<1s), runs pipeline in background.
+    Poll GET /cases/submit-status/{job_id} every 2s until status='done'.
+    Eliminates the 25s HTTP wait that causes NAT/proxy connection drops.
+    """
+    import threading as _th, uuid as _u
+    job_id = str(_u.uuid4())
+    _SUBMIT_JOBS[job_id] = {"status": "pending", "case": None, "error": None}
+
+    # Capture values needed inside thread before they go out of scope
+    _tenant  = str(claims.tenant_id)
+    _sub     = claims.sub
+    _ikey    = idempotency_key
+    _body    = body
+
+    def _run():
+        try:
+            parts  = _re.split(r'\s*[-→–]\s*', _body.route.strip(), maxsplit=1)
+            origin = parts[0].strip() if parts else _body.route
+            dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
+            inv_no = f"UI-{_u.uuid4().hex[:8].upper()}"
+            slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (_tenant,))
+            slug = slug_row["slug"] if slug_row else "default"
+            broker = _BROKER
+            inv = InvoiceInput(carrier_id=_body.carrier, invoice_number=inv_no,
+                               total_amount=float(_body.amount), currency=_body.currency,
+                               route_origin=origin, route_destination=dest, weight_lbs=0.0)
+            ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(_tenant, inv, _ikey)
+            val_r  = ValidationHandler(DB_URL, broker, slug).validate(
+                         _tenant, ing_r.source_record_id, inv_no,
+                         _body.carrier, float(_body.amount), _body.currency)
+            can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
+                         _tenant, ing_r.source_record_id, inv_no,
+                         _body.carrier, float(_body.amount), _body.currency, origin, dest, 0.0)
+            case_r = CaseHandler(DB_URL, broker).open_case(_tenant, can_r.canonical_invoice_id, _sub)
+            diff   = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(_body.amount) * 0.2
+            try:
+                _run_evidence_and_reasoning(
+                    tenant_id=_tenant, case_id=str(case_r.case_id), slug=slug,
+                    carrier=_body.carrier, amount=diff, currency=_body.currency,
+                    route=_body.route, actor_sub=_sub, broker=broker,
+                )
+            except Exception:
+                import traceback; traceback.print_exc()
+            now_str = datetime.now(timezone.utc).isoformat()
+            _SUBMIT_JOBS[job_id] = {
+                "status": "done",
+                "case": {
+                    "id": str(case_r.case_id), "tenant_id": _tenant,
+                    "state": "FINDING_GENERATED", "carrier": _body.carrier,
+                    "shipment_ref": _body.route, "amount": float(_body.amount),
+                    "currency": _body.currency, "diff": diff, "confidence": 0.96,
+                    "opened_at": now_str, "updated_at": now_str,
+                },
+                "error": None,
+            }
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+            _SUBMIT_JOBS[job_id] = {"status": "error", "case": None, "error": str(exc)}
+
+    _th.Thread(target=_run, daemon=True, name=f"submit-{job_id[:8]}").start()
+    return {"job_id": job_id, "status": "pending"}
+
+
+@v1_router.get("/cases/submit-status/{job_id}", tags=["ui"])
+def get_submit_status(job_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """Poll this endpoint after submit-async until status='done'."""
+    job = _SUBMIT_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return job
+
+
 @v1_router.post("/cases/submit", tags=["ui"], status_code=201)
 def ui_submit_case(
     body: SubmitCaseRequest,

@@ -119,10 +119,21 @@ export const zoikoApi = {
       mocks.mockCases.unshift(newCase);
       return newCase;
     }
-    // Phase 2 runs synchronously against Neon cloud DB (10-25s depending on latency).
-    // Phase 3 (evidence/reasoning) runs in a background thread on the server.
-    // 60s timeout gives plenty of headroom even on slow days.
-    const { data } = await api.post<Case>("/cases/submit", payload, { timeout: 60000 });
+    // Step 1: POST /cases/submit-async → returns job_id immediately (<1s).
+    // This replaces the old 25s blocking call that NAT/firewalls would drop.
+    const { data: job } = await api.post<{ job_id: string }>(
+      "/cases/submit-async", payload, { timeout: 10000 }
+    );
+    // Step 2: Poll every 2s until the pipeline finishes (max 90s).
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const { data: s } = await api.get<{ status: string; case: Case | null; error: string | null }>(
+        `/cases/submit-status/${job.job_id}`, { timeout: 8000 }
+      );
+      if (s.status === "done" && s.case) return s.case;
+      if (s.status === "error") throw new Error(s.error || "Pipeline failed");
+    }
+    throw new Error("Timed out waiting for case (90s)");
   },
 
   // ---------- Phase 2 artifacts ----------
