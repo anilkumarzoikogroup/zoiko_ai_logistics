@@ -2170,6 +2170,7 @@ def _run_full_pipeline(
                  tenant_id, ing_r.source_record_id, inv_no, carrier, float(amount), currency)
     can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
                  tenant_id, ing_r.source_record_id, inv_no, carrier, float(amount), currency, origin, dest, 0.0)
+    # (batch pipeline has no new fields — they default to "" / [])
     case_r = CaseHandler(DB_URL, broker).open_case(tenant_id, can_r.canonical_invoice_id, actor_sub)
 
     diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(amount) * 0.2
@@ -2705,16 +2706,26 @@ def ui_submit_case_async(
             slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (_tenant,))
             slug = slug_row["slug"] if slug_row else "default"
             broker = _BROKER
-            inv = InvoiceInput(carrier_id=_body.carrier, invoice_number=inv_no,
-                               total_amount=float(_body.amount), currency=_body.currency,
-                               route_origin=origin, route_destination=dest, weight_lbs=0.0)
+            inv = InvoiceInput(
+                carrier_id=_body.carrier, invoice_number=inv_no,
+                total_amount=float(_body.amount), currency=_body.currency,
+                route_origin=origin, route_destination=dest, weight_lbs=0.0,
+                invoice_date=_body.invoice_date, transport_mode=_body.transport_mode,
+                equipment_type=_body.equipment_type, charge_lines=_body.charge_lines,
+                shipper_reference=_body.shipper_reference,
+            )
             ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(_tenant, inv, _ikey)
             val_r  = ValidationHandler(DB_URL, broker, slug).validate(
                          _tenant, ing_r.source_record_id, inv_no,
                          _body.carrier, float(_body.amount), _body.currency)
             can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
                          _tenant, ing_r.source_record_id, inv_no,
-                         _body.carrier, float(_body.amount), _body.currency, origin, dest, 0.0)
+                         _body.carrier, float(_body.amount), _body.currency, origin, dest, 0.0,
+                         invoice_date=_body.invoice_date,
+                         transport_mode=_body.transport_mode,
+                         equipment_type=_body.equipment_type,
+                         charge_lines=_body.charge_lines,
+                     )
             case_r = CaseHandler(DB_URL, broker).open_case(_tenant, can_r.canonical_invoice_id, _sub)
             diff   = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(_body.amount) * 0.2
             try:
@@ -2780,16 +2791,26 @@ def ui_submit_case(
     broker = _BROKER
 
     # ── Phase 2 pipeline ──────────────────────────────────────────────────────
-    inv = InvoiceInput(carrier_id=body.carrier, invoice_number=inv_no,
-                       total_amount=float(body.amount), currency=body.currency,
-                       route_origin=origin, route_destination=dest, weight_lbs=0.0)
+    inv = InvoiceInput(
+        carrier_id=body.carrier, invoice_number=inv_no,
+        total_amount=float(body.amount), currency=body.currency,
+        route_origin=origin, route_destination=dest, weight_lbs=0.0,
+        invoice_date=body.invoice_date, transport_mode=body.transport_mode,
+        equipment_type=body.equipment_type, charge_lines=body.charge_lines,
+        shipper_reference=body.shipper_reference,
+    )
     ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(str(claims.tenant_id), inv, idempotency_key)
     val_r  = ValidationHandler(DB_URL, broker, slug).validate(
                  str(claims.tenant_id), ing_r.source_record_id, inv_no,
                  body.carrier, float(body.amount), body.currency)
     can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
                  str(claims.tenant_id), ing_r.source_record_id, inv_no,
-                 body.carrier, float(body.amount), body.currency, origin, dest, 0.0)
+                 body.carrier, float(body.amount), body.currency, origin, dest, 0.0,
+                 invoice_date=body.invoice_date,
+                 transport_mode=body.transport_mode,
+                 equipment_type=body.equipment_type,
+                 charge_lines=body.charge_lines,
+             )
     case_r = CaseHandler(DB_URL, broker).open_case(str(claims.tenant_id), can_r.canonical_invoice_id, claims.sub)
 
     # ── Phase 3 pipeline — run in background thread so response returns fast ────
