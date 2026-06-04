@@ -1808,7 +1808,7 @@ async def parse_invoice_file(
                                 ],
                             }],
                             temperature=0,
-                            max_tokens=400,
+                            max_tokens=900,
                         )
                         break
                     except Exception:
@@ -1823,14 +1823,14 @@ async def parse_invoice_file(
                     chat = await _asyncio.get_event_loop().run_in_executor(
                         None,
                         lambda: _groq.chat.completions.create(
-                            model=text_model, messages=_msg, temperature=0, max_tokens=400,
+                            model=text_model, messages=_msg, temperature=0, max_tokens=900,
                         ),
                     )
                 except Exception:
                     chat = await _asyncio.get_event_loop().run_in_executor(
                         None,
                         lambda: _groq.chat.completions.create(
-                            model="llama-3.1-8b-instant", messages=_msg, temperature=0, max_tokens=400,
+                            model="llama-3.1-8b-instant", messages=_msg, temperature=0, max_tokens=900,
                         ),
                     )
 
