@@ -44,8 +44,9 @@ const ALL_CITIES = [...INDIAN_CITIES, ...INTERNATIONAL_CITIES];
 interface ChargeLine { description: string; amount: number; type: string; }
 
 interface FormState {
-  invoice_number: string;
-  invoice_date:   string;
+  invoice_number:  string;
+  invoice_date:    string;
+  transport_mode:  string;
   carrier: string;
   from_city: string;
   to_city: string;
@@ -56,9 +57,10 @@ interface FormState {
 }
 
 interface ParseResult {
-  invoice_number?: string;
-  invoice_date?:   string;
-  charge_lines?:   ChargeLine[];
+  invoice_number?:  string;
+  invoice_date?:    string;
+  transport_mode?:  string;
+  charge_lines?:    ChargeLine[];
   carrier: string;
   route: string;
   origin: string;
@@ -112,7 +114,7 @@ export default function NewCase() {
   const toast = useToast();
 
   const [mode, setMode]             = useState<Mode>("choose");
-  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
+  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", transport_mode: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
   const [file, setFile]             = useState<File | null>(null);
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedBy,  setParsedBy]    = useState<string>("");
@@ -135,6 +137,7 @@ export default function NewCase() {
     mutationFn: () => zoikoApi.createCase({
       invoice_number: form.invoice_number,
       invoice_date:   form.invoice_date,
+      transport_mode: form.transport_mode,
       charge_lines:   form.charge_lines,
       carrier:        form.carrier,
       route:          `${form.from_city} → ${form.to_city}`,
@@ -201,15 +204,16 @@ export default function NewCase() {
         : parsed.currency || "INR";
 
       setForm({
-        invoice_number: parsed.invoice_number || "",
-        invoice_date:   parsed.invoice_date   || "",
-        carrier:        resolvedCarrier,
-        from_city:      from_city || "",
-        to_city:        to_city   || "",
-        amount:         parsed.amount > 0 ? String(parsed.amount) : "",
-        currency:       resolvedCurrency,
-        email:          parsed.email || "",
-        charge_lines:   parsed.charge_lines || [],
+        invoice_number:  parsed.invoice_number  || "",
+        invoice_date:    parsed.invoice_date     || "",
+        transport_mode:  parsed.transport_mode   || "",
+        carrier:         resolvedCarrier,
+        from_city:       from_city || "",
+        to_city:         to_city   || "",
+        amount:          parsed.amount > 0 ? String(parsed.amount) : "",
+        currency:        resolvedCurrency,
+        email:           parsed.email || "",
+        charge_lines:    parsed.charge_lines || [],
       });
       setParsedBy(parsed.parsed_by || "regex");
       setRouteType(parsed.route_type || "unknown");
@@ -247,7 +251,7 @@ export default function NewCase() {
     setMode("choose");
     setPreviewOpen(true);
     setRouteType("");
-    setForm({ invoice_number: "", invoice_date: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
+    setForm({ invoice_number: "", invoice_date: "", transport_mode: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -287,6 +291,22 @@ export default function NewCase() {
             type="date"
             value={form.invoice_date}
             onChange={e => setForm(f => ({ ...f, invoice_date: e.target.value }))}
+          />
+        )}
+      </div>
+
+      {/* Transport Mode */}
+      <div className="space-y-1.5">
+        <Label htmlFor="transport_mode">Transport Mode</Label>
+        {isParsingNow ? (
+          <div className="h-9 w-full rounded-md bg-muted animate-pulse" />
+        ) : (
+          <CityCombobox
+            id="transport_mode"
+            value={form.transport_mode}
+            onChange={v => setForm(f => ({ ...f, transport_mode: v }))}
+            placeholder="e.g. TRUCKLOAD, AIR, SEA, COURIER"
+            suggestions={["TRUCKLOAD", "AIR", "SEA", "RAIL", "COURIER"]}
           />
         )}
       </div>

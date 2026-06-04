@@ -1677,8 +1677,9 @@ async def parse_invoice_file(
             text = content.decode("utf-8", errors="ignore")
 
     carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
-    invoice_number = ""
-    invoice_date   = ""
+    invoice_number   = ""
+    invoice_date     = ""
+    transport_mode   = ""
     charge_lines: list = []
     ai_parsed = False
     groq_key  = os.getenv("GROQ_API_KEY", "")
@@ -1740,6 +1741,7 @@ async def parse_invoice_file(
                 '  "origin": "<shipment ORIGIN city only — no country suffix, e.g. Mumbai, Dubai, New York, Singapore>",\n'
                 '  "destination": "<shipment DESTINATION city only — no country suffix, e.g. Delhi, London, Chicago>",\n'
                 '  "route_type": "<national if both cities are within India, international if any city is outside India>",\n'
+                '  "transport_mode": "<exact one of: TRUCKLOAD | AIR | SEA | RAIL | COURIER — match from invoice service description; COURIER if overnight/express/docket; empty string if unclear>",\n'
                 '  "email": "<any email address visible on the invoice — billing, contact, support or sender email; empty string if none>"\n'
                 "}\n\n"
                 "AMOUNT RULES — follow this priority strictly:\n"
@@ -1833,8 +1835,11 @@ async def parse_invoice_file(
             # matched the first INNERMOST object, failing whenever Groq nested
             # any value (e.g. "details": {"total": 123}) and returning {} instead.
             parsed    = _extract_first_json(raw)
-            invoice_number = str(parsed.get("invoice_number", "")).strip()
-            invoice_date   = str(parsed.get("invoice_date", "")).strip()
+            invoice_number  = str(parsed.get("invoice_number", "")).strip()
+            invoice_date    = str(parsed.get("invoice_date", "")).strip()
+            _valid_modes    = {"TRUCKLOAD","AIR","SEA","RAIL","COURIER"}
+            _raw_mode       = str(parsed.get("transport_mode", "")).strip().upper()
+            transport_mode  = _raw_mode if _raw_mode in _valid_modes else ""
             carrier   = str(parsed.get("carrier", "")).strip()
             # Parse and validate charge_lines array
             _raw_lines = parsed.get("charge_lines", [])
@@ -1980,6 +1985,20 @@ async def parse_invoice_file(
             if len(found) >= 2:
                 origin, dest = found[0], found[1]
 
+    # ── Transport mode fallback — keyword scan ────────────────────────────────────
+    if not transport_mode and text:
+        _tl = text.lower()
+        if any(k in _tl for k in ("truckload","truck load","dry van","ftl","ltl","road","surface")):
+            transport_mode = "TRUCKLOAD"
+        elif any(k in _tl for k in ("air freight","airfreight","air cargo","air express","flight")):
+            transport_mode = "AIR"
+        elif any(k in _tl for k in ("sea freight","ocean","vessel","lcl","fcl","sea cargo")):
+            transport_mode = "SEA"
+        elif any(k in _tl for k in ("rail","train","railway")):
+            transport_mode = "RAIL"
+        elif any(k in _tl for k in ("courier","express","docket","overnight","next day")):
+            transport_mode = "COURIER"
+
     # ── Charge lines fallback — regex when AI missed them ────────────────────────
     if not charge_lines and text:
         def _classify_charge(desc: str) -> str:
@@ -2081,6 +2100,7 @@ async def parse_invoice_file(
         "invoice_number":   invoice_number,
         "invoice_date":     invoice_date,
         "charge_lines":     charge_lines,
+        "transport_mode":   transport_mode,
         "carrier":          carrier,
         "route":            route,
         "origin":           origin,
