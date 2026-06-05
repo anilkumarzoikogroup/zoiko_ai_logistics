@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
+import { api } from "@/api/client";
 import { formatCurrency, formatDate, cn } from "@/utils/cn";
 import {
   ArrowRight, ArrowLeft, CheckCircle2, Clock,
@@ -106,15 +107,6 @@ function SectionCard({ title, icon: Icon, status, children }: {
   );
 }
 
-function DataRow({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
-  return (
-    <div className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
-      <p className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">{label}</p>
-      <p className={cn("text-xs font-semibold text-slate-700", valueClass)}>{value}</p>
-    </div>
-  );
-}
-
 export default function CaseDetail() {
   const { id = "" } = useParams();
   const nav   = useNavigate();
@@ -162,7 +154,7 @@ export default function CaseDetail() {
   async function handleGenerateLetter() {
     setLetterLoading(true); setDisputeLetter(""); setSendResult(null); setShowSendForm(false);
     try {
-      const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter`);
+      const { data } = await api.post(`/cases/${id}/dispute-letter`);
       setDisputeLetter(data.dispute_letter || "");
       toast.success("Letter generated", `Dispute letter for ${data.carrier} ready`);
     } catch {
@@ -177,7 +169,7 @@ export default function CaseDetail() {
     setSendLoading(true); setSendResult(null);
     try {
       const theCase = cq.data;
-      const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter/send`, {
+      const { data } = await api.post(`/cases/${id}/dispute-letter/send`, {
         recipient_email: sendEmail.trim(),
         letter_text:     disputeLetter,
         carrier:         theCase?.carrier ?? "",

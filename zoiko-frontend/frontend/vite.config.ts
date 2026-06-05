@@ -14,6 +14,8 @@ export default defineConfig({
         target: "http://localhost:8000",
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api/, ""),
+        proxyTimeout: 90000,  // 90s — covers the ~22s cloud-DB pipeline
+        timeout: 90000,
       },
       "/api3": {
         target: "http://localhost:8002",

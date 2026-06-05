@@ -17,6 +17,7 @@ import NewCase        from "./features/cases/NewCase";
 import CaseDetail     from "./features/cases/CaseDetail";
 import ExecuteRecovery from "./features/cases/ExecuteRecovery";
 import PaymentControl from "./features/cases/PaymentControl";
+import CarriersPage   from "./features/carriers/CarriersPage";
 import RateControl    from "./features/cases/RateControl";
 
 // features/governance
@@ -38,7 +39,8 @@ import Settings        from "./features/settings/Settings";
 import UserManagement  from "./features/settings/UserManagement";
 
 // features/admin
-import TenantManagement from "./features/admin/TenantManagement";
+import TenantManagement    from "./features/admin/TenantManagement";
+import WorkspaceRequests   from "./features/admin/WorkspaceRequests";
 
 // features/stubs
 import StubViewer from "./features/stubs/StubViewer";
@@ -46,12 +48,6 @@ import StubViewer from "./features/stubs/StubViewer";
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const role = useAppSelector(state => state.auth.role);
   return role ? <>{children}</> : <Navigate to="/login" replace />;
-}
-
-// Redirect root / → /login (not logged in) or /dashboard (logged in)
-function RootRedirect() {
-  const role = useAppSelector(state => state.auth.role);
-  return role ? <Navigate to="/" replace /> : <Navigate to="/login" replace />;
 }
 
 function RequireRole({ allowed, children }: { allowed: string[]; children: React.ReactNode }) {
@@ -77,6 +73,7 @@ export default function App() {
         {/* Payment & Rate */}
         <Route path="/payment-control"   element={<PaymentControl />} />
         <Route path="/rate-control"      element={<RateControl />} />
+        <Route path="/carriers"          element={<CarriersPage />} />
 
         {/* Cases */}
         <Route path="/cases"     element={<Cases />} />
@@ -123,6 +120,11 @@ export default function App() {
         <Route path="/tenants"   element={
           <RequireRole allowed={["admin"]}>
             <TenantManagement />
+          </RequireRole>
+        } />
+        <Route path="/workspace-requests" element={
+          <RequireRole allowed={["admin"]}>
+            <WorkspaceRequests />
           </RequireRole>
         } />
 

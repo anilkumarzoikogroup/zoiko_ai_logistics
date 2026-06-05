@@ -92,7 +92,7 @@ export const zoikoApi = {
     return data;
   },
 
-  async createCase(payload: { carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
+  async createCase(payload: { invoice_number?: string; invoice_date?: string; transport_mode?: string; equipment_type?: string; shipper_reference?: string; charge_lines?: {description:string;amount:number;type:string}[]; carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
     if (USE_MOCK) {
       await delay(500);
       const CONTRACT_BASE: Record<string, number> = {
@@ -119,8 +119,21 @@ export const zoikoApi = {
       mocks.mockCases.unshift(newCase);
       return newCase;
     }
-    const { data } = await api.post<Case>("/cases/submit", payload);
-    return data;
+    // Step 1: POST /cases/submit-async → returns job_id immediately (<1s).
+    // This replaces the old 25s blocking call that NAT/firewalls would drop.
+    const { data: job } = await api.post<{ job_id: string }>(
+      "/cases/submit-async", payload, { timeout: 10000 }
+    );
+    // Step 2: Poll every 2s until the pipeline finishes (max 90s).
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const { data: s } = await api.get<{ status: string; case: Case | null; error: string | null }>(
+        `/cases/submit-status/${job.job_id}`, { timeout: 8000 }
+      );
+      if (s.status === "done" && s.case) return s.case;
+      if (s.status === "error") throw new Error(s.error || "Pipeline failed");
+    }
+    throw new Error("Timed out waiting for case (90s)");
   },
 
   // ---------- Phase 2 artifacts ----------

@@ -132,13 +132,13 @@ class AuditACRHandler:
             # Write ACR row (APPEND-ONLY)
             cur.execute("""
                 INSERT INTO action_certification_records
-                    (id, tenant_id, case_id, merkle_root, acr_hash, signature,
-                     kid, verify_bundle, is_locked, issued_at)
-                VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, FALSE, %s)
+                    (id, tenant_id, case_id, merkle_root, artifact_hashes, signature,
+                     kid, acr_version, certified_at)
+                VALUES (%s, %s::uuid, %s::uuid, %s, %s::jsonb, %s, %s, %s, %s)
             """, (
                 acr_id, tenant_id, uuid.UUID(case_id),
-                merkle_root, acr_hash, acr_sig, acr_kid,
-                json.dumps(verify_bundle), now,
+                merkle_root, json.dumps(verify_bundle), acr_sig, acr_kid,
+                "1.0", now,
             ))
 
             # Write audit_worm_index row (APPEND-ONLY)
@@ -214,12 +214,13 @@ class AuditACRHandler:
             db_url=self._db_url,
             sql="""
                 SELECT id::text, case_id::text, tenant_id::text,
-                       encode(merkle_root,'hex') AS merkle_root,
-                       encode(acr_hash,'hex') AS acr_hash,
-                       verify_bundle, is_locked, issued_at
+                       merkle_root,
+                       artifact_hashes AS verify_bundle,
+                       acr_version, kid,
+                       certified_at AS issued_at
                 FROM   action_certification_records
                 WHERE  case_id=%s::uuid AND tenant_id=%s::uuid
-                ORDER BY issued_at DESC LIMIT 1
+                ORDER BY certified_at DESC LIMIT 1
             """,
             params=(case_id, tenant_id),
         )

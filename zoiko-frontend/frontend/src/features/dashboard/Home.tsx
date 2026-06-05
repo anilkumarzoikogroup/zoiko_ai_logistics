@@ -176,9 +176,9 @@ export default function Home() {
   const user = useAppSelector(s => s.auth.user) || localStorage.getItem("zoiko_user") || "User";
   const role = useAppSelector(s => s.auth.role) || localStorage.getItem("zoiko_role") || "analyst";
 
-  const { data: cases = [],  isLoading } = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases() });
-  const { data: tokens = [] }            = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens() });
-  const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats });
+  const { data: cases = [],  isLoading } = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases(),   refetchInterval: 5000 });
+  const { data: tokens = [] }            = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens(), refetchInterval: 10000 });
+  const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats,            refetchInterval: 10000 });
 
   // ── Derived metrics ──────────────────────────────────────────────────────────
   const allCases        = cases as Case[];

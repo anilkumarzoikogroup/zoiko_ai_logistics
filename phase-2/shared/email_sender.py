@@ -51,6 +51,91 @@ Click the link below to accept your invitation and set your password (expires {e
     log.info("Invitation email sent to %s as %s (provider=%s)", to_email, role, EMAIL_PROVIDER)
 
 
+def send_governance_notification(to_email: str, to_name: str, event: str,
+                                 case_id: str, actor: str, amount: float,
+                                 currency: str, app_url: str = "") -> None:
+    """Notify manager (on proposal) or analyst (on decision) about governance events."""
+    sym = "Rs." if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    if event == "proposal":
+        subject = f"Action Required: Recovery Proposal — Case {case_id[:8].upper()}"
+        action_text = f"{actor} proposed a recovery of {sym}{amount:,.0f} {currency}."
+        cta = "Review and approve or reject the proposal."
+        cta_url = f"{app_url}/manager"
+        cta_label = "Go to Manager Approval"
+    else:
+        subject = f"Recovery Decision — Case {case_id[:8].upper()}"
+        action_text = f"Your proposal of {sym}{amount:,.0f} {currency} has been {'approved' if event == 'approved' else 'rejected'} by {actor}."
+        cta = "View the case timeline for full details."
+        cta_url = f"{app_url}/cases"
+        cta_label = "View Cases"
+
+    plain = f"Hello {to_name},\n\n{action_text}\n{cta}\n\n{cta_url}\n\n— Zoiko AI Logistics"
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#1e293b;margin:0 0 12px">Hello {to_name},</h3>
+        <p style="color:#475569">{action_text}</p>
+        <p style="color:#64748b;font-size:13px">{cta}</p>
+        <a href="{cta_url}" style="display:inline-block;margin-top:16px;background:#2563eb;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">{cta_label}</a>
+        <p style="margin-top:20px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Governance notification sent to %s for case %s (event=%s)", to_email, case_id, event)
+
+
+def send_new_signup_alert(full_name: str, work_email: str, company_name: str, use_case: str = "") -> None:
+    """Alert admin when a new workspace access request is submitted."""
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@zoikotech.com")
+    subject = f"New Signup Request — {company_name}"
+    plain = f"New workspace request:\n\nName: {full_name}\nEmail: {work_email}\nCompany: {company_name}\nUse case: {use_case}\n\nLogin to Admin panel to approve."
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">New Signup Alert</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#1e293b;margin:0 0 16px">New Workspace Request</h3>
+        <table style="width:100%;border-collapse:collapse">
+          <tr><td style="padding:6px 0;color:#64748b;width:120px">Name</td><td style="font-weight:600">{full_name}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748b">Email</td><td>{work_email}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748b">Company</td><td style="font-weight:600">{company_name}</td></tr>
+          <tr><td style="padding:6px 0;color:#64748b">Use Case</td><td>{use_case or "—"}</td></tr>
+        </table>
+        <p style="margin:16px 0 0;color:#64748b;font-size:13px">Login to the Admin panel to approve or reject this request.</p>
+      </div>
+    </div>"""
+    _send_html(admin_email, subject, plain, html)
+    log.info("Signup alert sent to admin for %s (%s)", company_name, work_email)
+
+
+def send_welcome_email(to_email: str, full_name: str, role: str, password: str, login_url: str, invited_by: str = "") -> None:
+    """Send welcome email to newly created user with their login credentials."""
+    subject = "Welcome to Zoiko AI Logistics — Your Account is Ready"
+    plain = f"Hello {full_name},\n\nYour account is ready.\nLogin: {login_url}\nEmail: {to_email}\nPassword: {password}\nRole: {role.title()}\n\nPlease change your password after first login.\n\n— Zoiko AI Logistics"
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#1e3a8a;padding:20px 28px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-size:22px;font-weight:800">ZOIKO</span><span style="color:#60a5fa;font-size:22px;font-weight:800">AI</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:28px">
+        <h2 style="color:#1e293b">Welcome, {full_name}!</h2>
+        <p style="color:#64748b">Your Zoiko AI Logistics account has been created.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:20px 0">
+          <p style="margin:6px 0"><strong>Login URL:</strong> <a href="{login_url}">{login_url}</a></p>
+          <p style="margin:6px 0"><strong>Email:</strong> {to_email}</p>
+          <p style="margin:6px 0"><strong>Password:</strong> <code style="background:#e2e8f0;padding:2px 6px;border-radius:4px">{password}</code></p>
+          <p style="margin:6px 0"><strong>Role:</strong> {role.title()}</p>
+        </div>
+        <p style="color:#dc2626;font-size:12px">Please change your password after first login.</p>
+        {"<p style='color:#64748b;font-size:12px'>Invited by: " + invited_by + "</p>" if invited_by else ""}
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Welcome email sent to %s as %s (provider=%s)", to_email, role, EMAIL_PROVIDER)
+
+
 def send_dispute_letter(
     to_email: str,
     carrier: str,
