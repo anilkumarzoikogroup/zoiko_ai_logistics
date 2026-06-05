@@ -6,200 +6,359 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel stale runs on feature branches; never cancel on main
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
-  DB_URL:           postgresql://postgres:1234@localhost:5432/zoiko
-  ZOIKO_DEV_MODE:   "true"
-  ZOIKO_DEV_SECRET: zoiko-dev-secret-for-testing-only
-  ZOIKO_ISSUER:     https://auth.zoikotech.com
+  PYTHON_VERSION: "3.11"          # matches production Dockerfile
   PYTHONIOENCODING: utf-8
+  ZOIKO_DEV_MODE: "true"
+  ZOIKO_ISSUER: https://auth.zoikotech.com
+  ZOIKO_DEV_SECRET: zoiko-dev-secret-for-testing-only   # CI-only test value
 
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 0  Security scan — runs in parallel with lint, never blocks deploy alone
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
-
-  # ── Gate 1: JCS test vectors (hard CI block) ──────────────────────────────
-  jcs-vectors:
-    name: JCS Vectors (hard block)
+  security-scan:
+    name: Security Scan (pip-audit + npm audit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
-      - run: pip install -r requirements.txt
-      - run: python -m pytest phase-0/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
-        name: JCS canonical vectors
 
-  # ── Gate 2: Crypto + Merkle ────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit Python dependencies
+        run: pip-audit -r requirements.txt
+        continue-on-error: true   # warn only — harden to fail before public launch
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: zoiko-frontend/frontend/package-lock.json
+
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: zoiko-frontend/frontend
+
+      - name: Audit npm dependencies
+        run: npm audit --audit-level=high
+        working-directory: zoiko-frontend/frontend
+        continue-on-error: true   # warn only — harden to fail before public launch
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 1  Lint — blocks all downstream gates
+# ─────────────────────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - run: pip install ruff
+      - run: ruff check .
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 2  JCS vectors — HARD BLOCK (100% required, no exceptions)
+# ─────────────────────────────────────────────────────────────────────────────
+  jcs-vectors:
+    name: JCS Vectors (hard block)
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+
+      - name: JCS canonical vectors (must be 100%)
+        run: python -m pytest phase-0/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 3a  Crypto + Merkle
+# GATE 3b  KMS hierarchy
+# Both run in parallel after JCS passes
+# ─────────────────────────────────────────────────────────────────────────────
   crypto:
     name: Crypto + Merkle
     runs-on: ubuntu-latest
     needs: jcs-vectors
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
+      - run: pip install -e phase-0/packages/zoiko-common
       - run: python -m pytest phase-0/packages/zoiko-common/tests/ -v --tb=short
 
-  # ── Gate 3: KMS key hierarchy ──────────────────────────────────────────────
   kms:
     name: KMS Hierarchy
     runs-on: ubuntu-latest
     needs: jcs-vectors
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
       - run: python -m pytest phase-1/packages/zoiko-kms/tests/ -v --tb=short
 
-  # ── Gate 4: Phase 1 — Kafka + OPA + OIDC ─────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 4  Phase 1 — Kafka + OPA + OIDC
+# ─────────────────────────────────────────────────────────────────────────────
   phase1:
-    name: Phase 1 Tests
+    name: Phase 1 (Kafka + OPA + OIDC)
     runs-on: ubuntu-latest
     needs: [crypto, kms]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
       - run: python -m pytest phase-1/tests/ -v --tb=short
 
-  # ── Gate 5: Phase 2 — Integration (requires PostgreSQL) ───────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 5a  Phase 2 Integration (own ephemeral postgres)
+# GATE 5b  Phase 3 Integration (own ephemeral postgres)  — parallel with 5a
+# GATE 5c  Phase 4 Unit tests  (no DB needed)            — parallel with 5a/5b
+# All three need only phase1 — they each spin their own fresh DB
+# ─────────────────────────────────────────────────────────────────────────────
   phase2:
     name: Phase 2 Integration
     runs-on: ubuntu-latest
-    needs: [phase1]
+    needs: phase1
     services:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_DB:       zoiko
-          POSTGRES_USER:     postgres
-          POSTGRES_PASSWORD: "1234"
+          POSTGRES_DB: zoiko
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_zoiko_ephemeral
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    env:
+      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-      - name: Run Alembic migrations
-        run: alembic upgrade head
-        env:
-          DB_URL: ${{ env.DB_URL }}
-      - name: Seed CI tenant (amazon-india)
-        run: python scripts/ci_seed_tenant.py
-        env:
-          DB_URL: ${{ env.DB_URL }}
-      - name: Seed contract rates
-        run: cd phase-2 && python seed_contract_rates.py
-        env:
-          DB_URL: ${{ env.DB_URL }}
-      - run: python -m pytest phase-2/ -v --tb=short -q
-        working-directory: .
-        env:
-          DB_URL: ${{ env.DB_URL }}
 
-  # ── Gate 6: Phase 3 — Integration ─────────────────────────────────────────
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Seed CI tenant
+        run: python scripts/ci_seed_tenant.py
+
+      - name: Seed contract rates
+        run: python seed_contract_rates.py
+        working-directory: phase-2
+
+      - name: Run Phase 2 tests
+        run: python -m pytest phase-2/ -v --tb=short -q --cov --cov-report=xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-phase2
+          path: coverage.xml
+
   phase3:
     name: Phase 3 Integration
     runs-on: ubuntu-latest
-    needs: [phase2]
+    needs: phase1
     services:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_DB:       zoiko
-          POSTGRES_USER:     postgres
-          POSTGRES_PASSWORD: "1234"
+          POSTGRES_DB: zoiko
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_zoiko_ephemeral
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    env:
+      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-      - run: alembic upgrade head
-        env: {DB_URL: "${{ env.DB_URL }}"}
-      - name: Seed CI tenant (amazon-india)
-        run: python scripts/ci_seed_tenant.py
-        env:
-          DB_URL: ${{ env.DB_URL }}
-      - run: cd phase-2 && python seed_contract_rates.py
-        env: {DB_URL: "${{ env.DB_URL }}"}
-      - run: python -m pytest phase-3/ -v --tb=short -q
-        env:
-          DB_URL: ${{ env.DB_URL }}
 
-  # ── Gate 7: Phase 4 — Execution Gateway unit tests ────────────────────────
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Seed CI tenant
+        run: python scripts/ci_seed_tenant.py
+
+      - name: Seed contract rates
+        run: python seed_contract_rates.py
+        working-directory: phase-2
+
+      - name: Run Phase 3 tests
+        run: python -m pytest phase-3/ -v --tb=short -q --cov --cov-report=xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-phase3
+          path: coverage.xml
+
   phase4:
     name: Phase 4 Gate Unit Tests
     runs-on: ubuntu-latest
-    needs: [phase3]
+    needs: phase1
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
       - run: python -m pytest phase-4/tests/ -v --tb=short -q
 
-  # ── Gate 8: Frontend TypeScript check ─────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 6  Frontend — TypeScript build + type check
+# Runs after lint (parallel with phase gates)
+# ─────────────────────────────────────────────────────────────────────────────
   frontend:
-    name: Frontend TypeScript
+    name: Frontend (TypeScript build)
     runs-on: ubuntu-latest
+    needs: lint
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
-        with: {node-version: "20"}
-      - run: npm ci
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: zoiko-frontend/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
         working-directory: zoiko-frontend/frontend
-      - run: npm run build
+
+      - name: Build
+        run: npm run build
         working-directory: zoiko-frontend/frontend
         env:
           VITE_USE_MOCK: "true"
           VITE_API_BASE: "/api"
-          VITE_DEV_JWT:  "dev-token"
+          VITE_DEV_JWT: "ci-token"
           VITE_DEV_TENANT: "11111111-1111-1111-1111-111111111111"
 
-  # ── Tenant fuzzer — security hardening ────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 7  Docker build — verifies both Dockerfiles produce valid images
+# Final gate: needs all integration + frontend jobs to pass first
+# ─────────────────────────────────────────────────────────────────────────────
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: [phase2, phase3, phase4, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f Dockerfile -t zoiko-backend:ci .
+
+      - name: Build frontend image
+        run: docker build -f zoiko-frontend/frontend/Dockerfile -t zoiko-frontend:ci zoiko-frontend/frontend
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY  Tenant isolation fuzzer — main branch only
+# ─────────────────────────────────────────────────────────────────────────────
   tenant-fuzzer:
     name: Tenant Isolation Fuzzer
     runs-on: ubuntu-latest
-    needs: [phase2]
+    needs: phase2
     if: github.ref == 'refs/heads/main'
     services:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_DB:       zoiko
-          POSTGRES_USER:     postgres
-          POSTGRES_PASSWORD: "1234"
+          POSTGRES_DB: zoiko
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_zoiko_ephemeral
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    env:
+      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: {python-version: "3.10"}
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
       - run: alembic upgrade head
-        env: {DB_URL: "${{ env.DB_URL }}"}
       - run: python phase-0/scripts/tenant_fuzzer.py
-        env:
-          DB_URL: ${{ env.DB_URL }}

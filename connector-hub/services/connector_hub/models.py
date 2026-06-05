@@ -1,9 +1,9 @@
 """Connector-hub domain models."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 
 @dataclass

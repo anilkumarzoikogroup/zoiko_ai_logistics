@@ -34,7 +34,6 @@ import psycopg2.extras
 
 import paths  # noqa: F401
 import shared.db as _db
-from shared.signer import sign as _sign
 
 from services.execution_gateway.models import (
     ExecutionRequest, GateResult, ExecutionEnvelope,

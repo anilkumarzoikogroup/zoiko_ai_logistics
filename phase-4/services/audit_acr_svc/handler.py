@@ -46,7 +46,6 @@ import psycopg2.extras
 import shared.db as _db
 
 import paths  # noqa: F401
-import shared.db as _db
 from shared.signer import sign as _sign
 from zoiko_common.crypto.merkle import MerkleTree
 from zoiko_common.crypto.jcs import canonicalize as _jcs

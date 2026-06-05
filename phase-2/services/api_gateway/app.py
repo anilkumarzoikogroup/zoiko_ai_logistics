@@ -35,7 +35,6 @@ from services.api_gateway.models import (
     CanonicalizeRequest, CanonicalizeResponse,
     OpenCaseRequest, OpenCaseResponse,
     TransitionRequest, TransitionResponse,
-    HealthResponse,
     SubmitCaseRequest, UIProposalRequest, UIDecideRequest,
     ContractRateRequest,
     LoginRequest, LoginResponse,
@@ -62,12 +61,12 @@ def _make_broker():
     if KAFKA_BOOTSTRAP:
         try:
             # Use importlib to avoid naming conflict with local phase-1/kafka package
-            import importlib, logging, json
+            import importlib, logging
             _kafka_module = importlib.import_module("kafka.producer.kafka")
             _KP = getattr(_kafka_module, "KafkaProducer", None)
             if _KP is None:
                 # Fallback: try direct import (works when kafka-python is installed)
-                import sys, importlib.util
+                import importlib.util
                 spec = importlib.util.find_spec("kafka")
                 if spec and "kafka-python" in str(spec.origin):
                     _KP = importlib.import_module("kafka").KafkaProducer
@@ -102,7 +101,7 @@ def _make_broker():
 _BROKER = _make_broker()
 
 # ── FastAPI app with lifespan (outbox relay + startup logging) ────────────────
-import asyncio, threading
+import threading
 from contextlib import asynccontextmanager
 
 def _run_outbox_relay():
@@ -359,7 +358,7 @@ def change_password(
 @app.post("/v1/auth/discover", tags=["auth"], include_in_schema=False)
 def auth_discover(body: dict):
     """Email-first SSO discovery. Returns route: 'sso' | 'password' and optional idp_hint."""
-    import re as _re2, time as _time, random as _rand
+    import time as _time, random as _rand
     email = str(body.get("email", "")).lower().strip()
     if not email or "@" not in email:
         raise HTTPException(status_code=422, detail="Valid work email required")
@@ -440,6 +439,11 @@ def recover_request(body: dict):
             email, email_error, raw_token, expires_at,
         )
 
+    response: dict = {"message": "If that email exists, a reset link has been sent.", "email_sent": email_sent}
+    if email_error:
+        response["email_warning"] = f"Email delivery failed ({email_error}). Check server logs for the reset link."
+    return response
+
 
 @app.post("/auth/recover/complete", tags=["auth"])
 @app.post("/v1/auth/recover/complete", tags=["auth"], include_in_schema=False)
@@ -489,10 +493,7 @@ def recover_complete(body: dict):
         sub=row["email"], tenant_id=str(row["tenant_id"]), roles=[actual_role],
         ttl_sec=int(os.getenv("JWT_TTL_SECONDS", "86400")),
     )
-    response: dict = {"message": "Password reset successfully", "token": token, "email_sent": email_sent}
-    if email_error:
-        response["email_warning"] = f"Email delivery failed ({email_error}). Check server logs for the reset link."
-    return response
+    return {"message": "Password reset successfully", "token": token}
 
 
 # ── Workspace Access Request (prospects — no tenant created) ──────────────────
@@ -1440,7 +1441,7 @@ def ui_create_proposal(
     claims: ZoikoClaims = Depends(get_claims),
 ):
     try:
-        case_uuid = uuid.UUID(case_id)  # validate format — returns clean 422 on bad UUID
+        uuid.UUID(case_id)  # validate format — returns clean 422 on bad UUID
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid case_id format: '{case_id}'")
     tid = claims.tenant_id
@@ -1916,7 +1917,7 @@ async def parse_invoice_file(
                 return True
         return False
 
-    KNOWN_CARRIERS = [
+    _KNOWN_CARRIERS = [
         "BlueDart", "Delhivery", "FedEx India", "FedEx", "DTDC",
         "Ekart", "UPS India", "UPS", "V Express", "Gati", "DHL",
         "Aramex", "Maersk", "MSC", "CMA CGM", "Other"
@@ -2550,7 +2551,6 @@ async def batch_submit_invoices(
                             pass
 
             # Step 3 — submit as a case
-            from services.api_gateway.models import SubmitCaseRequest
             parts = route.replace("→", "-").replace(" to ", "-").split("-")
             origin = parts[0].strip() if parts else "Unknown"
             dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
@@ -3380,7 +3380,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
                             detail=f"Gate 2 failed: token expired {(now - exp).total_seconds():.0f}s ago")
     secs = (exp - now).total_seconds() if exp else 0
     gates.append({"gate": 2, "name": "not_expired", "passed": True,
-                  "detail": f"Expires in {secs:.0f}s" if secs > 0 else f"Dev mode — expiry bypassed"})
+                  "detail": f"Expires in {secs:.0f}s" if secs > 0 else "Dev mode — expiry bypassed"})
 
     # Gate 3 — not consumed
     if token.get("status") == "CONSUMED":
@@ -3574,7 +3574,7 @@ app.include_router(v1_router)
 
 # ── Phase-3 routes merged into port 8000 ──────────────────────────────────────
 try:
-    import os as _os3, sys as _sys3, base64 as _b64, uuid as _uuid3
+    import os as _os3, base64 as _b64, uuid as _uuid3
     _PROJ3 = _os3.path.dirname(_os3.path.dirname(_os3.path.dirname(_os3.path.dirname(
         _os3.path.abspath(__file__)
     ))))
@@ -3599,7 +3599,7 @@ try:
     from services.api_gateway.models import (
         AddEvidenceRequest, AddEvidenceResponse,
         GetBundleResponse, SealBundleResponse,
-        AnalyzeRequest, AnalyzeResponse, FindingItem, GetFindingsResponse,
+        AnalyzeRequest, AnalyzeResponse, GetFindingsResponse,
         CreateTaskRequest, CreateTaskResponse,
         DecideRequest, DecideResponse,
         MintTokenRequest, MintTokenResponse,
@@ -3752,7 +3752,7 @@ except Exception as _p3_err:
 
 # ── Phase-4 routes merged into port 8000 ──────────────────────────────────────
 try:
-    import sys as _sys, os as _os
+    import os as _os
 
     # Project root: phase-2/services/api_gateway/app.py → up 4 levels
     _PROJ = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.dirname(
@@ -3776,7 +3776,6 @@ try:
     from fastapi import APIRouter as _P4APIRouter
     from fastapi.responses import StreamingResponse as _StreamingResponse
     from services.execution_gateway.handler   import ExecutionGateway      as _ExecGW
-    from services.execution_gateway.models    import ExecutionRequest       as _ExecReq
     from services.reconciliation_svc.handler import ReconciliationHandler  as _ReconH
     from services.audit_acr_svc.handler      import AuditACRHandler        as _ACRH
     from services.audit_acr_svc.verifier     import verify_bundle          as _verify_bundle

@@ -24,7 +24,6 @@ from __future__ import annotations
 from fastapi import FastAPI, APIRouter, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
 
 from services.stub_svc.sanctions     import screen
 from services.stub_svc.fx_lock       import acquire as fx_acquire, validate as fx_validate

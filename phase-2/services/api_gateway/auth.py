@@ -38,7 +38,7 @@ def get_claims(
     if str(claims.tenant_id) != str(x_tenant_id):
         raise HTTPException(
             status_code=403,
-            detail=f"X-Tenant-ID does not match token tenant."
+            detail="X-Tenant-ID does not match token tenant."
         )
 
     try:

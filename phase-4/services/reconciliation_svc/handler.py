@@ -15,14 +15,12 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
 
 import psycopg2
 import psycopg2.extras
 import shared.db as _db
 
 import paths  # noqa: F401
-import shared.db as _db
 
 from services.reconciliation_svc.models import ReconciliationResult
 

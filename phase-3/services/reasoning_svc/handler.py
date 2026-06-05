@@ -25,15 +25,13 @@ import hashlib, json, uuid
 from datetime import datetime, timezone
 
 import paths  # noqa: F401
-import psycopg2
-import psycopg2.extras
 import shared.db  # noqa: F401 — registers UUID adapter
 
 from shared.signer import sign
 from zoiko_common.crypto.jcs import canonicalize
 
 from services.reasoning_svc import tools as agent_tools
-from services.reasoning_svc.models import FindingResult, ReasoningTrace
+from services.reasoning_svc.models import FindingResult
 
 # ── SC-001 deterministic rule weights (must never change) ────────────────────
 _RULES = {
@@ -226,7 +224,6 @@ class ReasoningHandler:
         now       = datetime.now(timezone.utc)
 
         # ── T-006: bundle must be sealed (COMPLETE) before reasoning runs ───
-        import psycopg2
         import psycopg2.extras
         _conn = psycopg2.connect(self.db_url)
         try:

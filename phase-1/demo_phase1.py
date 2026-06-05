@@ -48,7 +48,7 @@ CASE_ID     = "case-sc001-dallas-atl"
 print(f"\n{BOLD}{'='*60}")
 print("  Zoiko AI Logistics — Phase 1 Live Demo")
 print("  SC-001: DHL bills $220, contract allows $120")
-print(f"  Overcharge: $100 accessorial (unauthorized)")
+print("  Overcharge: $100 accessorial (unauthorized)")
 print(f"{'='*60}{RESET}")
 
 
@@ -284,7 +284,7 @@ try:
     real_opa.evaluate("zoiko/freight_dispute", {"action": "EXECUTE_RECOVERY"})
     fail("OPA unreachable but request was allowed! — CRITICAL BUG")
 except OPAUnavailableError as e:
-    ok(f"OPA unreachable → raises OPAUnavailableError → service returns 503")
+    ok("OPA unreachable → raises OPAUnavailableError → service returns 503")
     info(f"Message: {str(e)[:70]}...")
 
 

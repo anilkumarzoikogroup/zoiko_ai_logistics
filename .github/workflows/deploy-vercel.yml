@@ -1,7 +1,11 @@
-name: Deploy Vercel (main only)
+name: Deploy Frontend → Vercel
 
+# Only fires after "Zoiko CI" completes successfully on main.
+# This is the CI gate — deploy never runs if any CI job fails.
 on:
-  push:
+  workflow_run:
+    workflows: ["Zoiko CI"]
+    types: [completed]
     branches: [main]
 
 env:
@@ -10,33 +14,44 @@ env:
 
 jobs:
   deploy:
-    name: Deploy frontend to Vercel production
+    name: Deploy to Vercel (production)
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
     defaults:
       run:
         working-directory: zoiko-frontend/frontend
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
           cache: npm
           cache-dependency-path: zoiko-frontend/frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Build (production)
         run: npm run build
         env:
           VITE_USE_MOCK: "false"
-          VITE_API_BASE: /api
+          VITE_API_BASE: https://zoiko-ai-logistics.onrender.com
 
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
 
-      - name: Deploy to Vercel (production)
+      - name: Deploy to Vercel
         run: vercel --prod --token=${{ secrets.VERCEL_TOKEN }} --yes
+
+      # Give Vercel ~30s to propagate then do a basic health check
+      - name: Smoke test — Vercel URL
+        run: |
+          sleep 30
+          curl -f --retry 5 --retry-delay 10 --retry-connrefused \
+            https://zoiko-ai-logistics.vercel.app/ \
+            -o /dev/null -w "HTTP %{http_code}\n"
+        continue-on-error: true   # alert but don't fail the workflow

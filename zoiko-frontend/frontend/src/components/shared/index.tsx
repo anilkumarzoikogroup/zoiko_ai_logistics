@@ -17,7 +17,7 @@ export function StateBadge({ state }: { state: CaseState }) {
     CLOSED:            { label: "Closed",             variant: "secondary"   },
     ABORTED:           { label: "Aborted",            variant: "destructive" },
   };
-  const { label, variant } = map[state];
+  const { label, variant } = map[state]; 
   return <Badge variant={variant}>{label}</Badge>;      
 }
 
