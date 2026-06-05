@@ -156,6 +156,7 @@ export default function CaseDetail() {
     try {
       const { data } = await api.post(`/cases/${id}/dispute-letter`);
       setDisputeLetter(data.dispute_letter || "");
+      if (data.carrier_email) setSendEmail(data.carrier_email);
       toast.success("Letter generated", `Dispute letter for ${data.carrier} ready`);
     } catch {
       toast.error("Generation failed", "Set GROQ_API_KEY in .env to enable AI dispute letters");
@@ -714,7 +715,7 @@ export default function CaseDetail() {
                     </button>
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    📌 <strong>Sandbox mode ON</strong> — email is validated but not actually delivered. Set <code>SENDGRID_SANDBOX=false</code> in .env to send for real.
+                    💡 The letter is logged to console in dev mode. To send real emails, set <code>EMAIL_PROVIDER=sendgrid</code> and <code>SENDGRID_API_KEY</code> in .env.
                   </p>
                   {sendResult && (
                     <div className={`rounded-lg p-3 text-xs font-semibold ${sendResult.sandbox ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
