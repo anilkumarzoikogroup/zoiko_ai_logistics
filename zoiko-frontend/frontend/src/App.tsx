@@ -5,6 +5,7 @@ import { useAppSelector } from "@/store";
 
 // auth
 import Login from "./auth/Login";
+import ForgotPassword from "./auth/ForgotPassword";
 
 // features/dashboard
 import Home        from "./features/dashboard/Home";
@@ -65,6 +66,7 @@ export default function App() {
     <Toaster />
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         {/* Dashboard */}
         <Route path="/"                  element={<Home />} />

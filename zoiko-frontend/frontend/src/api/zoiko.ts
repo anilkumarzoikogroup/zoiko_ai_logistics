@@ -348,11 +348,11 @@ export const zoikoApi = {
     const { data } = await api.get<CarrierItem[]>("/carriers");
     return data;
   },
-  async createCarrier(payload: { name: string; email?: string; address?: string; contact_person?: string; contact_phone?: string }): Promise<{ id: string; name: string }> {
+  async createCarrier(payload: { name: string; email?: string; address?: string; contact_person?: string; contact_phone?: string; cc_emails?: string }): Promise<{ id: string; name: string }> {
     const { data } = await api.post("/carriers", payload);
     return data;
   },
-  async updateCarrier(id: string, payload: { name?: string; email?: string; address?: string; contact_person?: string; contact_phone?: string }): Promise<void> {
+  async updateCarrier(id: string, payload: { name?: string; email?: string; address?: string; contact_person?: string; contact_phone?: string; cc_emails?: string }): Promise<void> {
     await api.put(`/carriers/${id}`, payload);
   },
   async deleteCarrier(id: string): Promise<void> {
@@ -386,6 +386,7 @@ export interface CarrierItem {
   address:        string;
   contact_person: string;
   contact_phone:  string;
+  cc_emails:      string;
   created_at:     string;
 }
 

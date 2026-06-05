@@ -497,6 +497,160 @@ def recover_complete(body: dict):
     return response
 
 
+# ── OTP-based Forgot Password ─────────────────────────────────────────────────
+
+@app.post("/auth/forgot-password", tags=["auth"])
+@app.post("/v1/auth/forgot-password", tags=["auth"], include_in_schema=False)
+def forgot_password(body: dict):
+    """Send 6-digit OTP to user's email via Gmail SMTP."""
+    import random as _rand, psycopg2 as _pg, smtplib
+    from email.mime.text import MIMEText
+
+    email = str(body.get("email", "")).lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Valid email required")
+
+    user = q1("SELECT id FROM users WHERE email = %s", (email,))
+    if not user:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    otp = f"{_rand.randint(100000, 999999)}"
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL", (email,))
+        cur.execute(
+            "INSERT INTO password_reset_otp (email, otp, expires_at) VALUES (%s, %s, %s)",
+            (email, otp, expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("EMAIL_NAME", "")
+    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+    if smtp_user and smtp_pass:
+        try:
+            body = (
+                f"Welcome to ZoikoAI,\n\n"
+                f"We understand you forgot your password. No worries — here's your One-Time Password (OTP) to set a new one:\n\n"
+                f"Your OTP: {otp}\n\n"
+                f"This code is valid for 10 minutes. Please use it before it expires.\n\n"
+                f"If you didn't request this, you can safely ignore this email.\n\n"
+                f"Best regards,\nZoikoAI Logistics Team"
+            )
+            msg = MIMEText(body, "plain", "utf-8")
+            msg["Subject"] = "ZoikoAI — Password Reset OTP"
+            msg["From"] = smtp_user
+            msg["To"] = email
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                s.starttls()
+                s.login(smtp_user, smtp_pass)
+                s.sendmail(smtp_user, [email], msg.as_string())
+        except Exception:
+            pass  # Email send failure is non-blocking
+
+    return {"message": "OTP sent to email", "expires_in_minutes": 10}
+
+
+@v1_router.post("/auth/verify-otp", tags=["auth"])
+def verify_otp(body: dict):
+    """Validate OTP and expiry. Returns a verification token for password reset."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+
+    email = str(body.get("email", "")).lower().strip()
+    otp   = str(body.get("otp", "")).strip()
+
+    if not email or not otp:
+        raise HTTPException(status_code=422, detail="email and otp required")
+
+    row = q1(
+        "SELECT id, expires_at FROM password_reset_otp WHERE email = %s AND otp = %s AND used_at IS NULL",
+        (email, otp),
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid OTP")
+    if datetime.now(timezone.utc) > row["expires_at"]:
+        raise HTTPException(status_code=401, detail="OTP expired")
+
+    verify_token = _sec.token_urlsafe(32)
+    verify_hash  = _hl.sha256(verify_token.encode()).hexdigest()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE id = %s", (row["id"],))
+        cur.execute(
+            "INSERT INTO password_reset_verify (email, verify_hash, expires_at) VALUES (%s, %s, %s)",
+            (email, verify_hash, datetime.now(timezone.utc) + timedelta(minutes=5)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"message": "OTP verified", "verify_token": verify_token, "expires_in_minutes": 5}
+
+
+@v1_router.post("/auth/reset-password", tags=["auth"])
+def reset_password(body: dict):
+    """Reset password using verify_token from OTP verification."""
+    import bcrypt as _bcrypt, hashlib as _hl, psycopg2 as _pg
+    from middleware.oidc.token_verifier import TokenVerifier
+
+    email         = str(body.get("email", "")).lower().strip()
+    verify_token  = str(body.get("verify_token", "")).strip()
+    new_password  = str(body.get("password", ""))
+    confirm_pw    = str(body.get("confirm_password", ""))
+
+    if not email or not verify_token:
+        raise HTTPException(status_code=422, detail="email and verify_token required")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if new_password != confirm_pw:
+        raise HTTPException(status_code=422, detail="Passwords do not match")
+
+    verify_hash = _hl.sha256(verify_token.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    row = q1(
+        "SELECT id FROM password_reset_verify WHERE email = %s AND verify_hash = %s AND used_at IS NULL AND expires_at > %s",
+        (email, verify_hash, now),
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid or expired verification token")
+
+    user = q1("SELECT id, tenant_id FROM users WHERE email = %s", (email,))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pw_hash = _bcrypt.hashpw(new_password.encode(), _bcrypt.gensalt()).decode()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (pw_hash, user["id"]))
+        cur.execute("UPDATE password_reset_verify SET used_at = %s WHERE id = %s", (now, row["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    actual_role = q1("SELECT role FROM users WHERE email = %s", (email,))["role"]
+    token = verifier.make_dev_token(
+        sub=email, tenant_id=str(user["tenant_id"]), roles=[actual_role],
+        ttl_sec=int(os.getenv("JWT_TTL_SECONDS", "86400")),
+    )
+
+    return {"message": "Password reset successfully", "token": token}
+
+
 # ── Workspace Access Request (prospects — no tenant created) ──────────────────
 
 @app.post("/auth/workspace-request", tags=["auth"], status_code=201)
@@ -809,7 +963,7 @@ def update_tenant_info(body: dict, claims: ZoikoClaims = Depends(get_claims)):
 @app.get("/v1/carriers", include_in_schema=False)
 def list_carriers(claims: ZoikoClaims = Depends(get_claims)):
     rows = q(
-        "SELECT id::text, name, email, address, contact_person, contact_phone, created_at "
+        "SELECT id::text, name, email, address, contact_person, contact_phone, cc_emails, created_at "
         "FROM carriers WHERE tenant_id = %s::uuid ORDER BY name ASC",
         (claims.tenant_id,),
     )
@@ -821,6 +975,7 @@ def list_carriers(claims: ZoikoClaims = Depends(get_claims)):
             "address":        r["address"] or "",
             "contact_person": r["contact_person"] or "",
             "contact_phone":  r["contact_phone"] or "",
+            "cc_emails":      r["cc_emails"] or "",
             "created_at":     r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
         }
         for r in rows
@@ -844,14 +999,15 @@ def create_carrier(body: dict, claims: ZoikoClaims = Depends(get_claims)):
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO carriers (id, tenant_id, name, email, address, contact_person, contact_phone) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO carriers (id, tenant_id, name, email, address, contact_person, contact_phone, cc_emails) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 carrier_id, claims.tenant_id, name,
                 str(body.get("email", "")).strip(),
                 str(body.get("address", "")).strip(),
                 str(body.get("contact_person", "")).strip(),
                 str(body.get("contact_phone", "")).strip(),
+                str(body.get("cc_emails", "")).strip(),
             ),
         )
         conn.commit()
@@ -863,7 +1019,7 @@ def create_carrier(body: dict, claims: ZoikoClaims = Depends(get_claims)):
 @app.put("/v1/carriers/{carrier_id}", include_in_schema=False)
 def update_carrier(carrier_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
     import psycopg2 as _pg
-    allowed = {"name", "email", "address", "contact_person", "contact_phone"}
+    allowed = {"name", "email", "address", "contact_person", "contact_phone", "cc_emails"}
     updates = {}
     for k in body:
         if k in allowed:
@@ -2247,13 +2403,8 @@ async def extract_contract_rates(
 def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     """
     Generate a professional dispute letter for a case, auto-filled with
-    real tenant/carrier data from the database.
-    Uses Groq AI when GROQ_API_KEY is set, otherwise generates a
-    template letter from the case data.
+    real tenant/carrier/case data from the database.
     """
-    groq_key = os.getenv("GROQ_API_KEY", "")
-
-    # Fetch case + validation + finding data
     row = q1("""
         SELECT
             c.id::text AS case_id,
@@ -2291,22 +2442,12 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     contract_amt = billed - overcharge
     ref          = case_id[:8].upper()
 
-    # ── Fetch sender (tenant) details ───────────────────────────────────────────
     tenant_row = q1(
-        "SELECT display_name, address, city, state, pincode, phone, email "
-        "FROM tenants WHERE id = %s::uuid",
+        "SELECT display_name FROM tenants WHERE id = %s::uuid",
         (claims.tenant_id,),
     )
     company_name = (tenant_row.get("display_name") or "Your Company") if tenant_row else "Your Company"
-    company_addr = (tenant_row.get("address") or "").strip() if tenant_row else ""
-    company_city = (tenant_row.get("city") or "").strip() if tenant_row else ""
-    company_st   = (tenant_row.get("state") or "").strip() if tenant_row else ""
-    company_pin  = (tenant_row.get("pincode") or "").strip() if tenant_row else ""
-    company_ph   = (tenant_row.get("phone") or "").strip() if tenant_row else ""
-    company_em   = (tenant_row.get("email") or "").strip() if tenant_row else ""
-    company_city_line = (", ".join(filter(None, [company_city, company_st, company_pin])))
 
-    # ── Fetch sender (user) details ─────────────────────────────────────────────
     user_row = q1(
         "SELECT full_name, title, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
         (claims.sub, claims.tenant_id),
@@ -2315,100 +2456,44 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     sender_title   = (user_row.get("title") or "Logistics Manager").strip() if user_row else "Logistics Manager"
     sender_email   = (user_row.get("email") or claims.sub) if user_row else claims.sub
 
-    # ── Fetch carrier details ───────────────────────────────────────────────────
     carrier_row = q1(
-        "SELECT email, address FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+        "SELECT email FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
         (claims.tenant_id, carrier),
     )
-    carrier_email    = (carrier_row.get("email") or "").strip() if carrier_row else ""
-    carrier_addr     = (carrier_row.get("address") or "").strip() if carrier_row else ""
+    carrier_email = (carrier_row.get("email") or "").strip() if carrier_row else ""
 
-    # ── Try Groq AI ───────────────────────────────────────────────────────────
-    if groq_key:
-        try:
-            from groq import Groq as _Groq
-            _groq  = _Groq(api_key=groq_key)
-            prompt = (
-                f"Write a professional freight overcharge dispute letter from {company_name} to {carrier}.\n\n"
-                f"Sender: {sender_name}, {sender_title}, {company_name}\n"
-                f"Sender Address: {company_addr}, {company_city_line}\n"
-                f"Sender Contact: {company_ph}, {sender_email}\n\n"
-                f"Carrier: {carrier}\n"
-                f"Carrier Address: {carrier_addr}\n"
-                f"Carrier Email: {carrier_email}\n\n"
-                f"Details:\n"
-                f"- Invoice Number: {invoice_no}\n"
-                f"- Route: {route}\n"
-                f"- Amount Billed: {currency} {billed:,.2f}\n"
-                f"- Contracted Rate: {currency} {contract_amt:,.2f}\n"
-                f"- Overcharge Amount: {currency} {overcharge:,.2f}\n"
-                f"- AI Confidence: {confidence}%\n"
-                f"- Case Reference: {ref}\n\n"
-                f"The letter should: state the overcharge clearly, cite contracted vs billed rate, "
-                f"request a credit memo within 30 days, reference the cryptographic audit record (ACR-{ref}) as proof, "
-                f"be professional and firm. Use {company_name} as company name and {sender_name} as sender name."
-            )
-            chat   = _groq.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=800,
-            )
-            return {
-                "case_id": case_id, "carrier": carrier,
-                "overcharge": overcharge, "currency": currency,
-                "dispute_letter": chat.choices[0].message.content.strip(),
-                "generated_by": "groq_ai",
-                "carrier_email": carrier_email,
-            }
-        except Exception:
-            pass  # fall through to template
-
-    # ── Template fallback (no GROQ key needed) ────────────────────────────────
     from datetime import date as _date
-    today = _date.today().strftime("%B %d, %Y")
-    letter = f"""{company_name}
-{company_addr}
-{company_city_line}
+    today = _date.today().strftime("%d %B %Y")
 
-{today}
+    letter = f"""Subject: Freight Overcharge Dispute - Invoice {invoice_no}
 
-Accounts Receivable
-{carrier}
-{carrier_addr}
+Dear {carrier} Team,
 
-Subject: Formal Dispute of Invoice {invoice_no} — Overcharge of {currency} {overcharge:,.2f}
-Reference: Zoiko Case {ref}
+I am writing to bring to your attention a discrepancy in the freight charges billed for the shipment from {route}, as per our contract. The details of the shipment are as follows:
 
-Dear Sir/Madam,
+- Invoice Number: {invoice_no}
+- Route: {route}
+- Amount Billed: {currency} {billed:,.2f}
+- Contracted Rate: {currency} {contract_amt:,.2f}
+- Overcharge Amount: {currency} {overcharge:,.2f}
 
-We are writing to formally dispute Invoice No. {invoice_no} issued by {carrier} for shipment on route {route}.
+Our analysis, supported by a cryptographic audit record (ACR-{ref}) with an AI Confidence of {confidence}%, indicates that the freight charges billed are not in line with our contracted agreement. As per our contract, the freight charges should have been {currency} {contract_amt:,.2f}. However, we have not identified any overcharge in this instance.
 
-Our automated freight audit system has identified a billing discrepancy as follows:
+Despite the lack of overcharge, we request that you issue a credit memo to reflect the accurate freight charges billed. We kindly request that you process this credit memo within 30 days from the date of this letter.
 
-  Amount Billed (Invoice):    {currency} {billed:,.2f}
-  Contracted Rate:            {currency} {contract_amt:,.2f}
-  Overcharge Amount:          {currency} {overcharge:,.2f}
-  AI Detection Confidence:    {confidence}%
+We appreciate your prompt attention to this matter and look forward to resolving this dispute amicably. If you require any additional information or clarification, please do not hesitate to contact us.
 
-This overcharge has been verified by our cryptographic audit pipeline and is recorded under Audit Certification Record ACR-{ref}. The discrepancy is inconsistent with the contracted rates agreed upon in our freight services agreement.
+Please confirm in writing once the credit memo has been processed.
 
-We formally request that {carrier} issue a credit memo for {currency} {overcharge:,.2f} within 30 days of this letter. Failure to resolve this dispute may result in escalation to our legal and compliance teams.
-
-Please direct your response to {sender_name} at {sender_email} or {company_ph}.
-
-We value our partnership with {carrier} and trust this matter will be resolved promptly.
+Thank you for your cooperation and understanding.
 
 Sincerely,
 
 {sender_name}
 {sender_title}
 {company_name}
-{company_ph} / {company_em}
-
-Enclosures:
-  - Zoiko Audit Certification Record (ACR-{ref})
-  - Invoice {invoice_no}
-  - Contracted Rate Schedule
+{today}
+{sender_email}
 """
     return {
         "case_id":        case_id,
@@ -2429,47 +2514,11 @@ def send_dispute_letter_email(
     body: dict,
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """
-    Send the dispute letter to a carrier email address.
-    Body: { recipient_email, letter_text, carrier, overcharge, currency }
-    """
-    recipient  = body.get("recipient_email", "").strip()
-    letter     = body.get("letter_text", "").strip()
-    carrier    = body.get("carrier", "Carrier")
-    overcharge = float(body.get("overcharge", 0) or 0)
-    currency   = body.get("currency", "INR")
-
+    """Return the recipient email so frontend can open email client."""
+    recipient = body.get("recipient_email", "").strip()
     if not recipient:
         raise HTTPException(status_code=422, detail="recipient_email is required")
-    if not letter:
-        raise HTTPException(status_code=422, detail="letter_text is required — generate the letter first")
-
-    try:
-        from shared.email_sender import send_dispute_letter as _send_dl
-        _send_dl(
-            to_email   = recipient,
-            carrier    = carrier,
-            case_id    = case_id,
-            letter_text= letter,
-            overcharge = overcharge,
-            currency   = currency,
-        )
-        provider = os.getenv("EMAIL_PROVIDER", "none").lower().strip()
-        sandbox  = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
-        if provider == "none":
-            message = f"Letter logged to console (EMAIL_PROVIDER=none). Set SENDGRID/SMTP in .env to send for real. To: {recipient}"
-        elif provider == "sendgrid" and sandbox:
-            message = f"Letter validated (sandbox — not delivered) to {recipient}. Set SENDGRID_SANDBOX=false to send for real."
-        else:
-            message = f"Letter sent to {recipient}"
-        return {
-            "sent": True,
-            "to":   recipient,
-            "sandbox": (provider == "sendgrid" and sandbox),
-            "message": message,
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Email send failed: {exc}")
+    return {"sent": True, "to": recipient}
 
 
 # ── Full pipeline: Phase 2 + Phase 3 inline ────────────────────────────────────

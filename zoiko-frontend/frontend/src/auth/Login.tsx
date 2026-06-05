@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAppDispatch } from "@/store";
 import { login as loginAction } from "@/store/authSlice";
 import {
@@ -307,10 +307,10 @@ export default function Login() {
                         <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)} style={{width:"14px",height:"14px",accentColor:"#2563EB"}}/>
                         Remember me
                       </label>
-                      <button type="button" onClick={()=>{setRecEmail(email);setFlow("recovery");setError("");}}
-                              style={{background:"none",border:"none",color:"#2563EB",fontSize:"13px",fontWeight:700,cursor:"pointer",textDecoration:"none"}}>
+                      <Link to="/forgot-password"
+                            style={{color:"#2563EB",fontSize:"13px",fontWeight:700,cursor:"pointer",textDecoration:"none"}}>
                         Forgot password?
-                      </button>
+                      </Link>
                     </div>
 
                     {error && (

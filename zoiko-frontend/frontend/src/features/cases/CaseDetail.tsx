@@ -124,8 +124,6 @@ export default function CaseDetail() {
   const [disputeLetter, setDisputeLetter]   = useState<string>("");
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
-  const [sendLoading,   setSendLoading]     = useState(false);
-  const [sendResult,    setSendResult]      = useState<{sent:boolean;sandbox:boolean;message:string}|null>(null);
   const [showSendForm,  setShowSendForm]    = useState(false);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
@@ -160,7 +158,7 @@ export default function CaseDetail() {
   }
 
   async function handleGenerateLetter() {
-    setLetterLoading(true); setDisputeLetter(""); setSendResult(null); setShowSendForm(false);
+    setLetterLoading(true); setDisputeLetter(""); setShowSendForm(false);
     try {
       const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter`);
       setDisputeLetter(data.dispute_letter || "");
@@ -173,26 +171,15 @@ export default function CaseDetail() {
     }
   }
 
-  async function handleSendLetter() {
+  function handleSendLetter() {
     if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
-    setSendLoading(true); setSendResult(null);
-    try {
-      const theCase = cq.data;
-      const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter/send`, {
-        recipient_email: sendEmail.trim(),
-        letter_text:     disputeLetter,
-        carrier:         theCase?.carrier ?? "",
-        overcharge:      theCase?.diff ?? 0,
-        currency:        theCase?.currency ?? "INR",
-      });
-      setSendResult(data);
-      toast.success(data.sandbox ? "Sandbox — validated" : "Email sent!", data.message);
-    } catch (err: unknown) {
-      const e = err as {response?:{data?:{detail?:string}}};
-      toast.error("Send failed", e?.response?.data?.detail ?? "Check SENDGRID_API_KEY in .env");
-    } finally {
-      setSendLoading(false);
-    }
+    const lines = disputeLetter.split("\n");
+    const subjectLine = lines.find(l => l.startsWith("Subject:")) || "Freight Overcharge Dispute";
+    const subject = subjectLine.replace(/^Subject:\s*/i, "").trim();
+    const body = disputeLetter.replace(/^Subject:.*\n\n?/, "").trim();
+    const url = `mailto:${encodeURIComponent(sendEmail.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = url;
+    toast.success("Email client opened", `Draft ready for ${sendEmail.trim()}`);
   }
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -716,20 +703,15 @@ export default function CaseDetail() {
                     />
                     <button
                       onClick={handleSendLetter}
-                      disabled={sendLoading || !sendEmail.trim()}
+                      disabled={!sendEmail.trim()}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
                     >
-                      {sendLoading ? "Sending…" : "Send Email"}
+                      Open Email Client
                     </button>
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    💡 The letter is logged to console in dev mode. To send real emails, set <code>EMAIL_PROVIDER=sendgrid</code> and <code>SENDGRID_API_KEY</code> in .env.
+                    💡 Opens your default email app (Outlook, Gmail, etc.) with the letter pre-filled. Zoiko never stores or sends your emails.
                   </p>
-                  {sendResult && (
-                    <div className={`rounded-lg p-3 text-xs font-semibold ${sendResult.sandbox ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
-                      {sendResult.sandbox ? "🧪 Sandbox:" : "✅"} {sendResult.message}
-                    </div>
-                  )}
                 </div>
               )}
             </div>
