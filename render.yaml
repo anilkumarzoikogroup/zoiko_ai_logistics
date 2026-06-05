@@ -1,0 +1,74 @@
+services:
+  - type: web
+    name: zoiko-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+
+    envVars:
+      # ── Database (Neon cloud) ─────────────────────────────────────────────
+      - key: DB_URL
+        sync: false          # Set manually in Render dashboard — keep secret
+
+      # ── Auth ─────────────────────────────────────────────────────────────
+      - key: ZOIKO_DEV_MODE
+        value: "false"
+      - key: ZOIKO_DEV_SECRET
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: ZOIKO_ISSUER
+        value: https://auth.zoikotech.com
+      - key: JWT_TTL_SECONDS
+        value: "86400"
+
+      # ── Feature flags ─────────────────────────────────────────────────────
+      - key: ZOIKO_FF_SC_001_ENABLED
+        value: "*"
+
+      # ── CORS — add your Vercel URL here (comma-separated) ─────────────────
+      - key: ZOIKO_CORS_ORIGINS
+        value: https://zoiko-frontend.vercel.app,http://localhost:5173
+
+      # ── AI (Groq) ─────────────────────────────────────────────────────────
+      - key: GROQ_API_KEY
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+
+      # ── Admin seed (first-run only) ────────────────────────────────────────
+      - key: ZOIKO_COMPANY_NAME
+        value: Zoiko
+      - key: ZOIKO_ADMIN_EMAIL
+        sync: false          # Set manually in Render dashboard
+      - key: ZOIKO_ADMIN_PASSWORD
+        sync: false          # Set manually in Render dashboard
+      - key: ZOIKO_ADMIN_NAME
+        value: Platform Admin
+
+      # ── Governance ────────────────────────────────────────────────────────
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
+
+      # ── Rate limiting ──────────────────────────────────────────────────────
+      - key: ZOIKO_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_INGESTION
+        value: "100"
+      - key: RATE_LIMIT_GOVERNANCE
+        value: "20"
+      - key: RATE_LIMIT_EXECUTION
+        value: "10"
+
+      # ── Python / encoding ─────────────────────────────────────────────────
+      - key: PYTHONIOENCODING
+        value: utf-8
+
+      # ── Unused in production (leave blank) ────────────────────────────────
+      - key: OPA_URL
+        value: ""
+      - key: KAFKA_BOOTSTRAP
+        value: ""
+      - key: REDIS_URL
+        value: ""

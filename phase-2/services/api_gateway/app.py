@@ -3032,9 +3032,65 @@ def _run_evidence_and_reasoning(
                               payload={"case_id": case_id, "confidence": SC001}, tenant_id=tenant_id))
 
 
-# ── In-memory job store for async submit ─────────────────────────────────────
-# Maps job_id → {"status": "pending"|"done"|"error", "case": dict|None, "error": str|None}
+# ── Job store for async submit ────────────────────────────────────────────────
+# In-memory dict is the fast path; DB table is the durable fallback so jobs
+# survive uvicorn --reload restarts.
 _SUBMIT_JOBS: dict = {}
+
+def _ensure_jobs_table() -> None:
+    """Create submit_jobs table if it doesn't exist (no migration needed)."""
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(DB_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS submit_jobs (
+                job_id   TEXT PRIMARY KEY,
+                status   TEXT NOT NULL DEFAULT 'pending',
+                case_data JSONB,
+                error    TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.close(); conn.close()
+    except Exception as _e:
+        pass  # non-fatal — in-memory fallback still works
+
+def _persist_job(job_id: str, status: str, case_data, error) -> None:
+    try:
+        import psycopg2 as _pg, json as _json
+        conn = _pg.connect(DB_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO submit_jobs (job_id, status, case_data, error)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (job_id) DO UPDATE
+              SET status = EXCLUDED.status,
+                  case_data = EXCLUDED.case_data,
+                  error = EXCLUDED.error
+        """, (job_id, status, _json.dumps(case_data) if case_data else None, error))
+        cur.close(); conn.close()
+    except Exception:
+        pass  # non-fatal
+
+def _load_job_from_db(job_id: str):
+    try:
+        import psycopg2 as _pg, psycopg2.extras as _pge
+        conn = _pg.connect(DB_URL)
+        cur = conn.cursor(cursor_factory=_pge.RealDictCursor)
+        cur.execute("SELECT status, case_data, error FROM submit_jobs WHERE job_id=%s", (job_id,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if row:
+            return {"status": row["status"], "case": row["case_data"], "error": row["error"]}
+    except Exception:
+        pass
+    return None
+
+_ensure_jobs_table()
+
 
 @v1_router.post("/cases/submit-async", tags=["ui"], status_code=202)
 def ui_submit_case_async(
@@ -3050,6 +3106,7 @@ def ui_submit_case_async(
     import threading as _th, uuid as _u
     job_id = str(_u.uuid4())
     _SUBMIT_JOBS[job_id] = {"status": "pending", "case": None, "error": None}
+    _persist_job(job_id, "pending", None, None)
 
     # Capture values needed inside thread before they go out of scope
     _tenant  = str(claims.tenant_id)
@@ -3098,20 +3155,19 @@ def ui_submit_case_async(
             except Exception:
                 import traceback; traceback.print_exc()
             now_str = datetime.now(timezone.utc).isoformat()
-            _SUBMIT_JOBS[job_id] = {
-                "status": "done",
-                "case": {
+            _case_data = {
                     "id": str(case_r.case_id), "tenant_id": _tenant,
                     "state": "FINDING_GENERATED", "carrier": _body.carrier,
                     "shipment_ref": _body.route, "amount": float(_body.amount),
                     "currency": _body.currency, "diff": diff, "confidence": 0.96,
                     "opened_at": now_str, "updated_at": now_str,
-                },
-                "error": None,
-            }
+                }
+            _SUBMIT_JOBS[job_id] = {"status": "done", "case": _case_data, "error": None}
+            _persist_job(job_id, "done", _case_data, None)
         except Exception as exc:
             import traceback; traceback.print_exc()
             _SUBMIT_JOBS[job_id] = {"status": "error", "case": None, "error": str(exc)}
+            _persist_job(job_id, "error", None, str(exc))
 
     _th.Thread(target=_run, daemon=True, name=f"submit-{job_id[:8]}").start()
     return {"job_id": job_id, "status": "pending"}
@@ -3120,9 +3176,12 @@ def ui_submit_case_async(
 @v1_router.get("/cases/submit-status/{job_id}", tags=["ui"])
 def get_submit_status(job_id: str, claims: ZoikoClaims = Depends(get_claims)):
     """Poll this endpoint after submit-async until status='done'."""
-    job = _SUBMIT_JOBS.get(job_id)
+    job = _SUBMIT_JOBS.get(job_id) or _load_job_from_db(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or expired")
+    # Re-hydrate in-memory cache so subsequent polls are fast
+    if job_id not in _SUBMIT_JOBS:
+        _SUBMIT_JOBS[job_id] = job
     return job
 
 

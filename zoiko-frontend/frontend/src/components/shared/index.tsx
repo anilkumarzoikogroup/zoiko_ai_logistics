@@ -18,7 +18,7 @@ export function StateBadge({ state }: { state: CaseState }) {
     ABORTED:           { label: "Aborted",            variant: "destructive" },
   };
   const { label, variant } = map[state];
-  return <Badge variant={variant}>{label}</Badge>;
+  return <Badge variant={variant}>{label}</Badge>;      
 }
 
 export function HashDisplay({ value, label, full = false }: { value: string; label?: string; full?: boolean }) {

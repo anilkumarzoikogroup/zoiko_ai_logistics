@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { zoikoApi, type TenantItem } from "@/api/zoiko";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { zoikoApi, type TenantItem, type TenantCreateRequest } from "@/api/zoiko";
 import { Building2, Users, Loader2, RefreshCw } from "lucide-react";
 
 const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
@@ -8,11 +9,52 @@ const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
   OFFBOARDED:  { color: "#ef4444", bg: "rgba(239,68,68,0.12)"  },
 };
 
+const EMPTY: TenantCreateRequest = { display_name: "", slug: "", admin_email: "", admin_name: "", admin_password: "" };
+
+function slugify(val: string) {
+  return val.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 export default function TenantManagement() {
+  const qc = useQueryClient();
   const { data: tenants = [], isLoading, refetch } = useQuery({
     queryKey: ["tenants"],
     queryFn:  () => zoikoApi.listTenants(),
   });
+
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm]         = useState<TenantCreateRequest>(EMPTY);
+  const [showPw, setShowPw]     = useState(false);
+  const [success, setSuccess]   = useState("");
+  const [error, setError]       = useState("");
+
+  const mutation = useMutation({
+    mutationFn: (req: TenantCreateRequest) => zoikoApi.createTenant(req),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["tenants"] });
+      setSuccess(`Tenant "${res.display_name}" created. Admin: ${res.admin_email}`);
+      setForm(EMPTY);
+      setShowForm(false);
+      setError("");
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(typeof msg === "string" ? msg : "Failed to create tenant.");
+    },
+  });
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(""); setSuccess("");
+    if (!form.display_name || !form.slug || !form.admin_email || !form.admin_name || !form.admin_password) {
+      setError("All fields are required."); return;
+    }
+    mutation.mutate(form);
+  }
+
+  function handleNameChange(val: string) {
+    setForm(f => ({ ...f, display_name: val, slug: slugify(val) }));
+  }
 
   return (
     <div>
