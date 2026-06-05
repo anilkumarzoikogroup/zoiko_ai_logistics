@@ -6,7 +6,7 @@ import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { UploadCloud, FileText, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin } from "lucide-react";
+import { UploadCloud, FileText, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin, CheckCircle, ZoomIn, Building2, Calendar, Truck, Package, Hash, Mail, Layers, DollarSign } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { USE_MOCK, api } from "@/api/client";
 import axios from "axios";
@@ -124,8 +124,9 @@ export default function NewCase() {
   const [parsedBy,  setParsedBy]    = useState<string>("");
   const [routeType, setRouteType]   = useState<"national" | "international" | "unknown" | "">("");
   const [dragOver, setDragOver]     = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(true);
+  const [previewUrl, setPreviewUrl]         = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen]       = useState(true);
+  const [previewModal, setPreviewModal]     = useState(false);  // professional preview popup
   const inputRef = useRef<HTMLInputElement>(null);
   // Guard against double-submission: locked after first mutate() call, released on error
   const submitting = useRef(false);
@@ -227,6 +228,8 @@ export default function NewCase() {
       setRouteType(parsed.route_type || "unknown");
       const gotData = parsed.carrier || parsed.amount > 0 || from_city;
       setParseState(gotData ? "done" : "error");
+      // Auto-open professional preview modal when extraction succeeds
+      if (gotData) setPreviewModal(true);
     } catch (err) {
       // Pre-fill carrier from filename so the user doesn't start from scratch
       if (carrierFromName) {
@@ -540,7 +543,270 @@ export default function NewCase() {
     </div>
   );
 
+  // ── Professional Invoice Preview Modal ────────────────────────────────────
+  const InvoicePreviewModal = previewModal && previewUrl ? (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ backgroundColor: "rgba(0,0,0,0.75)", backdropFilter: "blur(4px)" }}
+      onClick={e => { if (e.target === e.currentTarget) setPreviewModal(false); }}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden w-full"
+        style={{ maxWidth: "1000px", maxHeight: "92vh", animation: "modalIn 0.2s ease-out" }}
+      >
+        {/* Modal Header */}
+        <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-zoiko-navy to-zoiko-blue text-white flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-lg bg-white/15 flex items-center justify-center">
+              <FileText className="h-5 w-5 text-white" />
+            </div>
+            <div>
+              <p className="font-bold text-sm leading-tight truncate max-w-xs">{file?.name}</p>
+              <p className="text-xs text-white/70 mt-0.5">
+                {(file && (file.size / 1024).toFixed(1))} KB ·{" "}
+                <span className="font-medium text-white/90">
+                  {parsedBy === "groq_ai" ? "AI-extracted via Groq" : "Regex-extracted"}
+                </span>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <a
+              href={previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-8 w-8 rounded-lg bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors"
+              title="Open in new tab"
+            >
+              <Maximize2 className="h-4 w-4 text-white" />
+            </a>
+            <button
+              onClick={() => setPreviewModal(false)}
+              className="h-8 w-8 rounded-lg bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors"
+            >
+              <X className="h-4 w-4 text-white" />
+            </button>
+          </div>
+        </div>
+
+        {/* Modal Body — two columns */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
+
+          {/* LEFT — PDF / Image preview */}
+          <div className="flex-1 bg-slate-100 relative overflow-hidden" style={{ minWidth: 0 }}>
+            {file?.type === "application/pdf" ? (
+              <iframe
+                src={previewUrl}
+                title="Invoice PDF"
+                className="w-full h-full border-none"
+                style={{ minHeight: "500px" }}
+              />
+            ) : (
+              <div className="flex items-center justify-center h-full p-6 bg-slate-100">
+                <img
+                  src={previewUrl}
+                  alt="Invoice preview"
+                  className="max-h-full max-w-full object-contain rounded-xl shadow-lg ring-1 ring-black/10"
+                />
+              </div>
+            )}
+            {/* PDF type badge */}
+            <div className="absolute top-3 left-3">
+              <span className="text-[10px] font-bold bg-zoiko-blue text-white px-2 py-1 rounded-md uppercase tracking-wide shadow">
+                {file?.type === "application/pdf" ? "PDF" : "Image"}
+              </span>
+            </div>
+          </div>
+
+          {/* RIGHT — Extracted Data Panel */}
+          <div className="w-80 flex-shrink-0 flex flex-col bg-white border-l overflow-y-auto">
+            {/* Panel Header */}
+            <div className="px-5 py-4 border-b bg-gradient-to-b from-slate-50 to-white">
+              <div className="flex items-center gap-2 mb-1">
+                <CheckCircle className="h-4 w-4 text-green-500" />
+                <span className="text-sm font-bold text-zoiko-navy">Extracted Data</span>
+              </div>
+              <p className="text-xs text-muted-foreground">Review the fields before submitting</p>
+            </div>
+
+            {/* Extracted Fields */}
+            <div className="flex-1 px-5 py-4 space-y-3">
+
+              {/* Invoice Number */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 rounded-lg bg-blue-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Hash className="h-4 w-4 text-blue-600" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Invoice Number</p>
+                  <p className="text-sm font-semibold text-foreground truncate">{form.invoice_number || <span className="text-muted-foreground italic font-normal">Not found</span>}</p>
+                </div>
+              </div>
+
+              {/* Invoice Date */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 rounded-lg bg-indigo-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Calendar className="h-4 w-4 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Invoice Date</p>
+                  <p className="text-sm font-semibold text-foreground">{form.invoice_date || <span className="text-muted-foreground italic font-normal">Not found</span>}</p>
+                </div>
+              </div>
+
+              {/* Carrier */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 rounded-lg bg-purple-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <Building2 className="h-4 w-4 text-purple-600" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Carrier</p>
+                  <p className="text-sm font-semibold text-foreground">{form.carrier || <span className="text-muted-foreground italic font-normal">Not found</span>}</p>
+                </div>
+              </div>
+
+              {/* Route */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <MapPin className="h-4 w-4 text-green-600" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Route</p>
+                  <p className="text-sm font-semibold text-foreground">
+                    {form.from_city && form.to_city
+                      ? `${form.from_city} → ${form.to_city}`
+                      : <span className="text-muted-foreground italic font-normal">Not found</span>}
+                  </p>
+                  {routeType && routeType !== "unknown" && (
+                    <span className={cn(
+                      "text-[9px] font-bold px-1.5 py-0.5 rounded mt-0.5 inline-block",
+                      routeType === "national" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"
+                    )}>
+                      {routeType === "national" ? "National" : "International"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Amount */}
+              <div className="flex items-start gap-3">
+                <div className="h-8 w-8 rounded-lg bg-amber-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <DollarSign className="h-4 w-4 text-amber-600" />
+                </div>
+                <div>
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Total Amount</p>
+                  <p className="text-sm font-bold text-foreground">
+                    {form.amount
+                      ? `${form.currency} ${Number(form.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`
+                      : <span className="text-muted-foreground italic font-normal">Not found</span>}
+                  </p>
+                </div>
+              </div>
+
+              {/* Transport Mode */}
+              {form.transport_mode && (
+                <div className="flex items-start gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-orange-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Truck className="h-4 w-4 text-orange-600" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Transport Mode</p>
+                    <p className="text-sm font-semibold text-foreground">{form.transport_mode}</p>
+                    {form.equipment_type && (
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{form.equipment_type}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Email */}
+              {form.email && (
+                <div className="flex items-start gap-3">
+                  <div className="h-8 w-8 rounded-lg bg-teal-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+                    <Mail className="h-4 w-4 text-teal-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Billing Email</p>
+                    <p className="text-sm text-foreground truncate">{form.email}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Charge Lines */}
+              {form.charge_lines.length > 0 && (
+                <div className="mt-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="h-8 w-8 rounded-lg bg-rose-50 flex items-center justify-center flex-shrink-0">
+                      <Layers className="h-4 w-4 text-rose-600" />
+                    </div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">
+                      Charge Breakdown ({form.charge_lines.length} items)
+                    </p>
+                  </div>
+                  <div className="rounded-xl border bg-slate-50 overflow-hidden">
+                    {form.charge_lines.map((cl, i) => (
+                      <div key={i} className={cn(
+                        "flex items-center justify-between px-3 py-2 text-xs",
+                        i > 0 && "border-t"
+                      )}>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={cn(
+                            "text-[9px] font-bold px-1.5 py-0.5 rounded flex-shrink-0",
+                            cl.type === "FUEL"        ? "bg-orange-100 text-orange-700" :
+                            cl.type === "ACCESSORIAL" ? "bg-purple-100 text-purple-700" :
+                            cl.type === "TAX"         ? "bg-blue-100   text-blue-700"   :
+                            cl.type === "BASE"        ? "bg-green-100  text-green-700"  :
+                            cl.type === "DISCOUNT"    ? "bg-red-100    text-red-700"    :
+                                                        "bg-slate-100  text-slate-600"
+                          )}>{cl.type}</span>
+                          <span className="text-muted-foreground truncate">{cl.description}</span>
+                        </div>
+                        <span className="font-semibold ml-2 flex-shrink-0 tabular-nums">
+                          {cl.amount.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Panel Footer — action buttons */}
+            <div className="px-5 py-4 border-t bg-slate-50 space-y-2 flex-shrink-0">
+              <Button
+                className="w-full gap-2 bg-zoiko-blue hover:bg-zoiko-blue/90"
+                onClick={() => setPreviewModal(false)}
+              >
+                <CheckCircle className="h-4 w-4" />
+                Confirm & Fill Form
+              </Button>
+              <button
+                type="button"
+                onClick={() => { setPreviewModal(false); clearFile(); }}
+                className="w-full text-xs text-muted-foreground hover:text-foreground py-1.5 transition-colors"
+              >
+                Re-upload a different file
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* CSS keyframe for modal open animation */}
+      <style>{`
+        @keyframes modalIn {
+          from { opacity: 0; transform: scale(0.96) translateY(8px); }
+          to   { opacity: 1; transform: scale(1) translateY(0); }
+        }
+      `}</style>
+    </div>
+  ) : null;
+
   return (
+    <>
+    {/* Professional Invoice Preview Modal — renders outside normal flow */}
+    {InvoicePreviewModal}
+
     <div className="max-w-lg mx-auto">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-zoiko-navy">Submit Invoice for Audit</h1>
@@ -655,59 +921,29 @@ export default function NewCase() {
             </button>
           </div>
 
-          {/* File preview */}
-          {previewUrl && (
-            <Card className="overflow-hidden border-zoiko-blue/20 shadow-sm">
-              <div
-                className="flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-zoiko-navy/5 to-zoiko-blue/5 border-b cursor-pointer select-none"
-                onClick={() => setPreviewOpen(v => !v)}
-              >
-                <div className="flex items-center gap-2">
+          {/* Preview trigger button — replaces the old inline card */}
+          {previewUrl && parseState === "done" && (
+            <button
+              type="button"
+              onClick={() => setPreviewModal(true)}
+              className="w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 border-zoiko-blue/30 bg-gradient-to-r from-zoiko-blue/5 to-purple-50 hover:from-zoiko-blue/10 hover:border-zoiko-blue/60 transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-lg bg-zoiko-blue/10 flex items-center justify-center group-hover:bg-zoiko-blue/20 transition-colors">
                   <Eye className="h-4 w-4 text-zoiko-blue" />
-                  <span className="text-sm font-semibold text-zoiko-navy">Invoice Preview</span>
-                  <span className="text-[10px] bg-zoiko-blue/10 text-zoiko-blue px-2 py-0.5 rounded-full font-medium uppercase tracking-wide">
-                    {file?.type === "application/pdf" ? "PDF" : "Image"}
-                  </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <a
-                    href={previewUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    className="text-muted-foreground hover:text-zoiko-blue transition-colors"
-                    title="Open in new tab"
-                  >
-                    <Maximize2 className="h-3.5 w-3.5" />
-                  </a>
-                  {previewOpen
-                    ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                    : <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  }
+                <div className="text-left">
+                  <p className="text-sm font-semibold text-zoiko-navy">View Invoice Preview</p>
+                  <p className="text-xs text-muted-foreground">See extracted data alongside the invoice</p>
                 </div>
               </div>
-
-              {previewOpen && (
-                <div className="bg-slate-50">
-                  {file?.type === "application/pdf" ? (
-                    <iframe
-                      src={previewUrl}
-                      title="Invoice PDF Preview"
-                      className="w-full rounded-b-lg"
-                      style={{ height: "480px", border: "none" }}
-                    />
-                  ) : (
-                    <div className="flex items-center justify-center p-4">
-                      <img
-                        src={previewUrl}
-                        alt="Invoice preview"
-                        className="max-h-96 max-w-full rounded-lg shadow-md object-contain ring-1 ring-black/5"
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-            </Card>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
+                  {parsedBy === "groq_ai" ? "AI Extracted" : "Regex"}
+                </span>
+                <ZoomIn className="h-4 w-4 text-zoiko-blue" />
+              </div>
+            </button>
           )}
 
           <Card>
@@ -736,5 +972,6 @@ export default function NewCase() {
         </Card>
       )}
     </div>
+    </>
   );
 }
