@@ -6,7 +6,7 @@ import psycopg2.extras
 import psycopg2.extensions
 import psycopg2.pool
 
-load_dotenv()
+load_dotenv(override=True)  # .env always wins over shell env vars
 
 psycopg2.extras.register_uuid()
 
@@ -18,20 +18,45 @@ _pool: psycopg2.pool.ThreadedConnectionPool | None = None
 _lock = threading.Lock()
 
 
+def _make_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    """Create pool with TCP keepalives so Neon never silently drops idle connections.
+
+    keepalives_idle / keepalives_interval / keepalives_count are Linux-only
+    socket options (TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT).  psycopg2 on
+    Windows ignores or rejects them, so we only pass them on non-Windows.
+    """
+    import sys as _sys
+    ka_opts: dict = {"keepalives": 1}
+    if _sys.platform != "win32":
+        ka_opts.update(keepalives_idle=60, keepalives_interval=10, keepalives_count=5)
+    return psycopg2.pool.ThreadedConnectionPool(POOL_MIN, POOL_MAX, DB_URL, **ka_opts)
+
+
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
     global _pool
     if _pool is None or _pool.closed:
         with _lock:
             if _pool is None or _pool.closed:
-                _pool = psycopg2.pool.ThreadedConnectionPool(POOL_MIN, POOL_MAX, DB_URL)
+                _pool = _make_pool()
     return _pool
+
+
+def _reset_pool() -> None:
+    """Force-recreate the connection pool (called when connections are found broken)."""
+    global _pool
+    with _lock:
+        if _pool and not _pool.closed:
+            try:
+                _pool.closeall()
+            except Exception:
+                pass
+        _pool = _make_pool()
 
 
 @contextmanager
 def get_conn(db_url: str = None):
-    """Context manager — checks out a connection and returns it to the pool on exit."""
+    """Checkout a connection from the pool; auto-heals if the connection is closed."""
     if db_url and db_url != DB_URL:
-        # Non-default URL: open a direct connection (migration scripts etc.)
         conn = psycopg2.connect(db_url)
         conn.autocommit = False
         try:
@@ -42,9 +67,28 @@ def get_conn(db_url: str = None):
 
     pool = _get_pool()
     conn = pool.getconn()
+
+    # If Neon silently closed this connection, discard it and get a fresh one.
+    # TCP keepalives (set in _make_pool) prevent this from happening in most
+    # cases, but we guard against it on the checkout path.
+    if conn.closed:
+        pool.putconn(conn, close=True)
+        try:
+            _reset_pool()
+        except Exception:
+            pass
+        pool = _get_pool()
+        conn = pool.getconn()
+
     conn.autocommit = False
     try:
         yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         pool.putconn(conn)
 

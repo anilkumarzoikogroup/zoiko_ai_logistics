@@ -92,7 +92,7 @@ export const zoikoApi = {
     return data;
   },
 
-  async createCase(payload: { carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
+  async createCase(payload: { invoice_number?: string; invoice_date?: string; transport_mode?: string; equipment_type?: string; shipper_reference?: string; charge_lines?: {description:string;amount:number;type:string}[]; carrier: string; route: string; amount: number; currency: string }): Promise<Case> {
     if (USE_MOCK) {
       await delay(500);
       const CONTRACT_BASE: Record<string, number> = {
@@ -119,8 +119,21 @@ export const zoikoApi = {
       mocks.mockCases.unshift(newCase);
       return newCase;
     }
-    const { data } = await api.post<Case>("/cases/submit", payload);
-    return data;
+    // Step 1: POST /cases/submit-async → returns job_id immediately (<1s).
+    // This replaces the old 25s blocking call that NAT/firewalls would drop.
+    const { data: job } = await api.post<{ job_id: string }>(
+      "/cases/submit-async", payload, { timeout: 10000 }
+    );
+    // Step 2: Poll every 2s until the pipeline finishes (max 90s).
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const { data: s } = await api.get<{ status: string; case: Case | null; error: string | null }>(
+        `/cases/submit-status/${job.job_id}`, { timeout: 8000 }
+      );
+      if (s.status === "done" && s.case) return s.case;
+      if (s.status === "error") throw new Error(s.error || "Pipeline failed");
+    }
+    throw new Error("Timed out waiting for case (90s)");
   },
 
   // ---------- Phase 2 artifacts ----------
@@ -314,6 +327,51 @@ export const zoikoApi = {
     return data;
   },
 
+  // ---------- Organization signup ----------
+  async orgSignup(payload: {
+    org_name: string;
+    admin_name: string;
+    admin_email: string;
+    admin_password: string;
+  }): Promise<LoginResponse> {
+    const { data } = await api.post<LoginResponse>("/auth/org-signup", payload);
+    return data;
+  },
+
+  // ---------- Profile ----------
+  async getProfile(): Promise<{ full_name: string; email: string; role: string; title: string; is_active: boolean; created_at: string }> {
+    const { data } = await api.get("/auth/me");
+    return data;
+  },
+  async updateProfile(payload: { title?: string; full_name?: string }): Promise<void> {
+    await api.put("/auth/me", payload);
+  },
+
+  // ---------- Tenant info ----------
+  async getTenant(): Promise<{ display_name: string; slug: string; address: string; city: string; state: string; pincode: string; phone: string; email: string; status: string }> {
+    const { data } = await api.get("/auth/tenant");
+    return data;
+  },
+  async updateTenant(payload: { address?: string; city?: string; state?: string; pincode?: string; phone?: string; email?: string }): Promise<void> {
+    await api.put("/auth/tenant", payload);
+  },
+
+  // ---------- Carriers ----------
+  async listCarriers(): Promise<CarrierItem[]> {
+    const { data } = await api.get<CarrierItem[]>("/carriers");
+    return data;
+  },
+  async createCarrier(payload: { name: string; email?: string; address?: string; contact_person?: string; contact_phone?: string }): Promise<{ id: string; name: string }> {
+    const { data } = await api.post("/carriers", payload);
+    return data;
+  },
+  async updateCarrier(id: string, payload: { name?: string; email?: string; address?: string; contact_person?: string; contact_phone?: string }): Promise<void> {
+    await api.put(`/carriers/${id}`, payload);
+  },
+  async deleteCarrier(id: string): Promise<void> {
+    await api.delete(`/carriers/${id}`);
+  },
+
   // ---------- Tenant management ----------
   async listTenants(): Promise<TenantItem[]> {
     if (USE_MOCK) { await delay(); return []; }
@@ -332,6 +390,17 @@ export const zoikoApi = {
     return data;
   },
 };
+
+// ── Carrier types ─────────────────────────────────────────────────────────────
+export interface CarrierItem {
+  id:             string;
+  name:           string;
+  email:          string;
+  address:        string;
+  contact_person: string;
+  contact_phone:  string;
+  created_at:     string;
+}
 
 // ── Tenant types ──────────────────────────────────────────────────────────────
 export interface TenantItem {

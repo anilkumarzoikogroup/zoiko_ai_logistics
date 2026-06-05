@@ -34,6 +34,11 @@ class CanonicalHandler:
         origin_city: str,
         dest_city: str,
         weight_lbs: float = 0.0,
+        # New fields — written to Neon DB columns added in migration
+        invoice_date:    str  = "",
+        transport_mode:  str  = "",
+        equipment_type:  str  = "",
+        charge_lines:    list = None,
     ) -> CanonicalResult:
         tenant_id        = str(tenant_id)
         source_record_id = uuid.UUID(str(source_record_id))
@@ -50,32 +55,32 @@ class CanonicalHandler:
         canonical_hash  = hashlib.sha256(DOMAIN_TAG + canonical_bytes).digest()
         signature, kid  = sign(self.tenant_slug, canonical_hash)
 
-        inv_id  = uuid.uuid4()
-        ship_id = uuid.uuid4()
-        now     = datetime.now(timezone.utc)
+        inv_id       = uuid.uuid4()
+        ship_id      = uuid.uuid4()
+        now          = datetime.now(timezone.utc)
+        charge_lines = charge_lines or []
 
         conn = psycopg2.connect(self.db_url)
         try:
             cur = conn.cursor()
 
-            # Fetch predecessor hash — the canonical_hash of the most recent
-            # existing row for this (tenant_id, invoice_number). NULL for first version.
+            # Fetch predecessor hash
             cur.execute("""
                 SELECT canonical_hash FROM canonical_invoices
                 WHERE  tenant_id = %s AND invoice_number = %s
-                ORDER  BY created_at DESC
-                LIMIT  1
+                ORDER  BY created_at DESC LIMIT 1
             """, (tenant_id, invoice_number))
             pred_row = cur.fetchone()
             predecessor_version_hash = bytes(pred_row[0]) if pred_row else None
 
-            # UNIQUE (tenant_id, invoice_number) — idempotent upsert
+            # INSERT with all new fields written to Neon DB
             cur.execute("""
                 INSERT INTO canonical_invoices
                     (id, tenant_id, source_record_id, invoice_number, carrier_id,
                      total_amount, currency, canonical_hash, signature, kid,
-                     predecessor_version_hash, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     predecessor_version_hash, created_at,
+                     invoice_date, transport_mode, charge_lines)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, invoice_number) DO NOTHING
                 RETURNING id
             """, (
@@ -83,22 +88,31 @@ class CanonicalHandler:
                 invoice_number, carrier_id, total_amount, currency,
                 canonical_hash, signature, kid,
                 predecessor_version_hash, now,
+                invoice_date, transport_mode,
+                json.dumps(charge_lines),
             ))
             row = cur.fetchone()
             if row is None:
-                # Row already existed — fetch the existing id
                 cur.execute(
                     "SELECT id FROM canonical_invoices WHERE tenant_id=%s AND invoice_number=%s",
                     (tenant_id, invoice_number),
                 )
                 inv_id = cur.fetchone()[0]
 
+            # INSERT shipment with mode + equipment_type
             cur.execute("""
                 INSERT INTO canonical_shipments
-                    (id, tenant_id, invoice_id, origin_city, dest_city, weight_lbs, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (id, tenant_id, invoice_id, origin_city, dest_city,
+                     weight_lbs, mode, equipment_type, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
-            """, (ship_id, tenant_id, inv_id, origin_city, dest_city, weight_lbs, now))
+            """, (
+                ship_id, tenant_id, inv_id, origin_city, dest_city,
+                weight_lbs,
+                transport_mode or "TRUCKLOAD",
+                equipment_type or "",
+                now,
+            ))
 
             conn.commit()
         finally:

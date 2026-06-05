@@ -6,7 +6,7 @@ import { cn } from "@/utils/cn";
 import {
   LayoutDashboard, FileText, FolderOpen,
   FileClock, Truck, ShieldCheck, BookOpen,
-  Key, Archive, ClipboardList, CreditCard,
+  Key, Archive, ClipboardList,
   BarChart3, TrendingUp,
   Users, Settings, Building2, Bell, Search,
   ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
@@ -32,7 +32,7 @@ const NAV: NavGroup[] = [
       { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"         },
       { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions"  },
       { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"      },
-      { label: "Carriers",         icon: Truck,           to: "/payment-control"   },
+      { label: "Carriers",         icon: Truck,           to: "/carriers"          },
     ],
   },
   {
@@ -58,8 +58,9 @@ const NAV: NavGroup[] = [
     group: "ADMIN",
     roles: ["admin"],
     items: [
-      { label: "Tenants",       icon: Building2,    to: "/tenants"  },
-      { label: "Users & Roles", icon: Users,        to: "/users"    },
+      { label: "Tenants",         icon: Building2,    to: "/tenants"             },
+      { label: "Signup Requests", icon: Users,        to: "/workspace-requests", badge: "NEW" },
+      { label: "Users & Roles",   icon: Users,        to: "/users"               },
       { label: "DB Stats",      icon: Building2,    to: "/database" },
       { label: "Settings",      icon: Settings,     to: "/settings" },
       { label: "Stub Viewer",   icon: FlaskConical, to: "/stubs", badge: "DEV" },

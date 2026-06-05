@@ -624,6 +624,90 @@ def accept_invite(body: dict):
     return {"token": token, "email": inv["email"], "role": inv["role"], "tenant_id": str(inv["tenant_id"]), "full_name": full_name}
 
 
+# ── Organization signup — public, no auth required ────────────────────────────
+
+@app.post("/auth/org-signup", tags=["auth"], status_code=201)
+@app.post("/v1/auth/org-signup", tags=["auth"], include_in_schema=False, status_code=201)
+def org_signup(body: dict):
+    """
+    Public endpoint: create a new tenant + admin user in one transaction.
+    On success returns JWT so the user can immediately access the dashboard.
+    Body: { org_name, admin_name, admin_email, admin_password }
+    """
+    import bcrypt as _bcrypt, psycopg2 as _pg
+
+    org_name     = str(body.get("org_name", "")).strip()
+    admin_name   = str(body.get("admin_name", "")).strip()
+    admin_email  = str(body.get("admin_email", "")).lower().strip()
+    admin_pw     = str(body.get("admin_password", ""))
+
+    for field, label in [
+        (org_name, "org_name"), (admin_name, "admin_name"),
+        (admin_email, "admin_email"), (admin_pw, "admin_password"),
+    ]:
+        if not field:
+            raise HTTPException(status_code=422, detail=f"'{label}' is required")
+    if len(admin_pw) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if "@" not in admin_email:
+        raise HTTPException(status_code=422, detail="Valid email required")
+
+    slug = org_name.lower().replace(" ", "-").replace("_", "-")
+
+    existing_tenant = q1("SELECT id FROM tenants WHERE slug = %s", (slug,))
+    if existing_tenant:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Organization '{org_name}' already registered. Please contact your admin or use sign in."
+        )
+    existing_user = q1("SELECT id FROM users WHERE email = %s", (admin_email,))
+    if existing_user:
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in instead.")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    now       = datetime.now(timezone.utc)
+    pw_hash   = _bcrypt.hashpw(admin_pw.encode(), _bcrypt.gensalt()).decode()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, admin_email, pw_hash, admin_name, "admin", now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Generate JWT
+    from middleware.oidc.token_verifier import TokenVerifier
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl     = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token   = verifier.make_dev_token(
+        sub=admin_email, tenant_id=str(tenant_id),
+        roles=["admin"], ttl_sec=ttl,
+    )
+
+    return {
+        "token":      token,
+        "tenant_id":  str(tenant_id),
+        "role":       "admin",
+        "full_name":  admin_name,
+        "email":      admin_email,
+        "expires_in": ttl,
+        "org_name":   org_name,
+    }
+
+
 # ── Sign out ──────────────────────────────────────────────────────────────────
 
 @app.post("/auth/signout", tags=["auth"], status_code=204)
@@ -631,6 +715,191 @@ def accept_invite(body: dict):
 def signout():
     """Client clears its JWT. Server-side: stateless JWT so nothing to revoke here."""
     return  # Client removes token from storage
+
+
+# ── Profile — user & tenant settings ──────────────────────────────────────────
+
+@app.get("/auth/me")
+@app.get("/v1/auth/me", include_in_schema=False)
+def get_profile(claims: ZoikoClaims = Depends(get_claims)):
+    row = q1(
+        "SELECT full_name, email, role, title, is_active, created_at FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        (claims.sub, claims.tenant_id),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "full_name":  row["full_name"],
+        "email":      row["email"],
+        "role":       row["role"],
+        "title":      row["title"] or "",
+        "is_active":  row["is_active"],
+        "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+    }
+
+@app.put("/auth/me")
+@app.put("/v1/auth/me", include_in_schema=False)
+def update_profile(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    title = str(body.get("title", "")).strip()
+    full_name = str(body.get("full_name", "")).strip()
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        parts = []
+        params = []
+        if title:
+            parts.append("title = %s")
+            params.append(title)
+        if full_name:
+            parts.append("full_name = %s")
+            params.append(full_name)
+        if parts:
+            params.extend([claims.sub, claims.tenant_id])
+            cur.execute(
+                f"UPDATE users SET {', '.join(parts)} WHERE email = %s AND tenant_id = %s::uuid",
+                params,
+            )
+            conn.commit()
+    finally:
+        conn.close()
+    return {"message": "Profile updated"}
+
+@app.get("/auth/tenant")
+@app.get("/v1/auth/tenant", include_in_schema=False)
+def get_tenant_info(claims: ZoikoClaims = Depends(get_claims)):
+    row = q1(
+        "SELECT display_name, slug, address, city, state, pincode, phone, email, status, created_at "
+        "FROM tenants WHERE id = %s::uuid",
+        (claims.tenant_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return row
+
+@app.put("/auth/tenant")
+@app.put("/v1/auth/tenant", include_in_schema=False)
+def update_tenant_info(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can update tenant info")
+    allowed = {"address", "city", "state", "pincode", "phone", "email"}
+    updates = {k: str(body[k]).strip() for k in body if k in allowed}
+    if not updates:
+        raise HTTPException(status_code=422, detail="No valid fields to update")
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        cur.execute(
+            f"UPDATE tenants SET {set_clause} WHERE id = %s::uuid",
+            list(updates.values()) + [claims.tenant_id],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"message": "Tenant info updated", "updated": list(updates.keys())}
+
+
+# ── Carriers CRUD ──────────────────────────────────────────────────────────────
+
+@app.get("/carriers")
+@app.get("/v1/carriers", include_in_schema=False)
+def list_carriers(claims: ZoikoClaims = Depends(get_claims)):
+    rows = q(
+        "SELECT id::text, name, email, address, contact_person, contact_phone, created_at "
+        "FROM carriers WHERE tenant_id = %s::uuid ORDER BY name ASC",
+        (claims.tenant_id,),
+    )
+    return [
+        {
+            "id":             str(r["id"]),
+            "name":           r["name"],
+            "email":          r["email"] or "",
+            "address":        r["address"] or "",
+            "contact_person": r["contact_person"] or "",
+            "contact_phone":  r["contact_phone"] or "",
+            "created_at":     r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
+        }
+        for r in rows
+    ]
+
+@app.post("/carriers")
+@app.post("/v1/carriers", include_in_schema=False, status_code=201)
+def create_carrier(body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg, uuid as _uuid
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Carrier name is required")
+    existing = q1(
+        "SELECT id FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+        (claims.tenant_id, name),
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Carrier '{name}' already exists")
+    carrier_id = _uuid.uuid4()
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO carriers (id, tenant_id, name, email, address, contact_person, contact_phone) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (
+                carrier_id, claims.tenant_id, name,
+                str(body.get("email", "")).strip(),
+                str(body.get("address", "")).strip(),
+                str(body.get("contact_person", "")).strip(),
+                str(body.get("contact_phone", "")).strip(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"id": str(carrier_id), "name": name, "message": "Carrier created"}
+
+@app.put("/carriers/{carrier_id}")
+@app.put("/v1/carriers/{carrier_id}", include_in_schema=False)
+def update_carrier(carrier_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    allowed = {"name", "email", "address", "contact_person", "contact_phone"}
+    updates = {}
+    for k in body:
+        if k in allowed:
+            updates[k] = str(body[k]).strip()
+    if not updates:
+        raise HTTPException(status_code=422, detail="No valid fields to update")
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        set_clause = ", ".join(f"{k} = %s" for k in updates)
+        cur.execute(
+            f"UPDATE carriers SET {set_clause} WHERE id = %s::uuid AND tenant_id = %s::uuid",
+            list(updates.values()) + [carrier_id, claims.tenant_id],
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Carrier not found")
+    finally:
+        conn.close()
+    return {"message": "Carrier updated", "updated": list(updates.keys())}
+
+@app.delete("/carriers/{carrier_id}")
+@app.delete("/v1/carriers/{carrier_id}", include_in_schema=False)
+def delete_carrier(carrier_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    import psycopg2 as _pg
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM carriers WHERE id = %s::uuid AND tenant_id = %s::uuid",
+            (carrier_id, claims.tenant_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Carrier not found")
+    finally:
+        conn.close()
+    return {"message": "Carrier deleted"}
 
 
 # ── Health — registered directly on app (not versioned) ──────────────────────
@@ -1548,160 +1817,596 @@ def admin_db_stats(claims: ZoikoClaims = Depends(get_claims)):
 
 # ── Invoice file parse ────────────────────────────────────────────────────────
 
+def _extract_first_json(text: str) -> dict:
+    """Extract the outermost JSON object from text, handling nested braces correctly.
+    The old regex r'\\{[^{}]*\\}' breaks when Groq wraps any value in a nested object;
+    this walk finds the matching closing brace instead.
+    """
+    start = text.find("{")
+    if start == -1:
+        return {}
+    depth = 0
+    for i, ch in enumerate(text[start:], start):
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : i + 1])
+                except (json.JSONDecodeError, ValueError):
+                    return {}
+    return {}
+
+
 @v1_router.post("/ingestion/parse-invoice", tags=["ui"])
 async def parse_invoice_file(
     file: UploadFile = File(...),
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """Parse a PDF invoice using Groq AI (fallback: regex)."""
-    import re as _re2
-    MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))  # 10 MB default
+    """Parse a PDF or image invoice using Groq AI (vision for images, text for PDFs). Fallback: regex.
+
+    File reading is async; the blocking pdfplumber + Groq work runs in the
+    thread-pool executor so the event loop stays free during AI extraction.
+    """
+    import re as _re2, base64 as _b64, io as _io
+    MAX_FILE_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     content = await file.read()
     if len(content) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_FILE_BYTES // 1024 // 1024} MB.")
-    text = ""
 
-    # ── Step 1: Extract text from PDF ────────────────────────────────────────
-    try:
-        import pdfplumber, io
-        with pdfplumber.open(io.BytesIO(content)) as pdf:
-            text = "\n".join(p.extract_text() or "" for p in pdf.pages)
-    except Exception:
-        text = content.decode("utf-8", errors="ignore")
+    # ── City / carrier reference tables ──────────────────────────────────────
+    INDIAN_CITIES_SET = {
+        "hyderabad", "warangal", "mumbai", "bombay", "delhi", "new delhi",
+        "bangalore", "bengaluru", "chennai", "madras", "kolkata", "calcutta",
+        "pune", "ahmedabad", "jaipur", "lucknow", "surat", "kochi", "cochin",
+        "nagpur", "vizag", "visakhapatnam", "gurgaon", "gurugram", "noida",
+        "chandigarh", "coimbatore", "indore", "bhopal", "patna", "vadodara",
+        "ludhiana", "agra", "nashik", "thane", "rajkot", "amritsar", "varanasi",
+        "bhubaneswar", "raipur", "dehradun", "guwahati", "srinagar", "jodhpur",
+        "mysore", "mangalore", "hubli", "tirupati", "madurai", "trivandrum",
+        "thiruvananthapuram",
+    }
+
+    # IATA → city name (airports commonly found on freight invoices)
+    IATA_MAP = {
+        "bom": "Mumbai", "del": "Delhi", "blr": "Bangalore", "maa": "Chennai",
+        "ccu": "Kolkata", "hyd": "Hyderabad", "pnq": "Pune", "amd": "Ahmedabad",
+        "cok": "Kochi", "jfk": "New York", "lax": "Los Angeles", "ord": "Chicago",
+        "lhr": "London", "cdg": "Paris", "fra": "Frankfurt", "ams": "Amsterdam",
+        "dxb": "Dubai", "auh": "Abu Dhabi", "sin": "Singapore", "hkg": "Hong Kong",
+        "icn": "Seoul", "nrt": "Tokyo", "pvg": "Shanghai", "pek": "Beijing",
+        "syd": "Sydney", "mel": "Melbourne", "jnb": "Johannesburg", "cai": "Cairo",
+        "bkk": "Bangkok", "kul": "Kuala Lumpur", "cgk": "Jakarta",
+    }
+
+    CITY_ALIASES = {
+        "bombay": "Mumbai", "new delhi": "Delhi", "bengaluru": "Bangalore",
+        "calcutta": "Kolkata", "madras": "Chennai", "visakhapatnam": "Vizag",
+        "cochin": "Kochi", "gurugram": "Gurgaon", "trivandrum": "Thiruvananthapuram",
+        "hongkong": "Hong Kong", "hong kong sar": "Hong Kong",
+        "uae": "Dubai", "united arab emirates": "Dubai",
+    }
+
+    def _normalize_city(raw: str) -> str:
+        """Strip country suffix, expand IATA codes, normalize aliases, title-case."""
+        # Strip country: "Mumbai, India" → "Mumbai"
+        city = _re2.split(r",\s*|\s+\(", raw)[0].strip()
+        city = _re2.sub(r"\s*\([^)]+\)", "", city).strip()
+        key = city.lower().strip()
+        if key in IATA_MAP:
+            return IATA_MAP[key]
+        if key in CITY_ALIASES:
+            return CITY_ALIASES[key]
+        # Match against known Indian cities (fuzzy prefix)
+        for c in INDIAN_CITIES_SET:
+            if c == key or key.startswith(c) or c.startswith(key):
+                return c.title()
+        return city.title()
+
+    def _is_indian(city: str) -> bool:
+        """Handles 'Mumbai', 'Mumbai, India', 'BOM', etc."""
+        norm = _normalize_city(city).lower()
+        return norm in INDIAN_CITIES_SET or norm in {v.lower() for v in IATA_MAP.values() if _is_in_india_iata(norm)}
+
+    def _is_in_india_iata(city_lower: str) -> bool:
+        indian_iata = {"bom","del","blr","maa","ccu","hyd","pnq","amd","cok"}
+        for code, name in IATA_MAP.items():
+            if code in indian_iata and name.lower() == city_lower:
+                return True
+        return False
 
     KNOWN_CARRIERS = [
-        "BlueDart", "Delhivery", "FedEx India", "DTDC",
-        "Ekart", "UPS India", "V Express", "Gati", "Other"
-    ]
-    KNOWN_CITIES = [
-        "Hyderabad", "Warangal", "Mumbai", "Delhi", "Bangalore",
-        "Chennai", "Kolkata", "Pune", "Ahmedabad", "Jaipur",
-        "Lucknow", "Surat", "Kochi", "Nagpur", "Vizag",
+        "BlueDart", "Delhivery", "FedEx India", "FedEx", "DTDC",
+        "Ekart", "UPS India", "UPS", "V Express", "Gati", "DHL",
+        "Aramex", "Maersk", "MSC", "CMA CGM", "Other"
     ]
 
-    carrier, amount, currency, route = "", 0.0, "INR", ""
+    # ── Detect file type ──────────────────────────────────────────────────────
+    fname = (file.filename or "").lower()
+    ctype = (file.content_type or "").lower()
+    is_image = ctype.startswith("image/") or fname.endswith((".png", ".jpg", ".jpeg", ".webp"))
 
-    # ── Step 2: Try Groq AI first ─────────────────────────────────────────────
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    ai_parsed = False
+    text = ""
+    image_b64 = ""
+    image_mime = ""
 
-    if groq_key and text.strip():
+    if is_image:
+        image_mime = ctype if ctype.startswith("image/") else (
+            "image/png" if fname.endswith(".png") else "image/jpeg"
+        )
+        image_b64 = _b64.b64encode(content).decode("utf-8")
+    else:
         try:
+            import pdfplumber
+            with pdfplumber.open(_io.BytesIO(content)) as pdf:
+                text = "\n".join(p.extract_text() or "" for p in pdf.pages)
+        except Exception:
+            text = content.decode("utf-8", errors="ignore")
+
+    carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
+    invoice_number   = ""
+    invoice_date     = ""
+    transport_mode   = ""
+    equipment_type   = ""
+    shipper_reference = ""
+    charge_lines: list = []
+    ai_parsed = False
+    groq_key  = os.getenv("GROQ_API_KEY", "")
+
+    # ── Pre-extract grand total from PDF text (before AI runs) ───────────────
+    # Regex against labelled final-amount fields is more reliable than AI for
+    # distinguishing grand total from subtotal.  We lock this in early so AI
+    # cannot override it with a subtotal value.
+    def _find_grand_total(t: str) -> float:
+        def _num(raw: str) -> float:
+            try:
+                v = float(raw.replace(",", ""))
+                return v if v >= 100 else 0.0
+            except ValueError:
+                return 0.0
+
+        # Tier 1 — definitive final-amount labels, cross-line with non-greedy match
+        pat1 = (
+            r"(?:grand\s+total|amount\s+due|balance\s+due|net\s+payable"
+            r"|total\s+payable|total\s+due|invoice\s+total"
+            r"|total\s+invoice\s+value|amount\s+payable|final\s+amount"
+            r"|total\s+charges|net\s+amount\s+payable)"
+            r"[\s\S]{0,80}?([\d,]+\.\d{2})"
+        )
+        hits = [v for v in (_num(m.group(1)) for m in _re2.finditer(pat1, t, _re2.IGNORECASE)) if v]
+        if hits:
+            return hits[-1]  # last = bottom of invoice = final total
+
+        # Tier 2 — bare "Total" / "Total Amount" not on a subtotal line
+        pat2 = r"(?:total\s+amount|net\s+total|total)[\s\S]{0,40}?([\d,]+\.\d{2})"
+        for m in _re2.finditer(pat2, t, _re2.IGNORECASE):
+            seg = t[max(0, m.start() - 10): m.start() + 25].lower()
+            if "sub" not in seg:
+                v = _num(m.group(1))
+                if v:
+                    return v
+        return 0.0
+
+    pdf_amount = _find_grand_total(text) if text else 0.0
+
+    # ── Groq AI extraction ───────────────────────────────────────────────────
+    if groq_key and (image_b64 or text.strip()):
+        try:
+            import asyncio as _asyncio
             from groq import Groq as _Groq
             _groq = _Groq(api_key=groq_key)
-            prompt = (
-                f"You are an invoice parser. Extract fields from this freight carrier invoice text.\n\n"
-                f"INVOICE TEXT:\n{text[:3000]}\n\n"
-                f"Return ONLY valid JSON with these fields:\n"
-                f"- carrier: one of {KNOWN_CARRIERS} or 'Other'\n"
-                f"- total_amount: the final invoice total as a number (no commas)\n"
-                f"- currency: INR, USD, EUR, or GBP\n"
-                f"- origin: origin city name\n"
-                f"- destination: destination city name\n\n"
-                f"If a field cannot be determined, use empty string or 0.\n"
-                f"Respond with ONLY the JSON object, no explanation."
-            )
-            chat = _groq.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=200,
-            )
-            raw = chat.choices[0].message.content.strip()
-            # Extract JSON from response
-            json_match = _re2.search(r'\{.*?\}', raw, _re2.DOTALL)  # non-greedy: first JSON object only
-            if json_match:
-                try:
-                    parsed = json.loads(json_match.group())
-                except json.JSONDecodeError:
-                    parsed = {}
-                carrier  = str(parsed.get("carrier", "")).strip()
-                amount   = float(parsed.get("total_amount", 0) or 0)
-                currency = str(parsed.get("currency", "INR")).strip().upper() or "INR"
-                origin   = str(parsed.get("origin", "")).strip()
-                dest     = str(parsed.get("destination", "")).strip()
-                if origin and dest and origin != dest:
-                    route = f"{origin}-{dest}"
-                # Validate carrier against known list
-                if carrier not in KNOWN_CARRIERS:
-                    carrier = "Other" if carrier else ""
-                ai_parsed = True
-        except Exception as _ai_err:
-            ai_parsed = False  # fall through to regex
 
-    # ── Step 3: Regex fallback if AI not available or failed ─────────────────
-    if not ai_parsed:
+            extraction_prompt = (
+                "You are an expert freight/logistics invoice parser. "
+                "Carefully read the invoice and extract exactly these fields.\n\n"
+                "Return ONLY a single valid JSON object — no markdown, no explanation:\n"
+                "{\n"
+                '  "invoice_number": "<the invoice/bill/reference number printed on the document — e.g. INV-2025-001, DHL-90881, BL-12345; empty string if not found>",\n'
+                '  "invoice_date": "<invoice/bill date in YYYY-MM-DD format — e.g. 2025-06-01; empty string if not found>",\n'
+                '  "carrier": "<logistics company name, e.g. BlueDart, DHL, FedEx, Maersk, UPS, Aramex — use exact name from invoice>",\n'
+                '  "charge_lines": [<array of charge line objects — see charge_lines rules below>],\n'
+                '  "total_amount": <see amount rules below>,\n'
+                '  "currency": "<3-letter ISO code from invoice: INR, USD, EUR, GBP, AED, SGD, AUD, etc.>",\n'
+                '  "origin": "<shipment ORIGIN city only — no country suffix, e.g. Mumbai, Dubai, New York, Singapore>",\n'
+                '  "destination": "<shipment DESTINATION city only — no country suffix, e.g. Delhi, London, Chicago>",\n'
+                '  "route_type": "<national if both cities are within India, international if any city is outside India>",\n'
+                '  "transport_mode": "<exact one of: TRUCKLOAD | AIR | SEA | RAIL | COURIER — match from invoice service description; COURIER if overnight/express/docket; empty string if unclear>",\n'
+                '  "equipment_type": "<physical asset type — e.g. 53FT_DRY_VAN, 40FT_CONTAINER, 20FT_CONTAINER, FLATBED, TANKER, PARCEL_VAN; empty string if not mentioned>",\n'
+                '  "shipper_reference": "<shipper/consignor reference, PO number, or AWB/BL number — NOT the invoice number; e.g. PO-2025-456, AWB-12345; empty string if not found>",\n'
+                '  "email": "<any email address visible on the invoice — billing, contact, support or sender email; empty string if none>"\n'
+                "}\n\n"
+                "AMOUNT RULES — follow this priority strictly:\n"
+                "  Priority 1 (highest): Grand Total, Grand Total Amount\n"
+                "  Priority 2: Amount Due, Balance Due, Payment Due, Total Due\n"
+                "  Priority 3: Net Payable, Total Payable, Amount Payable\n"
+                "  Priority 4: Invoice Total, Total Invoice Value, Total Charges\n"
+                "  Priority 5: Total Amount — ONLY when NO subtotal or sub-total line exists anywhere\n\n"
+                "  CRITICAL EXAMPLE — for this invoice structure:\n"
+                "    Subtotal (before tax)   12,119.00\n"
+                "    IGST 18%                 2,197.62\n"
+                "    TOTAL PAYABLE           14,316.62   ← YOU MUST RETURN THIS\n"
+                "  Return 14316.62, NOT 12119.00. The subtotal is NEVER the answer.\n\n"
+                "  FORBIDDEN — NEVER return these values:\n"
+                "  Subtotal, Sub-total, Sub Total, Basic Freight, Assessable Value,\n"
+                "  Taxable Value, Net Amount (before tax), any per-line-item amounts,\n"
+                "  unit prices, or any figure that appears BEFORE a tax/surcharge row.\n\n"
+                "  The answer is always the LAST and LARGEST summary figure — the amount\n"
+                "  the customer actually pays after ALL taxes, surcharges, and fees.\n"
+                "  Return as a plain decimal number only, no symbols or commas, e.g. 14316.62\n\n"
+                "LOCATION RULES:\n"
+                "  1. origin/destination = FROM/TO shipment cities, NOT company/billing address.\n"
+                "  2. Expand IATA codes: BOM→Mumbai, DEL→Delhi, JFK→New York, DXB→Dubai, LHR→London.\n"
+                "  3. City name only — no state, country, or ZIP.\n"
+                "  4. If not found, return empty string.\n\n"
+                "CHARGE LINES RULES:\n"
+                "  Extract EVERY individual line item from the invoice into charge_lines array.\n"
+                "  Each element must be: {\"description\": \"<line label>\", \"amount\": <number>, \"type\": \"<type>\"}\n"
+                "  type must be exactly one of: BASE | FUEL | ACCESSORIAL | TAX | DISCOUNT | OTHER\n"
+                "  Rules for type classification:\n"
+                "    BASE        — Basic freight, base rate, freight charge, standard charge\n"
+                "    FUEL        — Fuel surcharge, FSC, fuel levy, energy surcharge\n"
+                "    ACCESSORIAL — Handling, accessorial, pickup, delivery, detention, demurrage, insurance, COD\n"
+                "    TAX         — GST, IGST, CGST, SGST, VAT, tax, cess\n"
+                "    DISCOUNT    — Discount, rebate, credit\n"
+                "    OTHER       — Anything that does not fit above categories\n"
+                "  IMPORTANT: do NOT include the grand total / total payable as a charge line.\n"
+                "  If no line items are visible, return an empty array []."
+            )
+
+            if image_b64:
+                # Try vision models in order of preference
+                vision_models = [
+                    os.getenv("GROQ_VISION_MODEL", ""),
+                    "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "llama-3.2-90b-vision-preview",
+                    "llama-3.2-11b-vision-preview",
+                ]
+                vision_models = [m for m in vision_models if m]  # drop empty
+                chat = None
+                for vm in vision_models:
+                    try:
+                        chat = _groq.chat.completions.create(
+                            model=vm,
+                            messages=[{
+                                "role": "user",
+                                "content": [
+                                    {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{image_b64}"}},
+                                    {"type": "text", "text": extraction_prompt},
+                                ],
+                            }],
+                            temperature=0,
+                            max_tokens=900,
+                        )
+                        break
+                    except Exception:
+                        continue
+                if chat is None:
+                    raise RuntimeError("All vision models failed")
+            else:
+                text_model = os.getenv("GROQ_TEXT_MODEL", "llama-3.3-70b-versatile")
+                _msg = [{"role": "user", "content": f"INVOICE TEXT:\n{text[:4000]}\n\n{extraction_prompt}"}]
+                try:
+                    # Run synchronous Groq SDK in thread pool so event loop stays free
+                    chat = await _asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: _groq.chat.completions.create(
+                            model=text_model, messages=_msg, temperature=0, max_tokens=900,
+                        ),
+                    )
+                except Exception:
+                    chat = await _asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: _groq.chat.completions.create(
+                            model="llama-3.1-8b-instant", messages=_msg, temperature=0, max_tokens=900,
+                        ),
+                    )
+
+            raw = chat.choices[0].message.content.strip()
+            # Use the brace-counting extractor — the old r'\{[^{}]*\}' regex
+            # matched the first INNERMOST object, failing whenever Groq nested
+            # any value (e.g. "details": {"total": 123}) and returning {} instead.
+            parsed    = _extract_first_json(raw)
+            invoice_number    = str(parsed.get("invoice_number", "")).strip()
+            invoice_date      = str(parsed.get("invoice_date", "")).strip()
+            _valid_modes      = {"TRUCKLOAD","AIR","SEA","RAIL","COURIER"}
+            _raw_mode         = str(parsed.get("transport_mode", "")).strip().upper()
+            transport_mode    = _raw_mode if _raw_mode in _valid_modes else ""
+            equipment_type    = str(parsed.get("equipment_type", "")).strip().upper()
+            shipper_reference = str(parsed.get("shipper_reference", "")).strip()
+            carrier   = str(parsed.get("carrier", "")).strip()
+            # Parse and validate charge_lines array
+            _raw_lines = parsed.get("charge_lines", [])
+            if isinstance(_raw_lines, list):
+                _valid_types = {"BASE", "FUEL", "ACCESSORIAL", "TAX", "DISCOUNT", "OTHER"}
+                charge_lines = [
+                    {
+                        "description": str(cl.get("description", "")).strip(),
+                        "amount":      float(cl.get("amount", 0) or 0),
+                        "type":        cl.get("type", "OTHER").upper()
+                                       if cl.get("type", "OTHER").upper() in _valid_types
+                                       else "OTHER",
+                    }
+                    for cl in _raw_lines
+                    if isinstance(cl, dict) and float(cl.get("amount", 0) or 0) > 0
+                ]
+            ai_amount = float(parsed.get("total_amount", 0) or 0)
+            currency  = str(parsed.get("currency", "INR")).strip().upper() or "INR"
+            origin    = _normalize_city(str(parsed.get("origin", "")).strip())
+            dest      = _normalize_city(str(parsed.get("destination", "")).strip())
+            if origin == dest:
+                dest = ""
+            email     = str(parsed.get("email", "")).strip().lower()
+            # PDF amount from regex always wins; use AI amount only for images
+            amount    = pdf_amount if pdf_amount else ai_amount
+            ai_parsed = bool(origin or dest or carrier or amount)
+        except Exception:
+            ai_parsed = False
+
+    # ── Regex fallback (PDF / text only) ─────────────────────────────────────
+    if not ai_parsed and text:
         text_lower = text.lower()
+
         CARRIER_ALIASES = {
             "bluedart": "BlueDart", "blue dart": "BlueDart",
             "delhivery": "Delhivery",
-            "fedex india": "FedEx India", "fedex": "FedEx India",
+            "fedex india": "FedEx India", "fedex": "FedEx",
             "dtdc": "DTDC", "ekart": "Ekart", "gati": "Gati",
-            "ups india": "UPS India", "ups": "UPS India",
+            "ups india": "UPS India", "ups": "UPS",
             "v express": "V Express", "vexpress": "V Express",
-            "dhl": "Other", "aramex": "Other",
+            "dhl": "DHL", "aramex": "Aramex",
+            "maersk": "Maersk", "msc ": "MSC", "cma cgm": "CMA CGM",
         }
         for alias, canonical in CARRIER_ALIASES.items():
             if alias in text_lower:
                 carrier = canonical
                 break
 
-        for pat in [
-            r"(?:total|grand total|amount due|invoice amount|net amount|total amount)[^\d₹$]*[₹$]?\s*([\d,]+(?:\.\d{1,2})?)",
-            r"[₹$]\s*([\d,]+(?:\.\d{1,2})?)",
-            r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR)",
-        ]:
-            # Collect ALL matches for this pattern and take the LARGEST
-            # (avoids picking up page numbers, line items, or small quantities)
-            candidates = []
-            for m in _re2.finditer(pat, text, _re2.IGNORECASE):
-                try:
-                    v = float(m.group(1).replace(",", ""))
-                    if v >= 500:  # freight invoices are never < ₹500
-                        candidates.append(v)
-                except ValueError:
-                    pass
-            if candidates:
-                amount = max(candidates)  # prefer largest match (total, not line item)
-                break
+        # Use the pre-extracted PDF amount if already found
+        if pdf_amount:
+            amount = pdf_amount
 
-        if "usd" in text_lower or "$" in text:
+        def _parse_num(raw: str) -> float:
+            try:
+                v = float(raw.replace(",", ""))
+                return v if v >= 100 else 0.0
+            except ValueError:
+                return 0.0
+
+        def _tier1_amounts(text: str) -> list[float]:
+            """Find all definitive final-amount labels, allowing multi-line gaps."""
+            pat = (
+                r"(?:grand\s+total|amount\s+due|balance\s+due|net\s+payable"
+                r"|total\s+payable|total\s+due|invoice\s+total"
+                r"|total\s+invoice\s+value|amount\s+payable|final\s+amount"
+                r"|total\s+charges|net\s+amount\s+payable)"
+                r"[\s\S]{0,80}?"           # cross newlines, non-greedy
+                r"([\d,]+\.\d{2})"         # require decimal — final amounts always have paise/cents
+            )
+            return [v for v in (_parse_num(m.group(1)) for m in _re2.finditer(pat, text, _re2.IGNORECASE)) if v]
+
+        # Tier 1 — definitive labels; take the last match (totals are at the bottom)
+        # Skip if pdf_amount already resolved above
+        tier1 = [] if amount else _tier1_amounts(text)
+        if tier1:
+            amount = tier1[-1]
+
+        # Tier 2 — bare "Total" or "Total Amount" but never on a subtotal line
+        if not amount:
+            tier2 = []
+            pat2 = (
+                r"(?:total\s+amount|net\s+total|total)"
+                r"[\s\S]{0,40}?([\d,]+\.\d{2})"
+            )
+            for m in _re2.finditer(pat2, text, _re2.IGNORECASE):
+                # Reject if "sub" appears on the same logical line as the label
+                seg = text[max(0, m.start() - 10): m.start() + 30].lower()
+                if "sub" not in seg:
+                    v = _parse_num(m.group(1))
+                    if v:
+                        tier2.append(v)
+            if tier2:
+                amount = tier2[-1]
+
+        # Tier 3 — currency-symbol / currency-code; take max (last resort)
+        if not amount:
+            for pat in [
+                r"[₹$€£]\s*([\d,]+(?:\.\d{1,2})?)",
+                r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR|GBP|AED|SGD)",
+            ]:
+                candidates = [v for v in (_parse_num(m.group(1)) for m in _re2.finditer(pat, text, _re2.IGNORECASE)) if v]
+                if candidates:
+                    amount = max(candidates)
+                    break
+
+        if "usd" in text_lower or "$ " in text:
             currency = "USD"
         elif "eur" in text_lower or "€" in text:
             currency = "EUR"
+        elif "gbp" in text_lower or "£" in text:
+            currency = "GBP"
+        elif "aed" in text_lower:
+            currency = "AED"
 
-        CITY_ALIASES = {
-            "bombay": "Mumbai", "new delhi": "Delhi", "bengaluru": "Bangalore",
-            "calcutta": "Kolkata", "madras": "Chennai", "visakhapatnam": "Vizag",
-            "cochin": "Kochi",
-        }
-        def _normalise_city(raw: str) -> str:
-            raw = raw.strip().lower()
-            if raw in CITY_ALIASES:
-                return CITY_ALIASES[raw]
-            for city in KNOWN_CITIES:
-                if city.lower() in raw or raw in city.lower():
-                    return city
-            return raw.title()
+        # Email regex fallback
+        if not email:
+            email_match = _re2.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
+            if email_match:
+                email = email_match.group(0).lower()
 
         for pat in [
-            r"(?:from|origin)[:\s]+([A-Za-z][a-zA-Z ]+?)\s+(?:to|dest(?:ination)?)[:\s]+([A-Za-z][a-zA-Z ]+?)(?:\n|,|\.|$)",
-            r"([A-Za-z][a-z]+(?:\s[A-Z][a-z]+)?)\s*[-–→]\s*([A-Za-z][a-z]+(?:\s[A-Z][a-z]+)?)",
+            r"(?:from|origin|shipper['\s]?city|pickup\s*(?:city|location))[:\s]+([A-Za-z][a-zA-Z .'-]{2,30}?)\s{0,3}(?:to|dest(?:ination)?|consignee['\s]?city|delivery\s*(?:city|location))[:\s]+([A-Za-z][a-zA-Z .'-]{2,30})(?:\s*\n|,|\.|$)",
+            r"\b([A-Z][a-z]{2,}(?:[\s][A-Z][a-z]+)?)\s*(?:[-–→]|to)\s*([A-Z][a-z]{2,}(?:[\s][A-Z][a-z]+)?)\b",
         ]:
             m = _re2.search(pat, text, _re2.IGNORECASE)
             if m:
-                city_a = _normalise_city(m.group(1))
-                city_b = _normalise_city(m.group(2))
-                if city_a and city_b and city_a != city_b:
-                    route = f"{city_a}-{city_b}"
+                c1 = _normalize_city(m.group(1))
+                c2 = _normalize_city(m.group(2))
+                if c1 and c2 and c1.lower() != c2.lower():
+                    origin, dest = c1, c2
                 break
 
+        # Last resort: extract from filename  (e.g. bluedart_mumbai_delhi.pdf)
+        if not origin:
+            name_parts = _re2.split(r"[_\-\s]+", fname.replace(".pdf","").replace(".png","").replace(".jpg",""))
+            found = []
+            for part in name_parts:
+                norm = _normalize_city(part)
+                if norm and len(norm) > 2:
+                    # Check if it looks like a city (known or at least title-cased word)
+                    if norm.lower() in INDIAN_CITIES_SET or norm.lower() in IATA_MAP:
+                        found.append(norm)
+            if len(found) >= 2:
+                origin, dest = found[0], found[1]
+
+    # ── Equipment type fallback — keyword scan ────────────────────────────────────
+    if not equipment_type and text:
+        _tl = text.lower()
+        if any(k in _tl for k in ("53ft","53-ft","dry van","dryvan")): equipment_type = "53FT_DRY_VAN"
+        elif any(k in _tl for k in ("40ft container","40-ft","40ft hc")): equipment_type = "40FT_CONTAINER"
+        elif any(k in _tl for k in ("20ft","20-ft","20ft container")): equipment_type = "20FT_CONTAINER"
+        elif "flatbed" in _tl: equipment_type = "FLATBED"
+        elif "tanker" in _tl: equipment_type = "TANKER"
+        elif any(k in _tl for k in ("parcel","courier van","two-wheeler","bike")): equipment_type = "PARCEL_VAN"
+
+    # ── Shipper reference fallback — look for PO / AWB / BL / Docket ─────────────
+    if not shipper_reference and text:
+        _ref_pat = (
+            r"(?:po\s*(?:no|number|#)?|purchase\s*order|awb|airway\s*bill"
+            r"|b/?l\s*(?:no)?|docket\s*(?:no)?|shipment\s*ref(?:erence)?)"
+            r"[\s:.\-]*([A-Z0-9][-A-Z0-9/]{3,30})"
+        )
+        _rm = _re2.search(_ref_pat, text, _re2.IGNORECASE)
+        if _rm:
+            shipper_reference = _rm.group(1).strip()
+
+    # ── Transport mode fallback — keyword scan ────────────────────────────────────
+    if not transport_mode and text:
+        _tl = text.lower()
+        if any(k in _tl for k in ("truckload","truck load","dry van","ftl","ltl","road","surface")):
+            transport_mode = "TRUCKLOAD"
+        elif any(k in _tl for k in ("air freight","airfreight","air cargo","air express","flight")):
+            transport_mode = "AIR"
+        elif any(k in _tl for k in ("sea freight","ocean","vessel","lcl","fcl","sea cargo")):
+            transport_mode = "SEA"
+        elif any(k in _tl for k in ("rail","train","railway")):
+            transport_mode = "RAIL"
+        elif any(k in _tl for k in ("courier","express","docket","overnight","next day")):
+            transport_mode = "COURIER"
+
+    # ── Charge lines fallback — regex when AI missed them ────────────────────────
+    if not charge_lines and text:
+        def _classify_charge(desc: str) -> str:
+            dl = desc.lower()
+            if any(k in dl for k in ("fuel", "fsc", "energy surcharge")): return "FUEL"
+            if any(k in dl for k in ("basic freight", "base freight", "freight charge", "base rate")): return "BASE"
+            if any(k in dl for k in ("gst", "igst", "cgst", "sgst", "vat", "tax", "cess")): return "TAX"
+            if any(k in dl for k in ("handling", "accessorial", "pickup", "delivery", "detention",
+                                     "demurrage", "insurance", "cod", "docket")): return "ACCESSORIAL"
+            if any(k in dl for k in ("discount", "rebate", "credit")): return "DISCOUNT"
+            return "OTHER"
+
+        _line_pat = _re2.compile(
+            r"^[ \t]*(.{4,50}?)[ \t]{2,}([\d,]+\.?\d{0,2})[ \t]*$",
+            _re2.MULTILINE
+        )
+        _skip = {"total", "subtotal", "sub-total", "grand total", "amount due",
+                 "total payable", "net payable", "balance due"}
+        for _m in _line_pat.finditer(text):
+            _desc = _m.group(1).strip()
+            if any(s in _desc.lower() for s in _skip):
+                continue
+            try:
+                _amt = float(_m.group(2).replace(",", ""))
+            except ValueError:
+                continue
+            if _amt > 0:
+                charge_lines.append({
+                    "description": _desc,
+                    "amount":      _amt,
+                    "type":        _classify_charge(_desc),
+                })
+
+    # ── Invoice date fallback — regex when AI missed it ──────────────────────────
+    if not invoice_date and text:
+        # Matches formats: 01-Jun-2025, 01/06/2025, 2025-06-01, June 1 2025, 1 Jun 25
+        _date_pat = (
+            r"(?:invoice\s*date|bill\s*date|date\s*of\s*issue|date)[:\s]+?"
+            r"(\d{1,2}[-/\s]\w+[-/\s]\d{2,4}|\d{4}[-/]\d{2}[-/]\d{2}|\w+\s+\d{1,2},?\s+\d{4})"
+        )
+        _dm = _re2.search(_date_pat, text, _re2.IGNORECASE)
+        if _dm:
+            _raw_date = _dm.group(1).strip()
+            # Normalise to YYYY-MM-DD
+            import datetime as _dt
+            for _fmt in ("%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d", "%B %d %Y", "%d %b %Y", "%b %d %Y"):
+                try:
+                    invoice_date = _dt.datetime.strptime(_raw_date, _fmt).strftime("%Y-%m-%d")
+                    break
+                except ValueError:
+                    continue
+
+    # ── Invoice number fallback — regex when AI missed it ────────────────────────
+    if not invoice_number and text:
+        _inv_pat = (
+            r"(?:invoice\s*(?:no|number|#|num)|bill\s*(?:no|number|#)|ref(?:erence)?\s*(?:no|#|:))"
+            r"[\s:.\-]*([A-Z0-9][-A-Z0-9/]{3,30})"
+        )
+        _m = _re2.search(_inv_pat, text, _re2.IGNORECASE)
+        if _m:
+            invoice_number = _m.group(1).strip()
+
+    # ── Carrier fallback: extract from filename when AI/regex found nothing ─────
+    # e.g. "DHL_Invoice_with_Excel.pdf" → "DHL"
+    if not carrier and fname:
+        _FNAME_CARRIERS = {
+            "bluedart": "BlueDart", "blue_dart": "BlueDart",
+            "delhivery": "Delhivery", "fedex": "FedEx", "dtdc": "DTDC",
+            "ekart": "Ekart", "gati": "Gati", "ups": "UPS",
+            "vexpress": "V Express", "v_express": "V Express",
+            "dhl": "DHL", "aramex": "Aramex",
+            "maersk": "Maersk", "msc": "MSC", "cmacgm": "CMA CGM",
+        }
+        fname_lower = fname.lower()
+        for key, canonical in _FNAME_CARRIERS.items():
+            if key in fname_lower:
+                carrier = canonical
+                break
+
+    # ── Email fallback: scan full text if AI missed it ────────────────────────
+    if not email and text:
+        em = _re2.search(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
+        if em:
+            email = em.group(0).lower()
+
+    # ── Determine route type ──────────────────────────────────────────────────
+    if origin and dest:
+        both_indian = _is_indian(origin) and _is_indian(dest)
+        route_type = "national" if both_indian else "international"
+    elif origin or dest:
+        single = origin or dest
+        route_type = "national" if _is_indian(single) else "international"
+    else:
+        route_type = "unknown"
+
+    route = f"{origin}-{dest}" if (origin and dest) else (origin or dest)
+
     return {
-        "carrier":   carrier,
-        "route":     route,
-        "amount":    amount,
-        "currency":  currency,
-        "parsed_by": "groq_ai" if ai_parsed else "regex",
+        "invoice_number":   invoice_number,
+        "invoice_date":     invoice_date,
+        "charge_lines":      charge_lines,
+        "transport_mode":    transport_mode,
+        "equipment_type":    equipment_type,
+        "shipper_reference": shipper_reference,
+        "carrier":           carrier,
+        "route":            route,
+        "origin":           origin,
+        "destination":      dest,
+        "amount":           amount,
+        "currency":         currency,
+        "route_type":       route_type,
+        "email":            email,
+        "parsed_by":        "groq_ai" if ai_parsed else "regex",
         "raw_text_preview": text[:300] if text else "",
     }
 
@@ -1733,6 +2438,7 @@ def _run_full_pipeline(
                  tenant_id, ing_r.source_record_id, inv_no, carrier, float(amount), currency)
     can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
                  tenant_id, ing_r.source_record_id, inv_no, carrier, float(amount), currency, origin, dest, 0.0)
+    # (batch pipeline has no new fields — they default to "" / [])
     case_r = CaseHandler(DB_URL, broker).open_case(tenant_id, can_r.canonical_invoice_id, actor_sub)
 
     diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(amount) * 0.2
@@ -1974,12 +2680,12 @@ async def extract_contract_rates(
 @v1_router.post("/cases/{case_id}/dispute-letter", tags=["ui"])
 def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     """
-    Generate a professional dispute letter for a case.
+    Generate a professional dispute letter for a case, auto-filled with
+    real tenant/carrier data from the database.
     Uses Groq AI when GROQ_API_KEY is set, otherwise generates a
-    professional template letter from the case data.
+    template letter from the case data.
     """
     groq_key = os.getenv("GROQ_API_KEY", "")
-    # v2-dispute-letter-loaded
 
     # Fetch case + validation + finding data
     row = q1("""
@@ -2019,15 +2725,52 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     contract_amt = billed - overcharge
     ref          = case_id[:8].upper()
 
+    # ── Fetch sender (tenant) details ───────────────────────────────────────────
+    tenant_row = q1(
+        "SELECT display_name, address, city, state, pincode, phone, email "
+        "FROM tenants WHERE id = %s::uuid",
+        (claims.tenant_id,),
+    )
+    company_name = (tenant_row.get("display_name") or "Your Company") if tenant_row else "Your Company"
+    company_addr = (tenant_row.get("address") or "").strip() if tenant_row else ""
+    company_city = (tenant_row.get("city") or "").strip() if tenant_row else ""
+    company_st   = (tenant_row.get("state") or "").strip() if tenant_row else ""
+    company_pin  = (tenant_row.get("pincode") or "").strip() if tenant_row else ""
+    company_ph   = (tenant_row.get("phone") or "").strip() if tenant_row else ""
+    company_em   = (tenant_row.get("email") or "").strip() if tenant_row else ""
+    company_city_line = (", ".join(filter(None, [company_city, company_st, company_pin])))
+
+    # ── Fetch sender (user) details ─────────────────────────────────────────────
+    user_row = q1(
+        "SELECT full_name, title, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        (claims.sub, claims.tenant_id),
+    )
+    sender_name    = (user_row.get("full_name") or claims.sub) if user_row else claims.sub
+    sender_title   = (user_row.get("title") or "Logistics Manager").strip() if user_row else "Logistics Manager"
+    sender_email   = (user_row.get("email") or claims.sub) if user_row else claims.sub
+
+    # ── Fetch carrier details ───────────────────────────────────────────────────
+    carrier_row = q1(
+        "SELECT email, address FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+        (claims.tenant_id, carrier),
+    )
+    carrier_email    = (carrier_row.get("email") or "").strip() if carrier_row else ""
+    carrier_addr     = (carrier_row.get("address") or "").strip() if carrier_row else ""
+
     # ── Try Groq AI ───────────────────────────────────────────────────────────
     if groq_key:
         try:
             from groq import Groq as _Groq
             _groq  = _Groq(api_key=groq_key)
             prompt = (
-                f"Write a professional freight overcharge dispute letter from a logistics company to a carrier.\n\n"
+                f"Write a professional freight overcharge dispute letter from {company_name} to {carrier}.\n\n"
+                f"Sender: {sender_name}, {sender_title}, {company_name}\n"
+                f"Sender Address: {company_addr}, {company_city_line}\n"
+                f"Sender Contact: {company_ph}, {sender_email}\n\n"
+                f"Carrier: {carrier}\n"
+                f"Carrier Address: {carrier_addr}\n"
+                f"Carrier Email: {carrier_email}\n\n"
                 f"Details:\n"
-                f"- Carrier: {carrier}\n"
                 f"- Invoice Number: {invoice_no}\n"
                 f"- Route: {route}\n"
                 f"- Amount Billed: {currency} {billed:,.2f}\n"
@@ -2037,7 +2780,7 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
                 f"- Case Reference: {ref}\n\n"
                 f"The letter should: state the overcharge clearly, cite contracted vs billed rate, "
                 f"request a credit memo within 30 days, reference the cryptographic audit record (ACR-{ref}) as proof, "
-                f"be professional and firm. Use [Company Name] and [Your Name] as placeholders."
+                f"be professional and firm. Use {company_name} as company name and {sender_name} as sender name."
             )
             chat   = _groq.chat.completions.create(
                 model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
@@ -2049,6 +2792,7 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
                 "overcharge": overcharge, "currency": currency,
                 "dispute_letter": chat.choices[0].message.content.strip(),
                 "generated_by": "groq_ai",
+                "carrier_email": carrier_email,
             }
         except Exception:
             pass  # fall through to template
@@ -2056,15 +2800,15 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     # ── Template fallback (no GROQ key needed) ────────────────────────────────
     from datetime import date as _date
     today = _date.today().strftime("%B %d, %Y")
-    letter = f"""[Company Name]
-[Address]
-[City, State, PIN]
+    letter = f"""{company_name}
+{company_addr}
+{company_city_line}
 
 {today}
 
 Accounts Receivable
 {carrier}
-[Carrier Address]
+{carrier_addr}
 
 Subject: Formal Dispute of Invoice {invoice_no} — Overcharge of {currency} {overcharge:,.2f}
 Reference: Zoiko Case {ref}
@@ -2084,16 +2828,16 @@ This overcharge has been verified by our cryptographic audit pipeline and is rec
 
 We formally request that {carrier} issue a credit memo for {currency} {overcharge:,.2f} within 30 days of this letter. Failure to resolve this dispute may result in escalation to our legal and compliance teams.
 
-Please direct your response to [Your Name] at [your email] or [phone number].
+Please direct your response to {sender_name} at {sender_email} or {company_ph}.
 
 We value our partnership with {carrier} and trust this matter will be resolved promptly.
 
 Sincerely,
 
-[Your Name]
-[Title]
-[Company Name]
-[Company Phone / Email]
+{sender_name}
+{sender_title}
+{company_name}
+{company_ph} / {company_em}
 
 Enclosures:
   - Zoiko Audit Certification Record (ACR-{ref})
@@ -2107,6 +2851,7 @@ Enclosures:
         "currency":       currency,
         "dispute_letter": letter,
         "generated_by":   "template",
+        "carrier_email":  carrier_email,
     }
 
 
@@ -2121,7 +2866,6 @@ def send_dispute_letter_email(
     """
     Send the dispute letter to a carrier email address.
     Body: { recipient_email, letter_text, carrier, overcharge, currency }
-    Uses SendGrid sandbox by default (SENDGRID_SANDBOX=false to send for real).
     """
     recipient  = body.get("recipient_email", "").strip()
     letter     = body.get("letter_text", "").strip()
@@ -2144,12 +2888,19 @@ def send_dispute_letter_email(
             overcharge = overcharge,
             currency   = currency,
         )
-        sandbox = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
+        provider = os.getenv("EMAIL_PROVIDER", "none").lower().strip()
+        sandbox  = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
+        if provider == "none":
+            message = f"Letter logged to console (EMAIL_PROVIDER=none). Set SENDGRID/SMTP in .env to send for real. To: {recipient}"
+        elif provider == "sendgrid" and sandbox:
+            message = f"Letter validated (sandbox — not delivered) to {recipient}. Set SENDGRID_SANDBOX=false to send for real."
+        else:
+            message = f"Letter sent to {recipient}"
         return {
             "sent": True,
             "to":   recipient,
-            "sandbox": sandbox,
-            "message": f"Letter {'validated (sandbox — not delivered)' if sandbox else 'sent'} to {recipient}",
+            "sandbox": (provider == "sendgrid" and sandbox),
+            "message": message,
         }
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Email send failed: {exc}")
@@ -2281,18 +3032,119 @@ def _run_evidence_and_reasoning(
                               payload={"case_id": case_id, "confidence": SC001}, tenant_id=tenant_id))
 
 
-@v1_router.post("/cases/submit", tags=["ui"], status_code=201)
-async def ui_submit_case(
+# ── In-memory job store for async submit ─────────────────────────────────────
+# Maps job_id → {"status": "pending"|"done"|"error", "case": dict|None, "error": str|None}
+_SUBMIT_JOBS: dict = {}
+
+@v1_router.post("/cases/submit-async", tags=["ui"], status_code=202)
+def ui_submit_case_async(
     body: SubmitCaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     claims: ZoikoClaims = Depends(get_claims),
     _ff: None = Depends(require_feature_flag("SC_001_ENABLED")),
 ):
-    """Full pipeline: ingest → validate → canonical → open case → evidence → AI finding."""
+    """Non-blocking submit: returns a job_id immediately (<1s), runs pipeline in background.
+    Poll GET /cases/submit-status/{job_id} every 2s until status='done'.
+    Eliminates the 25s HTTP wait that causes NAT/proxy connection drops.
+    """
+    import threading as _th, uuid as _u
+    job_id = str(_u.uuid4())
+    _SUBMIT_JOBS[job_id] = {"status": "pending", "case": None, "error": None}
+
+    # Capture values needed inside thread before they go out of scope
+    _tenant  = str(claims.tenant_id)
+    _sub     = claims.sub
+    _ikey    = idempotency_key
+    _body    = body
+
+    def _run():
+        try:
+            parts  = _re.split(r'\s*[-→–]\s*', _body.route.strip(), maxsplit=1)
+            origin = parts[0].strip() if parts else _body.route
+            dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
+            # Use invoice number from PDF parse if available; fall back to generated ID
+            inv_no = _body.invoice_number.strip() if _body.invoice_number.strip() else f"UI-{_u.uuid4().hex[:8].upper()}"
+            slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (_tenant,))
+            slug = slug_row["slug"] if slug_row else "default"
+            broker = _BROKER
+            inv = InvoiceInput(
+                carrier_id=_body.carrier, invoice_number=inv_no,
+                total_amount=float(_body.amount), currency=_body.currency,
+                route_origin=origin, route_destination=dest, weight_lbs=0.0,
+                invoice_date=_body.invoice_date, transport_mode=_body.transport_mode,
+                equipment_type=_body.equipment_type, charge_lines=_body.charge_lines,
+                shipper_reference=_body.shipper_reference,
+            )
+            ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(_tenant, inv, _ikey)
+            val_r  = ValidationHandler(DB_URL, broker, slug).validate(
+                         _tenant, ing_r.source_record_id, inv_no,
+                         _body.carrier, float(_body.amount), _body.currency)
+            can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
+                         _tenant, ing_r.source_record_id, inv_no,
+                         _body.carrier, float(_body.amount), _body.currency, origin, dest, 0.0,
+                         invoice_date=_body.invoice_date,
+                         transport_mode=_body.transport_mode,
+                         equipment_type=_body.equipment_type,
+                         charge_lines=_body.charge_lines,
+                     )
+            case_r = CaseHandler(DB_URL, broker).open_case(_tenant, can_r.canonical_invoice_id, _sub)
+            diff   = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(_body.amount) * 0.2
+            try:
+                _run_evidence_and_reasoning(
+                    tenant_id=_tenant, case_id=str(case_r.case_id), slug=slug,
+                    carrier=_body.carrier, amount=diff, currency=_body.currency,
+                    route=_body.route, actor_sub=_sub, broker=broker,
+                )
+            except Exception:
+                import traceback; traceback.print_exc()
+            now_str = datetime.now(timezone.utc).isoformat()
+            _SUBMIT_JOBS[job_id] = {
+                "status": "done",
+                "case": {
+                    "id": str(case_r.case_id), "tenant_id": _tenant,
+                    "state": "FINDING_GENERATED", "carrier": _body.carrier,
+                    "shipment_ref": _body.route, "amount": float(_body.amount),
+                    "currency": _body.currency, "diff": diff, "confidence": 0.96,
+                    "opened_at": now_str, "updated_at": now_str,
+                },
+                "error": None,
+            }
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+            _SUBMIT_JOBS[job_id] = {"status": "error", "case": None, "error": str(exc)}
+
+    _th.Thread(target=_run, daemon=True, name=f"submit-{job_id[:8]}").start()
+    return {"job_id": job_id, "status": "pending"}
+
+
+@v1_router.get("/cases/submit-status/{job_id}", tags=["ui"])
+def get_submit_status(job_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """Poll this endpoint after submit-async until status='done'."""
+    job = _SUBMIT_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return job
+
+
+@v1_router.post("/cases/submit", tags=["ui"], status_code=201)
+def ui_submit_case(
+    body: SubmitCaseRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+    _ff: None = Depends(require_feature_flag("SC_001_ENABLED")),
+):
+    """Full pipeline: ingest → validate → canonical → open case → evidence → AI finding.
+
+    Sync def (not async) so FastAPI runs this in the thread-pool executor.
+    The pipeline makes ~15 sequential psycopg2 calls against a cloud DB (~20s
+    total); keeping it in async would block the entire event loop for that
+    duration, starving health-checks and other requests.
+    """
     parts  = _re.split(r'\s*[-→–]\s*', body.route.strip(), maxsplit=1)
     origin = parts[0].strip() if parts else body.route
     dest   = parts[1].strip() if len(parts) > 1 else "Unknown"
-    inv_no = f"UI-{uuid.uuid4().hex[:8].upper()}"
+    # Use PDF-extracted invoice number if provided; fall back to generated ID
+    inv_no = body.invoice_number.strip() if body.invoice_number.strip() else f"UI-{uuid.uuid4().hex[:8].upper()}"
 
     slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (claims.tenant_id,))
     slug = slug_row["slug"] if slug_row else "default"
@@ -2300,38 +3152,72 @@ async def ui_submit_case(
     broker = _BROKER
 
     # ── Phase 2 pipeline ──────────────────────────────────────────────────────
-    inv = InvoiceInput(carrier_id=body.carrier, invoice_number=inv_no,
-                       total_amount=float(body.amount), currency=body.currency,
-                       route_origin=origin, route_destination=dest, weight_lbs=0.0)
+    inv = InvoiceInput(
+        carrier_id=body.carrier, invoice_number=inv_no,
+        total_amount=float(body.amount), currency=body.currency,
+        route_origin=origin, route_destination=dest, weight_lbs=0.0,
+        invoice_date=body.invoice_date, transport_mode=body.transport_mode,
+        equipment_type=body.equipment_type, charge_lines=body.charge_lines,
+        shipper_reference=body.shipper_reference,
+    )
     ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(str(claims.tenant_id), inv, idempotency_key)
     val_r  = ValidationHandler(DB_URL, broker, slug).validate(
                  str(claims.tenant_id), ing_r.source_record_id, inv_no,
                  body.carrier, float(body.amount), body.currency)
     can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
                  str(claims.tenant_id), ing_r.source_record_id, inv_no,
-                 body.carrier, float(body.amount), body.currency, origin, dest, 0.0)
+                 body.carrier, float(body.amount), body.currency, origin, dest, 0.0,
+                 invoice_date=body.invoice_date,
+                 transport_mode=body.transport_mode,
+                 equipment_type=body.equipment_type,
+                 charge_lines=body.charge_lines,
+             )
     case_r = CaseHandler(DB_URL, broker).open_case(str(claims.tenant_id), can_r.canonical_invoice_id, claims.sub)
 
-    # ── Phase 3 pipeline (auto-advance to FINDING_GENERATED) ─────────────────
+    # ── Phase 3 pipeline — run in background thread so response returns fast ────
+    # The evidence + reasoning step takes ~8-12s against a cloud DB.  Running it
+    # synchronously meant the whole submit took ~25s, which caused browsers and
+    # the Vite proxy to drop the connection before the 201 arrived — the backend
+    # logged "201 Created" but the frontend got "lost connection mid-request".
+    # Moving Phase 3 to a daemon thread cuts the client-visible wait to ~3-5s.
+    import threading as _threading
     diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(body.amount) * 0.2
-    try:
-        _run_evidence_and_reasoning(
-            tenant_id  = str(claims.tenant_id),
-            case_id    = str(case_r.case_id),
-            slug       = slug,
-            carrier    = body.carrier,
-            amount     = diff,
-            currency   = body.currency,
-            route      = body.route,
-            actor_sub  = claims.sub,
-            broker     = broker,
-        )
-    except Exception as _e:
-        import traceback; traceback.print_exc()
 
-    rows = _cases_q("WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid",
-                    (str(case_r.case_id), str(claims.tenant_id)))
-    return rows[0] if rows else {"id": str(case_r.case_id), "state": "FINDING_GENERATED"}
+    def _bg():
+        try:
+            _run_evidence_and_reasoning(
+                tenant_id = str(claims.tenant_id),
+                case_id   = str(case_r.case_id),
+                slug      = slug,
+                carrier   = body.carrier,
+                amount    = diff,
+                currency  = body.currency,
+                route     = body.route,
+                actor_sub = claims.sub,
+                broker    = broker,
+            )
+        except Exception:
+            import traceback; traceback.print_exc()
+
+    _threading.Thread(target=_bg, daemon=True, name=f"p3-{case_r.case_id}").start()
+
+    # Return immediately using data already in memory — avoids a second round-trip
+    # to Neon (~12s) and brings total response time from ~25s down to ~5s.
+    # The frontend navigates to the case page which re-fetches the live state.
+    now_str = datetime.now(timezone.utc).isoformat()
+    return {
+        "id":           str(case_r.case_id),
+        "tenant_id":    str(claims.tenant_id),
+        "state":        "EVIDENCE_PENDING",
+        "carrier":      body.carrier,
+        "shipment_ref": body.route,
+        "amount":       float(body.amount),
+        "currency":     body.currency,
+        "diff":         diff,
+        "confidence":   0.0,
+        "opened_at":    now_str,
+        "updated_at":   now_str,
+    }
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -2551,7 +3437,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
 @v1_router.get("/admin/tenants", tags=["admin"])
 def list_tenants(claims: ZoikoClaims = Depends(get_claims)):
-    """List all tenants with user counts. Admin role required."""
+    """List tenants visible to the current admin — only their own tenant."""
     if "admin" not in claims.roles:
         raise HTTPException(status_code=403, detail="Admin role required")
     rows = q("""
@@ -2563,9 +3449,10 @@ def list_tenants(claims: ZoikoClaims = Depends(get_claims)):
                COUNT(u.id)::int  AS user_count
         FROM   tenants t
         LEFT   JOIN users u ON u.tenant_id = t.id
+        WHERE  t.id = %s::uuid
         GROUP  BY t.id, t.display_name, t.slug, t.status, t.created_at
         ORDER  BY t.created_at DESC
-    """, ())
+    """, (claims.tenant_id,))
     return {"tenants": rows, "total": len(rows)}
 
 

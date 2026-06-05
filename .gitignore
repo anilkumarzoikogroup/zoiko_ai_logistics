@@ -1,5 +1,8 @@
 __pycache__/
 *.py[cod]
+# Local temp/debug scripts with hardcoded credentials — never commit
+_backend.py
+_*.py
 *.egg-info/
 .venv/
 venv/
@@ -22,3 +25,5 @@ node_modules/
 .terraform/
 *.tfvars
 !*.tfvars.example
+.vercel
+.env*

@@ -14,7 +14,7 @@ export default function ManagerApproval() {
   const nav   = useNavigate();
   const qc    = useQueryClient();
   const toast = useToast();
-  const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
+  const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases(), refetchInterval: 5000 });
   const [decided, setDecided] = useState<Record<string, "EXECUTION_READY" | "ABORTED">>({});
 
   const queue = (cases || []).filter(c => c.state === "APPROVAL_PENDING");

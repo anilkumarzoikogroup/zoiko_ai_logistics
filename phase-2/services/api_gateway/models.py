@@ -128,10 +128,16 @@ class HealthResponse(BaseModel):
 # ── Frontend UI request models ─────────────────────────────────────────────────
 
 class SubmitCaseRequest(BaseModel):
-    carrier:  str
-    route:    str
-    amount:   float
-    currency: str = "INR"
+    carrier:        str
+    route:          str
+    amount:         float
+    currency:       str   = "INR"
+    invoice_number:   str   = ""   # Optional — blank → server generates UI-XXXXXXXX
+    invoice_date:     str   = ""   # YYYY-MM-DD — used for contract effective_from check
+    charge_lines:     list  = []   # [{description, amount, type}] for SC-001 reasoning
+    transport_mode:   str   = ""   # TRUCKLOAD|AIR|SEA|RAIL|COURIER — for lane hash lookup
+    equipment_type:   str   = ""   # 53FT_DRY_VAN|40FT_CONTAINER etc — connector cert check
+    shipper_reference: str  = ""   # PO/AWB/BL number — source record external_source_ref
 
 
 class UIProposalRequest(BaseModel):
