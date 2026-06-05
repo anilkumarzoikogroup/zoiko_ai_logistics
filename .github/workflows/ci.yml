@@ -2,7 +2,7 @@ name: Zoiko CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev, develop]
   pull_request:
     branches: [main]
 
@@ -14,9 +14,10 @@ concurrency:
 env:
   PYTHON_VERSION: "3.11"          # matches production Dockerfile
   PYTHONIOENCODING: utf-8
-  ZOIKO_DEV_MODE: "true"
   ZOIKO_ISSUER: https://auth.zoikotech.com
   ZOIKO_DEV_SECRET: zoiko-dev-secret-for-testing-only   # CI-only test value
+  # ZOIKO_DEV_MODE is set per-job: true for phase2/3 (API tests need it),
+  # NOT set for phase4 (unit tests assert gate rejection behaviour)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 0  Security scan — runs in parallel with lint, never blocks deploy alone
@@ -179,6 +180,7 @@ jobs:
           --health-retries 10
     env:
       DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
+      ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
     steps:
       - uses: actions/checkout@v4
 
@@ -202,14 +204,7 @@ jobs:
         working-directory: phase-2
 
       - name: Run Phase 2 tests
-        run: python -m pytest phase-2/ -v --tb=short -q --cov --cov-report=xml
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-phase2
-          path: coverage.xml
+        run: python -m pytest phase-2/ -v --tb=short -q
 
   phase3:
     name: Phase 3 Integration
@@ -230,6 +225,7 @@ jobs:
           --health-retries 10
     env:
       DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
+      ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
     steps:
       - uses: actions/checkout@v4
 
@@ -253,14 +249,7 @@ jobs:
         working-directory: phase-2
 
       - name: Run Phase 3 tests
-        run: python -m pytest phase-3/ -v --tb=short -q --cov --cov-report=xml
-
-      - name: Upload coverage
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coverage-phase3
-          path: coverage.xml
+        run: python -m pytest phase-3/ -v --tb=short -q
 
   phase4:
     name: Phase 4 Gate Unit Tests
