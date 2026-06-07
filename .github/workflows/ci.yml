@@ -167,7 +167,7 @@ jobs:
     needs: phase1
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
           POSTGRES_DB: zoiko
           POSTGRES_USER: postgres
@@ -212,7 +212,7 @@ jobs:
     needs: phase1
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
           POSTGRES_DB: zoiko
           POSTGRES_USER: postgres
@@ -252,9 +252,24 @@ jobs:
         run: python -m pytest phase-3/ -v --tb=short -q
 
   phase4:
-    name: Phase 4 Gate Unit Tests
+    name: Phase 4 Tests
     runs-on: ubuntu-latest
     needs: phase1
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: zoiko
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_zoiko_ephemeral
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
     steps:
       - uses: actions/checkout@v4
 
@@ -266,6 +281,17 @@ jobs:
 
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Seed CI tenant
+        run: python scripts/ci_seed_tenant.py
+
+      - name: Seed contract rates
+        run: python seed_contract_rates.py
+        working-directory: phase-2
+
       - run: python -m pytest phase-4/tests/ -v --tb=short -q
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,10 +348,10 @@ jobs:
     name: Tenant Isolation Fuzzer
     runs-on: ubuntu-latest
     needs: phase2
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
           POSTGRES_DB: zoiko
           POSTGRES_USER: postgres

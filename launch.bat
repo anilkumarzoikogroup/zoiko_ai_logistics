@@ -29,6 +29,23 @@ if %errorlevel%==0 (
 )
 echo.
 
+REM ── Check for port conflicts ─────────────────────────────────
+echo  Checking for port conflicts...
+set PORT_CONFLICT=0
+for %%P in (8000 8001 8002 5173) do (
+    netstat -an 2>nul | findstr /C:":%%P " | findstr /C:"LISTENING" >nul 2>&1
+    if !errorlevel!==0 (
+        echo  [WARN] Port %%P is already in use -- kill the existing process to avoid conflicts.
+        set PORT_CONFLICT=1
+    )
+)
+if %PORT_CONFLICT%==1 (
+    echo.
+    echo  Continue anyway? Press any key or Ctrl+C to cancel.
+    pause >nul
+)
+echo.
+
 REM ── Migrations ──────────────────────────────────────────────
 .venv\Scripts\python -m alembic -c alembic.ini upgrade head 2>nul
 echo  Migrations up to date.
@@ -37,25 +54,39 @@ echo.
 REM ── Start Phase 2 (port 8000) ───────────────────────────────
 echo  Starting Phase 2 on port 8000...
 start "Zoiko-Phase2" /d "%ROOT%phase-2" cmd /k "call ..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "ZOIKO_FF_SC_001_ENABLED=*" && set "ZOIKO_COMPANY_NAME=!ZOIKO_COMPANY_NAME!" && set "ZOIKO_ADMIN_EMAIL=!ZOIKO_ADMIN_EMAIL!" && set "ZOIKO_ADMIN_PASSWORD=!ZOIKO_ADMIN_PASSWORD!" && set "ZOIKO_ADMIN_NAME=!ZOIKO_ADMIN_NAME!" && set "JWT_TTL_SECONDS=!JWT_TTL_SECONDS!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8000"
-timeout /t 3 /nobreak >nul
 
 REM ── Start Phase 3 (port 8002) ───────────────────────────────
 echo  Starting Phase 3 on port 8002...
 start "Zoiko-Phase3" /d "%ROOT%phase-3" cmd /k "call ..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8002"
-timeout /t 3 /nobreak >nul
 
 REM ── Start Phase 4 (port 8001) ───────────────────────────────
 echo  Starting Phase 4 on port 8001...
 start "Zoiko-Phase4" /d "%ROOT%phase-4" cmd /k "call ..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8001"
-timeout /t 3 /nobreak >nul
+
+REM ── Poll Phase 2 health before starting frontend ─────────────
+echo  Waiting for Phase 2 to be ready...
+set RETRIES=0
+:wait_phase2
+curl -sf http://localhost:8000/health >nul 2>&1
+if %errorlevel%==0 goto :phase2_ready
+set /a RETRIES+=1
+if %RETRIES% gtr 30 (
+    echo  [WARN] Phase 2 did not respond after 30s. Continuing anyway.
+    goto :phase2_ready
+)
+timeout /t 1 /nobreak >nul
+goto :wait_phase2
+:phase2_ready
+echo  [OK] Phase 2 ready.
+echo.
 
 REM ── Start Frontend (port 5173) — always LIVE ─────────────────
 echo  Starting Frontend on port 5173...
 start "Zoiko-Frontend" /d "%ROOT%zoiko-frontend\frontend" cmd /k "set VITE_USE_MOCK=false && npm run dev"
 echo.
 
-REM ── Open browser ────────────────────────────────────────────
-timeout /t 5 /nobreak >nul
+REM ── Open browser after brief Vite startup ────────────────────
+timeout /t 3 /nobreak >nul
 start "" "http://localhost:5173/login"
 
 echo ============================================================
