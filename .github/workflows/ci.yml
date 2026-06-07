@@ -156,30 +156,17 @@ jobs:
       - run: python -m pytest phase-1/tests/ -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 5a  Phase 2 Integration (own ephemeral postgres)
-# GATE 5b  Phase 3 Integration (own ephemeral postgres)  — parallel with 5a
-# GATE 5c  Phase 4 Unit tests  (no DB needed)            — parallel with 5a/5b
-# All three need only phase1 — they each spin their own fresh DB
+# GATE 5a  Phase 2 Integration — uses Neon DB (secret: NEON_DB_URL)
+# GATE 5b  Phase 3 Integration — uses Neon DB (secret: NEON_DB_URL)
+# GATE 5c  Phase 4 Tests       — uses Neon DB (secret: NEON_DB_URL)
+# All three run in parallel after phase1 passes
 # ─────────────────────────────────────────────────────────────────────────────
   phase2:
     name: Phase 2 Integration
     runs-on: ubuntu-latest
     needs: phase1
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: zoiko
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci_zoiko_ephemeral
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
+      DB_URL: ${{ secrets.NEON_DB_URL }}
       ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
     steps:
       - uses: actions/checkout@v4
@@ -210,21 +197,8 @@ jobs:
     name: Phase 3 Integration
     runs-on: ubuntu-latest
     needs: phase1
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: zoiko
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci_zoiko_ephemeral
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
+      DB_URL: ${{ secrets.NEON_DB_URL }}
       ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
     steps:
       - uses: actions/checkout@v4
@@ -255,21 +229,8 @@ jobs:
     name: Phase 4 Tests
     runs-on: ubuntu-latest
     needs: phase1
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: zoiko
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci_zoiko_ephemeral
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
+      DB_URL: ${{ secrets.NEON_DB_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -349,21 +310,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: phase2
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: zoiko
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci_zoiko_ephemeral
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
-      DB_URL: postgresql://postgres:ci_zoiko_ephemeral@localhost:5432/zoiko
+      DB_URL: ${{ secrets.NEON_DB_URL }}
     steps:
       - uses: actions/checkout@v4
 
