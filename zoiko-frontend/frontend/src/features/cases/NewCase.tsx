@@ -378,8 +378,8 @@ export default function NewCase() {
             <span className={cn(
               "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full",
               routeType === "international"
-                ? "bg-blue-100 text-blue-700"
-                : "bg-green-100 text-green-700"
+                ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"
+                : "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"
             )}>
               {routeType === "international"
                 ? <><Globe className="h-3 w-3" /> International</>
@@ -465,9 +465,9 @@ export default function NewCase() {
                   <span className={cn(
                     "text-[9px] font-bold px-1.5 py-0.5 rounded",
                     cl.type === "FUEL"        ? "bg-orange-100 text-orange-700" :
-                    cl.type === "ACCESSORIAL" ? "bg-purple-100 text-purple-700" :
-                    cl.type === "TAX"         ? "bg-blue-100 text-blue-700"     :
-                    cl.type === "BASE"        ? "bg-green-100 text-green-700"   :
+                    cl.type === "ACCESSORIAL" ? "bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400" :
+                    cl.type === "TAX"         ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"       :
+                    cl.type === "BASE"        ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"   :
                     cl.type === "DISCOUNT"    ? "bg-red-100 text-red-700"       :
                                                "bg-slate-100 text-slate-600"
                   )}>{cl.type}</span>
@@ -503,9 +503,9 @@ export default function NewCase() {
       )}
 
       {/* Info */}
-      <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 flex gap-2.5">
-        <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-blue-700 leading-relaxed">
+      <div className="rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-800/50 px-4 py-3 flex gap-2.5">
+        <Info className="h-4 w-4 text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
           Zoiko validates this invoice against your contract rates, detects the overcharge, scores it with AI confidence, and opens a dispute case automatically.
         </p>
       </div>
@@ -849,11 +849,11 @@ export default function NewCase() {
           </div>
 
           {/* Demo tip */}
-          <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 flex gap-2.5">
-            <Lightbulb className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
-            <div className="text-xs text-amber-800 space-y-1">
+          <div className="rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 px-4 py-3 flex gap-2.5">
+            <Lightbulb className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-800 dark:text-amber-300 space-y-1">
               <p className="font-semibold">Demo tip</p>
-              <p>Name your PDF <code className="bg-amber-100 px-1 rounded">bluedart_invoice.pdf</code> for automatic field extraction. Otherwise enter details manually.</p>
+              <p>Name your PDF <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded">bluedart_invoice.pdf</code> for automatic field extraction. Otherwise enter details manually.</p>
             </div>
           </div>
         </div>
@@ -880,7 +880,7 @@ export default function NewCase() {
               </div>
               <input ref={inputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden" onChange={handleFileChange} />
             </div>
-            <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-700">
+            <div className="rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-800/40 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               <strong>Auto-parse:</strong> Name your file <code>bluedart_invoice.pdf</code> to get fields filled automatically.
             </div>
             <button onClick={() => setMode("choose")} className="text-xs text-muted-foreground hover:text-foreground w-full text-center">

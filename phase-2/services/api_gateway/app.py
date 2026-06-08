@@ -2223,7 +2223,7 @@ async def parse_invoice_file(
                 return True
         return False
 
-    _KNOWN_CARRIERS = [
+    KNOWN_CARRIERS = [
         "BlueDart", "Delhivery", "FedEx India", "FedEx", "DTDC",
         "Ekart", "UPS India", "UPS", "V Express", "Gati", "DHL",
         "Aramex", "Maersk", "MSC", "CMA CGM", "Other"

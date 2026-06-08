@@ -53,9 +53,12 @@ function attachInterceptors(instance: AxiosInstance): AxiosInstance {
     (error: AxiosError) => {
       const status = error.response?.status;
       if (status === 401) {
-        store.dispatch(logout());
-        queryClient.clear();
-        window.location.href = "/login";
+        // JWT expired or invalid — clear session and redirect to login
+        ["zoiko_jwt","zoiko_tenant","zoiko_role","zoiko_user","zoiko_sub"]
+          .forEach(k => localStorage.removeItem(k));
+        if (!window.location.pathname.includes("/login")) {
+          window.location.href = "/login";
+        }
       }
       if (status === 503) console.warn("503 — OPA unreachable (fail-closed)");
       return Promise.reject(error);

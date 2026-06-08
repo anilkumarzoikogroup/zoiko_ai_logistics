@@ -101,8 +101,22 @@ export default function Login() {
       }));
       nav("/");
     } catch (err: unknown) {
-      const msg = axios.isAxiosError(err) ? err.response?.data?.detail : null;
-      setError(typeof msg === "string" ? msg : "Invalid email or password.");
+      if (axios.isAxiosError(err)) {
+        if (!err.response) {
+          setError("Cannot reach the server. Make sure the backend is running on port 8000.");
+        } else if (err.response.status === 401) {
+          setError("Invalid email or password.");
+        } else if (err.response.status === 403) {
+          setError(err.response.data?.detail || "Account is disabled. Contact your admin.");
+        } else if (err.response.status === 500 && !err.response.data?.detail) {
+          // Vite proxy returns an empty 500 when the backend is unreachable
+          setError("Cannot reach the server. Make sure the backend is running on port 8000.");
+        } else {
+          setError(err.response.data?.detail || "Login failed. Please try again.");
+        }
+      } else {
+        setError("An unexpected error occurred. Please try again.");
+      }
     } finally { setLoading(false); }
   }
 
