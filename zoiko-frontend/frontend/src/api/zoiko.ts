@@ -314,17 +314,6 @@ export const zoikoApi = {
     return data;
   },
 
-  // ---------- Organization signup ----------
-  async orgSignup(payload: {
-    org_name: string;
-    admin_name: string;
-    admin_email: string;
-    admin_password: string;
-  }): Promise<LoginResponse> {
-    const { data } = await api.post<LoginResponse>("/auth/org-signup", payload);
-    return data;
-  },
-
   // ---------- Profile ----------
   async getProfile(): Promise<{ full_name: string; email: string; role: string; title: string; is_active: boolean; created_at: string }> {
     const { data } = await api.get("/auth/me");

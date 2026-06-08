@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
+import { api } from "@/api/client";
 import { formatCurrency, formatDate, cn } from "@/utils/cn";
 import {
   ArrowRight, ArrowLeft, CheckCircle2, Clock,
@@ -160,7 +161,7 @@ export default function CaseDetail() {
   async function handleGenerateLetter() {
     setLetterLoading(true); setDisputeLetter(""); setShowSendForm(false);
     try {
-      const { data } = await (await import("@/api/client")).api.post(`/cases/${id}/dispute-letter`);
+      const { data } = await api.post(`/cases/${id}/dispute-letter`);
       setDisputeLetter(data.dispute_letter || "");
       if (data.carrier_email) setSendEmail(data.carrier_email);
       toast.success("Letter generated", `Dispute letter for ${data.carrier} ready`);
@@ -683,7 +684,7 @@ export default function CaseDetail() {
                   Copy to clipboard
                 </button>
                 <button
-                  onClick={() => { setShowSendForm(v => !v); setSendResult(null); }}
+                  onClick={() => setShowSendForm(v => !v)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors"
                 >
                   ✉ Send to Carrier

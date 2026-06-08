@@ -65,5 +65,3 @@ anyio>=4.0
 groq
 python-dotenv>=1.0
 
-# for email
-resend>=0.1.0

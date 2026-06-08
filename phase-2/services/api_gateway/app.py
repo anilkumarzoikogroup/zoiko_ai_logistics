@@ -260,8 +260,9 @@ app.add_middleware(SecurityHeadersMiddleware)
 try:
     from zoiko_common.observability.tracing import setup_tracing
     setup_tracing("phase2-api-gateway")
-except Exception:
-    pass
+except Exception as _exc:
+    import logging
+    logging.getLogger("zoiko.startup").warning("Distributed tracing unavailable: %s", _exc)
 
 # Security event publisher (FR-024)
 from zoiko_common.security.events import SecurityEventPublisher, SecurityEventKind
@@ -557,10 +558,7 @@ def recover_complete(body: dict):
         sub=row["email"], tenant_id=str(row["tenant_id"]), roles=[actual_role],
         ttl_sec=int(os.getenv("JWT_TTL_SECONDS", "86400")),
     )
-    response: dict = {"message": "Password reset successfully", "token": token, "email_sent": email_sent}
-    if email_error:
-        response["email_warning"] = f"Email delivery failed ({email_error}). Check server logs for the reset link."
-    return response
+    return {"message": "Password reset successfully", "token": token}
 
 
 # ── OTP-based Forgot Password ─────────────────────────────────────────────────
@@ -604,6 +602,7 @@ def forgot_password(body: dict):
         smtp_pass = os.getenv("EMAIL_PASSWORD", "")
 
         if smtp_user and smtp_pass:
+            import logging as _log
             try:
                 email_body = (
                     f"Welcome to ZoikoAI,\n\n"
@@ -621,8 +620,8 @@ def forgot_password(body: dict):
                     s.starttls()
                     s.login(smtp_user, smtp_pass)
                     s.sendmail(smtp_user, [email], msg.as_string())
-            except Exception:
-                pass
+            except Exception as _exc:
+                _log.getLogger("zoiko.auth").error("Forgot-password OTP email failed for %s: %s", email, _exc)
 
     return {"message": "If this email is registered, you'll receive a code.", "expires_in_minutes": 10}
 
@@ -1038,8 +1037,9 @@ def signup_send_otp(body: dict):
                 s.starttls()
                 s.login(smtp_user, smtp_pass)
                 s.sendmail(smtp_user, [admin_email], msg.as_string())
-        except Exception:
-            pass
+        except Exception as _exc:
+            import logging as _log
+            _log.getLogger("zoiko.auth").error("Signup OTP email failed for %s: %s", admin_email, _exc)
 
     return {"message": "OTP sent to email", "expires_in_minutes": 10}
 
@@ -2444,8 +2444,9 @@ def _run_full_pipeline(
             carrier=carrier, amount=diff, currency=currency,
             route=f"{origin} → {dest}", actor_sub=actor_sub, broker=broker,
         )
-    except Exception:
-        pass
+    except Exception as _exc:
+        import logging as _log
+        _log.getLogger("zoiko.pipeline").error("Evidence/reasoning pipeline failed for case %s: %s", case_id, _exc)
 
     return {"case_id": str(case_r.case_id), "state": "FINDING_GENERATED",
             "carrier": carrier, "amount": amount, "diff": diff}
@@ -3175,7 +3176,11 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception as _rb_exc:
+            import logging
+            logging.getLogger("zoiko.execution").error("Rollback failed after execute error: %s", _rb_exc)
         raise
     finally:
         conn.close()
