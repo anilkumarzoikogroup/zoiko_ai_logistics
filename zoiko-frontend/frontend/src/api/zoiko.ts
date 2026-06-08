@@ -327,17 +327,6 @@ export const zoikoApi = {
     return data;
   },
 
-  // ---------- Organization signup ----------
-  async orgSignup(payload: {
-    org_name: string;
-    admin_name: string;
-    admin_email: string;
-    admin_password: string;
-  }): Promise<LoginResponse> {
-    const { data } = await api.post<LoginResponse>("/auth/org-signup", payload);
-    return data;
-  },
-
   // ---------- Profile ----------
   async getProfile(): Promise<{ full_name: string; email: string; role: string; title: string; is_active: boolean; created_at: string }> {
     const { data } = await api.get("/auth/me");
@@ -361,11 +350,11 @@ export const zoikoApi = {
     const { data } = await api.get<CarrierItem[]>("/carriers");
     return data;
   },
-  async createCarrier(payload: { name: string; email?: string; address?: string; contact_person?: string; contact_phone?: string }): Promise<{ id: string; name: string }> {
+  async createCarrier(payload: { name: string; email?: string; address?: string; contact_person?: string; contact_phone?: string; cc_emails?: string }): Promise<{ id: string; name: string }> {
     const { data } = await api.post("/carriers", payload);
     return data;
   },
-  async updateCarrier(id: string, payload: { name?: string; email?: string; address?: string; contact_person?: string; contact_phone?: string }): Promise<void> {
+  async updateCarrier(id: string, payload: { name?: string; email?: string; address?: string; contact_person?: string; contact_phone?: string; cc_emails?: string }): Promise<void> {
     await api.put(`/carriers/${id}`, payload);
   },
   async deleteCarrier(id: string): Promise<void> {
@@ -399,6 +388,7 @@ export interface CarrierItem {
   address:        string;
   contact_person: string;
   contact_phone:  string;
+  cc_emails:      string;
   created_at:     string;
 }
 

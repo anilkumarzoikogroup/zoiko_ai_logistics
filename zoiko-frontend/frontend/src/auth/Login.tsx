@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAppDispatch } from "@/store";
 import { login as loginAction } from "@/store/authSlice";
 import {
@@ -51,15 +51,31 @@ export default function Login() {
   const [recEmail, setRecEmail]   = useState("");
   const [dark, setDark]           = useState(true);
   const [reg, setReg]             = useState({ org:"", name:"", email:"", password:"" });
+  const [regStep, setRegStep]     = useState<"form"|"otp">("form");
+  const [regOtp, setRegOtp]       = useState("");
 
-  async function handleRegister(e: React.FormEvent) {
+  async function handleSendSignupOtp(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError("");
     try {
-      const { data } = await axios.post(`${API}/v1/auth/org-signup`, {
+      await axios.post(`${API}/v1/auth/signup-send-otp`, {
         org_name:       reg.org,
         admin_name:     reg.name,
         admin_email:    reg.email,
         admin_password: reg.password,
+      });
+      setRegStep("otp");
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.detail : null;
+      setError(typeof msg === "string" ? msg : "Failed to send OTP");
+    } finally { setLoading(false); }
+  }
+
+  async function handleVerifySignupOtp(e: React.FormEvent) {
+    e.preventDefault(); setLoading(true); setError("");
+    try {
+      const { data } = await axios.post(`${API}/v1/auth/signup-verify-otp`, {
+        admin_email: reg.email,
+        otp:         regOtp,
       });
       dispatch(loginAction({
         token:    data.token,
@@ -71,7 +87,7 @@ export default function Login() {
       nav("/");
     } catch (err: unknown) {
       const msg = axios.isAxiosError(err) ? err.response?.data?.detail : null;
-      setError(typeof msg === "string" ? msg : "Registration failed. Please try again.");
+      setError(typeof msg === "string" ? msg : "Invalid OTP");
     } finally { setLoading(false); }
   }
   const [time, setTime]         = useState(new Date());
@@ -338,10 +354,10 @@ export default function Login() {
                         <input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)} style={{width:"14px",height:"14px",accentColor:"#2563EB"}}/>
                         Remember me
                       </label>
-                      <button type="button" onClick={()=>{setRecEmail(email);setFlow("recovery");setError("");}}
-                              style={{background:"none",border:"none",color:"#2563EB",fontSize:"13px",fontWeight:700,cursor:"pointer",textDecoration:"none"}}>
+                      <Link to="/forgot-password"
+                            style={{color:"#2563EB",fontSize:"13px",fontWeight:700,cursor:"pointer",textDecoration:"none"}}>
                         Forgot password?
-                      </button>
+                      </Link>
                     </div>
 
                     {error && (
@@ -384,14 +400,14 @@ export default function Login() {
                 </>}
 
                 {/* ── REGISTER — Organization Signup ────────────── */}
-                {flow === "register" && (
+                {flow === "register" && regStep === "form" && (
                   <div style={{paddingBottom:"8px"}}>
                     <button onClick={()=>{setFlow("login");setError("");}} style={{display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#94A3B8",fontSize:"13px",cursor:"pointer",marginBottom:"12px",padding:0}}>
                       <ArrowLeft size={14}/> Back to sign in
                     </button>
                     <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 4px"}}>Create Your Organization</h2>
                     <p style={{color:card.sub,fontSize:"12px",marginBottom:"16px"}}>Set up your workspace. You'll be the admin.</p>
-                    <form onSubmit={handleRegister} style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+                    <form onSubmit={handleSendSignupOtp} style={{display:"flex",flexDirection:"column",gap:"10px"}}>
                       {[
                         {icon:Building2, key:"org",  label:"Organization Name", ph:"Amazon India",         type:"text"  },
                         {icon:Users,     key:"name", label:"Admin Full Name",   ph:"Ravi Kumar",           type:"text"  },
@@ -414,7 +430,36 @@ export default function Login() {
                       {error && <div style={{borderRadius:"10px",padding:"8px 12px",background:"#FEF2F2",color:"#DC2626",fontSize:"12px",border:"1px solid #FECACA"}}>{error}</div>}
                       <button type="submit" disabled={loading}
                               style={{width:"100%",borderRadius:"12px",padding:"13px",fontSize:"14px",fontWeight:700,color:"white",border:"none",cursor:loading?"not-allowed":"pointer",background:loading?"#93C5FD":"linear-gradient(135deg,#1D4ED8,#3B82F6)",boxShadow:"0 8px 24px rgba(37,99,235,0.35)",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}>
-                        {loading ? "Creating account…" : <><UserPlus size={15}/> Create Account</>}
+                        {loading ? "Sending OTP…" : <><Mail size={15}/> Send OTP</>}
+                      </button>
+                    </form>
+                  </div>
+                )}
+
+                {/* ── REGISTER — OTP Verification step ─────────── */}
+                {flow === "register" && regStep === "otp" && (
+                  <div style={{paddingBottom:"8px"}}>
+                    <button onClick={()=>{setRegStep("form");setError("");}} style={{display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#94A3B8",fontSize:"13px",cursor:"pointer",marginBottom:"12px",padding:0}}>
+                      <ArrowLeft size={14}/> Back to details
+                    </button>
+                    <div style={{width:"52px",height:"52px",borderRadius:"50%",background:"linear-gradient(135deg,#EFF6FF,#DBEAFE)",border:"2px solid #93C5FD",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 14px"}}>
+                      <ShieldCheck size={24} color="#2563EB"/>
+                    </div>
+                    <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 4px",textAlign:"center"}}>Verify Your Email</h2>
+                    <p style={{color:card.sub,fontSize:"12px",marginBottom:"16px",textAlign:"center"}}>We sent a 6-digit code to <strong>{reg.email}</strong></p>
+                    <form onSubmit={handleVerifySignupOtp} style={{display:"flex",flexDirection:"column",gap:"10px"}}>
+                      <div>
+                        <label style={{fontSize:"10px",fontWeight:700,color:card.label,letterSpacing:"0.1em",display:"block",marginBottom:"5px",textAlign:"center"}}>ENTER OTP</label>
+                        <input type="text" inputMode="numeric" maxLength={6} required
+                               value={regOtp}
+                               onChange={e=>setRegOtp(e.target.value.replace(/\D/g,"").slice(0,6))}
+                               placeholder="000000"
+                               style={{...inputStyle(!!regOtp),padding:"14px",textAlign:"center",fontSize:"24px",letterSpacing:"12px",fontWeight:900}}/>
+                      </div>
+                      {error && <div style={{borderRadius:"10px",padding:"8px 12px",background:"#FEF2F2",color:"#DC2626",fontSize:"12px",border:"1px solid #FECACA"}}>{error}</div>}
+                      <button type="submit" disabled={loading||regOtp.length!==6}
+                              style={{width:"100%",borderRadius:"12px",padding:"13px",fontSize:"14px",fontWeight:700,color:"white",border:"none",cursor:loading||regOtp.length!==6?"not-allowed":"pointer",background:loading||regOtp.length!==6?"#93C5FD":"linear-gradient(135deg,#059669,#10B981)",boxShadow:"0 8px 24px rgba(16,185,129,0.35)",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}>
+                        {loading ? "Verifying…" : <><ShieldCheck size={15}/> Verify & Create Account</>}
                       </button>
                     </form>
 

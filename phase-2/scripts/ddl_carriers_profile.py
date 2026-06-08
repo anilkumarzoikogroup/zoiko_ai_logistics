@@ -22,6 +22,7 @@ DDL = [
     )""",
 
     "ALTER TABLE carriers ADD CONSTRAINT IF NOT EXISTS uq_carrier_tenant UNIQUE (tenant_id, name)",
+    "ALTER TABLE carriers ADD COLUMN IF NOT EXISTS cc_emails TEXT NOT NULL DEFAULT ''",
 
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS address TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS city TEXT NOT NULL DEFAULT ''",
@@ -29,6 +30,40 @@ DDL = [
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS pincode TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS phone TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS email TEXT NOT NULL DEFAULT ''",
+
+    "ALTER TABLE password_reset_otp ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0",
+
+    """CREATE TABLE IF NOT EXISTS signup_verification (
+        id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email            TEXT NOT NULL,
+        org_name         TEXT NOT NULL,
+        admin_name       TEXT NOT NULL,
+        password_hash    TEXT NOT NULL,
+        otp_hash         TEXT NOT NULL,
+        failed_attempts  INTEGER NOT NULL DEFAULT 0,
+        expires_at       TIMESTAMPTZ NOT NULL,
+        used_at          TIMESTAMPTZ,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""",
+
+    """CREATE TABLE IF NOT EXISTS password_reset_otp (
+        id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email            TEXT NOT NULL,
+        otp              TEXT NOT NULL,
+        expires_at       TIMESTAMPTZ NOT NULL,
+        used_at          TIMESTAMPTZ,
+        failed_attempts  INTEGER NOT NULL DEFAULT 0,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""",
+
+    """CREATE TABLE IF NOT EXISTS password_reset_verify (
+        id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        email        TEXT NOT NULL,
+        verify_hash  TEXT NOT NULL,
+        expires_at   TIMESTAMPTZ NOT NULL,
+        used_at      TIMESTAMPTZ,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""",
 ]
 
 def run():

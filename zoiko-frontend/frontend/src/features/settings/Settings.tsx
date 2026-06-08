@@ -477,7 +477,7 @@ function CarriersTab() {
   const toast = useToast();
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState({ name: "", email: "", address: "", contact_person: "", contact_phone: "" });
+  const [form, setForm] = useState({ name: "", email: "", address: "", contact_person: "", contact_phone: "", cc_emails: "" });
 
   const carriersQ = useQuery({
     queryKey: ["carriers"],
@@ -516,12 +516,12 @@ function CarriersTab() {
   function resetForm() {
     setShowForm(false);
     setEditId(null);
-    setForm({ name: "", email: "", address: "", contact_person: "", contact_phone: "" });
+    setForm({ name: "", email: "", address: "", contact_person: "", contact_phone: "", cc_emails: "" });
   }
 
   function editCarrier(c: any) {
     setEditId(c.id);
-    setForm({ name: c.name, email: c.email, address: c.address, contact_person: c.contact_person, contact_phone: c.contact_phone });
+    setForm({ name: c.name, email: c.email, address: c.address, contact_person: c.contact_person, contact_phone: c.contact_phone, cc_emails: c.cc_emails || "" });
     setShowForm(true);
   }
 
@@ -578,6 +578,13 @@ function CarriersTab() {
               <input type="text" placeholder="+91 98765 43210"
                 value={form.contact_phone}
                 onChange={e => setForm(f => ({ ...f, contact_phone: e.target.value }))}
+                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div className="col-span-2 space-y-1">
+              <label className="text-xs font-medium text-slate-600">CC Emails <span className="text-muted-foreground font-normal">(comma-separated — auto-CC'd when sending dispute)</span></label>
+              <input type="text" placeholder="finance@bluedart.com, disputes@bluedart.com"
+                value={form.cc_emails}
+                onChange={e => setForm(f => ({ ...f, cc_emails: e.target.value }))}
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
             </div>
           </div>
