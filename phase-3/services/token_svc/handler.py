@@ -9,7 +9,7 @@ Token fields (from DB schema):
 
 The token_hash + signature are what Phase 4 verifies at the 8-gate Execution Gateway.
 """
-import hashlib, json, os, uuid
+import hashlib, os, uuid
 from datetime import datetime, timezone, timedelta
 
 import paths  # noqa: F401

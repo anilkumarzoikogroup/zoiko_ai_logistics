@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import uuid
 from datetime import datetime
 from typing import Optional

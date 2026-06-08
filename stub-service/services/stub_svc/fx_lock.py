@@ -97,7 +97,7 @@ def validate(lock_id: str, amount_usd: float) -> bool:
 
 
 def _call_real_api(amount: float, currency: str, envelope_id: str, api_url: str) -> FXLockResult:
-    import urllib.request, json, uuid
+    import urllib.request, json
     payload = json.dumps({"amount": amount, "currency": currency, "ref": envelope_id}).encode()
     req = urllib.request.Request(
         f"{api_url}/lock", data=payload,

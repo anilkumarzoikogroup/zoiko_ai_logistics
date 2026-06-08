@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 _DOMAIN_TAG = b"zoiko/v1/acr"
@@ -91,7 +90,6 @@ def verify_bundle(bundle: dict) -> VerifyResult:
             pub_b64 = pub_keys[kid]
             if pub_b64:
                 import base64
-                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
                 from cryptography.hazmat.primitives.serialization import load_der_public_key
                 pub_der = base64.b64decode(pub_b64)
                 pub_key = load_der_public_key(pub_der)

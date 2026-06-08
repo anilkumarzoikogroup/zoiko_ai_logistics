@@ -17,14 +17,13 @@ Public paths (e.g. /health, /metrics) are configurable skip list.
 """
 from __future__ import annotations
 
-import time
 from typing import Callable, Awaitable, Set
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .claims import ZoikoClaims, TenantContext
+from .claims import TenantContext
 from .token_verifier import TokenVerifier, TokenExpiredError, TokenInvalidError
 
 

@@ -1,0 +1,43 @@
+name: Deploy Backend → Render
+
+# Only fires after "Zoiko CI" completes successfully on main.
+# Render's autoDeploy is OFF — this workflow is the single deploy trigger.
+on:
+  workflow_run:
+    workflows: ["Zoiko CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to Render (production)
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      # Trigger Render deploy via deploy hook (set RENDER_DEPLOY_HOOK_URL in GitHub Secrets)
+      # Get it from: Render dashboard → your service → Settings → Deploy Hook
+      - name: Trigger Render deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" \
+            --fail \
+            --silent \
+            --show-error
+
+      # Render free plan cold starts can take 2–3 min — poll until healthy
+      - name: Wait for Render to come up
+        run: |
+          echo "Waiting for Render deploy to complete..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+              https://zoiko-ai-logistics.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend is healthy."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "Smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true   # alert but don't roll back automatically yet

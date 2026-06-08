@@ -11,10 +11,9 @@ import hashlib
 import hmac
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import (
-    Encoding, PublicFormat, PrivateFormat, NoEncryption
+    Encoding, PublicFormat
 )
 
-from .hierarchy import KeyPurpose
 
 
 class LocalKMSBackend:

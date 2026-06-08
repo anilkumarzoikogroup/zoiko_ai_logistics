@@ -5,13 +5,12 @@ import { login as loginAction } from "@/store/authSlice";
 import {
   Eye, EyeOff, Mail, Lock, Shield, FileText, BarChart2, Rocket,
   Users, ArrowLeft, CheckCircle2, Moon, Sun, ShieldCheck, Zap, Globe,
-  UserPlus, Building2, Phone,
+  UserPlus, Building2,
 } from "lucide-react";
 import axios from "axios";
 
 const API = import.meta.env.VITE_API_BASE || "/api";
 type Flow = "login" | "recovery" | "recovery-sent" | "register" | "register-sent";
-type Role = "analyst" | "manager" | "admin";
 
 const FEATURES = [
   { icon: Shield,    color: "#60A5FA", title: "AI-Powered Validation",   desc: "Intelligent checks and risk detection"        },
@@ -25,12 +24,6 @@ const STATS = [
   { value: "99.9%", label: "Data Accuracy",       color: "#34D399" },
   { value: "24/7",  label: "AI Monitoring",       color: "#A78BFA" },
   { value: "50+",   label: "Enterprises",         color: "#F472B6" },
-];
-
-const ROLES: { id: Role; label: string; icon: React.ElementType }[] = [
-  { id: "analyst", label: "Analyst", icon: BarChart2 },
-  { id: "manager", label: "Manager", icon: Users     },
-  { id: "admin",   label: "Admin",   icon: Shield    },
 ];
 
 // Google G SVG — fixed size, no Tailwind classes
@@ -49,7 +42,6 @@ export default function Login() {
   const nav      = useNavigate();
   const dispatch = useAppDispatch();
   const [flow, setFlow]         = useState<Flow>("login");
-  const [role, setRole]         = useState<Role>("analyst");
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw]     = useState(false);
@@ -58,26 +50,28 @@ export default function Login() {
   const [error, setError]       = useState("");
   const [recEmail, setRecEmail]   = useState("");
   const [dark, setDark]           = useState(true);
-  const [reg, setReg]             = useState({ name:"", email:"", company:"", phone:"" });
+  const [reg, setReg]             = useState({ org:"", name:"", email:"", password:"" });
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError("");
     try {
-      await axios.post(`${API}/v1/auth/workspace-request`, {
-        full_name:        reg.name,
-        work_email:       reg.email,
-        company_name:     reg.company,
-        company_website:  "",
-        country:          "India",
-        role:             "Logistics Manager",
-        use_case:         "Freight overcharge detection",
-        team_size:        "10-50",
-        heard_from:       "Direct",
-        consent:          true,
+      const { data } = await axios.post(`${API}/v1/auth/org-signup`, {
+        org_name:       reg.org,
+        admin_name:     reg.name,
+        admin_email:    reg.email,
+        admin_password: reg.password,
       });
-      setFlow("register-sent");
-    } catch {
-      setError("Request failed. Please try again.");
+      dispatch(loginAction({
+        token:    data.token,
+        tenantId: data.tenant_id,
+        role:     data.role,
+        user:     data.full_name,
+        sub:      data.email,
+      }));
+      nav("/");
+    } catch (err: unknown) {
+      const msg = axios.isAxiosError(err) ? err.response?.data?.detail : null;
+      setError(typeof msg === "string" ? msg : "Registration failed. Please try again.");
     } finally { setLoading(false); }
   }
   const [time, setTime]         = useState(new Date());
@@ -287,19 +281,7 @@ export default function Login() {
                     <p style={{color:card.sub,fontSize:"13px",margin:"4px 0 0",transition:"color .3s"}}>Sign in to your Zoiko AI Logistics account</p>
                   </div>
 
-                  {/* Role tabs */}
-                  <div style={{marginBottom:"14px"}}>
-                    <p style={{fontSize:"11px",fontWeight:700,color:card.label,letterSpacing:"0.1em",marginBottom:"8px"}}>LOGIN AS</p>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:"8px"}}>
-                      {ROLES.map(r=>(
-                        <button key={r.id} onClick={()=>setRole(r.id)}
-                                style={{display:"flex",flexDirection:"column",alignItems:"center",gap:"4px",padding:"10px 8px",borderRadius:"12px",border:`1.5px solid ${role===r.id?"#93C5FD":inp.border}`,background:role===r.id?"linear-gradient(135deg,#EFF6FF,#DBEAFE)":inp.bg,color:role===r.id?"#1D4ED8":card.label,fontWeight:700,fontSize:"12px",cursor:"pointer",transition:"all .2s",boxShadow:role===r.id?"0 4px 12px rgba(37,99,235,0.15)":"none"}}>
-                          <r.icon size={15}/>
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+
 
                   {/* Form */}
                   <form onSubmit={handleLogin}>
@@ -384,20 +366,20 @@ export default function Login() {
                   </div>
                 </>}
 
-                {/* ── REGISTER ────────────────────────────────── */}
+                {/* ── REGISTER — Organization Signup ────────────── */}
                 {flow === "register" && (
                   <div style={{paddingBottom:"8px"}}>
                     <button onClick={()=>{setFlow("login");setError("");}} style={{display:"flex",alignItems:"center",gap:"6px",background:"none",border:"none",color:"#94A3B8",fontSize:"13px",cursor:"pointer",marginBottom:"12px",padding:0}}>
                       <ArrowLeft size={14}/> Back to sign in
                     </button>
-                    <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 4px"}}>Request Access</h2>
-                    <p style={{color:card.sub,fontSize:"12px",marginBottom:"16px"}}>Submit your details. Our team will set up your account.</p>
+                    <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 4px"}}>Create Your Organization</h2>
+                    <p style={{color:card.sub,fontSize:"12px",marginBottom:"16px"}}>Set up your workspace. You'll be the admin.</p>
                     <form onSubmit={handleRegister} style={{display:"flex",flexDirection:"column",gap:"10px"}}>
                       {[
-                        {icon:Users,     key:"name",    label:"Full Name",    ph:"Ravi Kumar",             type:"text"  },
-                        {icon:Mail,      key:"email",   label:"Work Email",   ph:"ravi@yourcompany.com",   type:"email" },
-                        {icon:Building2, key:"company", label:"Company Name", ph:"Amazon India",           type:"text"  },
-                        {icon:Phone,     key:"phone",   label:"Phone",        ph:"+91 98765 43210",        type:"tel"   },
+                        {icon:Building2, key:"org",  label:"Organization Name", ph:"Amazon India",         type:"text"  },
+                        {icon:Users,     key:"name", label:"Admin Full Name",   ph:"Ravi Kumar",           type:"text"  },
+                        {icon:Mail,      key:"email",label:"Admin Work Email",  ph:"ravi@amazon.in",       type:"email" },
+                        {icon:Lock,      key:"password",label:"Password",       ph:"At least 8 characters", type:"password" },
                       ].map(f=>(
                         <div key={f.key}>
                           <label style={{fontSize:"10px",fontWeight:700,color:card.label,letterSpacing:"0.1em",display:"block",marginBottom:"5px"}}>{f.label.toUpperCase()}</label>
@@ -415,23 +397,9 @@ export default function Login() {
                       {error && <div style={{borderRadius:"10px",padding:"8px 12px",background:"#FEF2F2",color:"#DC2626",fontSize:"12px",border:"1px solid #FECACA"}}>{error}</div>}
                       <button type="submit" disabled={loading}
                               style={{width:"100%",borderRadius:"12px",padding:"13px",fontSize:"14px",fontWeight:700,color:"white",border:"none",cursor:loading?"not-allowed":"pointer",background:loading?"#93C5FD":"linear-gradient(135deg,#1D4ED8,#3B82F6)",boxShadow:"0 8px 24px rgba(37,99,235,0.35)",display:"flex",alignItems:"center",justifyContent:"center",gap:"8px"}}>
-                        {loading ? "Submitting…" : <><UserPlus size={15}/> Request Access</>}
+                        {loading ? "Creating account…" : <><UserPlus size={15}/> Create Account</>}
                       </button>
                     </form>
-                  </div>
-                )}
-
-                {flow === "register-sent" && (
-                  <div style={{textAlign:"center",padding:"16px 0 24px"}}>
-                    <div style={{width:"60px",height:"60px",borderRadius:"50%",background:"linear-gradient(135deg,#ECFDF5,#D1FAE5)",border:"2px solid #6EE7B7",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 16px"}}>
-                      <CheckCircle2 size={28} color="#10B981"/>
-                    </div>
-                    <h2 style={{fontSize:"20px",fontWeight:900,color:card.heading,margin:"0 0 6px"}}>Request Submitted!</h2>
-                    <p style={{color:card.sub,fontSize:"13px",marginBottom:"6px"}}>Our team will review your request and contact you within 24 hours.</p>
-                    <p style={{color:"#94A3B8",fontSize:"12px",marginBottom:"16px"}}>Check your email: <strong>{reg.email}</strong></p>
-                    <button onClick={()=>{setFlow("login");setError("");}} style={{background:"none",border:"none",color:"#2563EB",fontSize:"13px",fontWeight:700,cursor:"pointer"}}>
-                      Return to sign in
-                    </button>
                   </div>
                 )}
 

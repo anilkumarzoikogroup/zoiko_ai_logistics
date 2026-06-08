@@ -134,6 +134,7 @@ services:
       ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
       ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
       ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
       SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
       FX_STRICT:           ${FX_STRICT:-false}
       CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}

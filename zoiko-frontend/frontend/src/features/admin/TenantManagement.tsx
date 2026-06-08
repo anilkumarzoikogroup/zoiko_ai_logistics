@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi, type TenantItem, type TenantCreateRequest } from "@/api/zoiko";
-import { Building2, Plus, Users, CheckCircle2, XCircle, Loader2, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { Building2, Users, Loader2, RefreshCw } from "lucide-react";
 
 const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
   ACTIVE:      { color: "#22c55e", bg: "rgba(34,197,94,0.12)"  },
@@ -9,17 +9,14 @@ const STATUS_STYLE: Record<string, { color: string; bg: string }> = {
   OFFBOARDED:  { color: "#ef4444", bg: "rgba(239,68,68,0.12)"  },
 };
 
-function slugify(name: string) {
-  return name.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-}
+const EMPTY: TenantCreateRequest = { display_name: "", slug: "", admin_email: "", admin_name: "", admin_password: "" };
 
-const EMPTY: TenantCreateRequest = {
-  display_name: "", slug: "", admin_email: "", admin_name: "", admin_password: "",
-};
+function slugify(val: string) {
+  return val.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
 
 export default function TenantManagement() {
   const qc = useQueryClient();
-
   const { data: tenants = [], isLoading, refetch } = useQuery({
     queryKey: ["tenants"],
     queryFn:  () => zoikoApi.listTenants(),
@@ -66,122 +63,16 @@ export default function TenantManagement() {
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <Building2 style={{ width: 20, height: 20, color: "#60a5fa" }} />
           <div>
-            <h1 style={{ fontSize: 18, fontWeight: 700, color: "#1e293b", margin: 0 }}>Tenant Management</h1>
-            <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>Add and manage client companies on this platform</p>
+            <h1 style={{ fontSize: 18, fontWeight: 700, color: "#1e293b", margin: 0 }}>My Organization</h1>
+            <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>Your organization details — only your own tenant is visible</p>
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => refetch()} style={btnStyle("ghost")}>
             <RefreshCw style={{ width: 14, height: 14 }} />
           </button>
-          <button onClick={() => { setShowForm(true); setSuccess(""); setError(""); }} style={btnStyle("primary")}>
-            <Plus style={{ width: 14, height: 14 }} /> Add New Client
-          </button>
         </div>
       </div>
-
-      {/* Feedback banners */}
-      {success && (
-        <div style={{ ...banner, background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)", color: "#16a34a", marginBottom: 16 }}>
-          <CheckCircle2 style={{ width: 15, height: 15 }} /> {success}
-        </div>
-      )}
-      {error && (
-        <div style={{ ...banner, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", color: "#dc2626", marginBottom: 16 }}>
-          <XCircle style={{ width: 15, height: 15 }} /> {error}
-        </div>
-      )}
-
-      {/* Add New Client Form */}
-      {showForm && (
-        <div style={{
-          background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12,
-          padding: 24, marginBottom: 24, boxShadow: "0 1px 8px rgba(0,0,0,0.06)",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-            <h2 style={{ fontSize: 15, fontWeight: 700, color: "#1e293b", margin: 0 }}>Add New Client</h2>
-            <button onClick={() => setShowForm(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "#94a3b8", fontSize: 18 }}>×</button>
-          </div>
-
-          <form onSubmit={handleSubmit}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
-              <Field label="Company Name" required>
-                <input
-                  value={form.display_name}
-                  onChange={e => handleNameChange(e.target.value)}
-                  placeholder="e.g. Amazon India"
-                  style={inputStyle}
-                />
-              </Field>
-              <Field label="URL Slug" required hint="Auto-generated, must be unique">
-                <input
-                  value={form.slug}
-                  onChange={e => setForm(f => ({ ...f, slug: slugify(e.target.value) }))}
-                  placeholder="e.g. amazon-india"
-                  style={inputStyle}
-                />
-              </Field>
-              <Field label="Admin Full Name" required>
-                <input
-                  value={form.admin_name}
-                  onChange={e => setForm(f => ({ ...f, admin_name: e.target.value }))}
-                  placeholder="e.g. Ravi Kumar"
-                  style={inputStyle}
-                />
-              </Field>
-              <Field label="Admin Email" required>
-                <input
-                  type="email"
-                  value={form.admin_email}
-                  onChange={e => setForm(f => ({ ...f, admin_email: e.target.value }))}
-                  placeholder="e.g. ravi.k@amazon.in"
-                  style={inputStyle}
-                />
-              </Field>
-              <Field label="Admin Password" required>
-                <div style={{ position: "relative" }}>
-                  <input
-                    type={showPw ? "text" : "password"}
-                    value={form.admin_password}
-                    onChange={e => setForm(f => ({ ...f, admin_password: e.target.value }))}
-                    placeholder="Minimum 8 characters"
-                    style={{ ...inputStyle, paddingRight: 36 }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPw(v => !v)}
-                    style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "#94a3b8" }}
-                  >
-                    {showPw ? <EyeOff style={{ width: 15, height: 15 }} /> : <Eye style={{ width: 15, height: 15 }} />}
-                  </button>
-                </div>
-              </Field>
-            </div>
-
-            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#64748b" }}>
-              This creates the tenant record and an <strong>admin</strong> user in one step.
-              The admin can then invite analysts and managers from the Users page.
-            </div>
-
-            {error && (
-              <div style={{ ...banner, background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", color: "#dc2626", marginBottom: 12 }}>
-                <XCircle style={{ width: 14, height: 14 }} /> {error}
-              </div>
-            )}
-
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button type="button" onClick={() => setShowForm(false)} style={btnStyle("ghost")}>Cancel</button>
-              <button type="submit" disabled={mutation.isPending} style={btnStyle("primary")}>
-                {mutation.isPending
-                  ? <><Loader2 style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} /> Creating…</>
-                  : <><Plus style={{ width: 14, height: 14 }} /> Create Tenant</>
-                }
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
       {/* Tenants table */}
       <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
         <div style={{ padding: "14px 20px", borderBottom: "1px solid #f1f5f9", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -198,8 +89,8 @@ export default function TenantManagement() {
         ) : tenants.length === 0 ? (
           <div style={{ padding: 48, textAlign: "center" }}>
             <Building2 style={{ width: 32, height: 32, color: "#cbd5e1", margin: "0 auto 12px" }} />
-            <p style={{ fontSize: 14, color: "#64748b", margin: 0 }}>No tenants yet</p>
-            <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Click "Add New Client" to onboard your first company</p>
+            <p style={{ fontSize: 14, color: "#64748b", margin: 0 }}>No organization info found</p>
+            <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Contact support if this persists.</p>
           </div>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -261,31 +152,6 @@ export default function TenantManagement() {
     </div>
   );
 }
-
-function Field({ label, children, required, hint }: {
-  label: string; children: React.ReactNode; required?: boolean; hint?: string;
-}) {
-  return (
-    <div>
-      <label style={{ fontSize: 12, fontWeight: 600, color: "#475569", display: "block", marginBottom: 5 }}>
-        {label}{required && <span style={{ color: "#ef4444", marginLeft: 2 }}>*</span>}
-        {hint && <span style={{ fontWeight: 400, color: "#94a3b8", marginLeft: 6 }}>— {hint}</span>}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-const inputStyle: React.CSSProperties = {
-  width: "100%", padding: "8px 12px", borderRadius: 7,
-  border: "1px solid #e2e8f0", fontSize: 13, color: "#1e293b",
-  outline: "none", boxSizing: "border-box", background: "#fff",
-};
-
-const banner: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8,
-  padding: "9px 14px", borderRadius: 8, fontSize: 13,
-};
 
 function btnStyle(variant: "primary" | "ghost"): React.CSSProperties {
   return {

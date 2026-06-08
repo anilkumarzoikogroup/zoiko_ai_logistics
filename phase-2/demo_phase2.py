@@ -9,7 +9,6 @@ Shows the 4 Phase 2 services chained in sequence.
 """
 import sys, os, uuid
 sys.path.insert(0, os.path.dirname(__file__))
-import paths  # sets up Phase 0 + Phase 1 sys.path
 
 # ── colour helpers ─────────────────────────────────────────────────────────────
 GREEN  = "\033[92m"; RED    = "\033[91m"; YELLOW = "\033[93m"
@@ -76,11 +75,11 @@ invoice   = InvoiceInput(
 sub("Running 5-step ingestion write pattern")
 ing_result = ingestion.ingest_invoice(TENANT_ID, invoice)
 
-ok(f"Step 1 — JCS canonicalize: keys sorted Unicode, deterministic bytes")
+ok("Step 1 — JCS canonicalize: keys sorted Unicode, deterministic bytes")
 ok(f"Step 2 — SHA-256(domain_tag + canonical_bytes) = {ing_result.canonical_hash[:32]}...")
-ok(f"Step 3 — Encrypted (ciphertext stored in source_records.ciphertext)")
-ok(f"Step 4 — DB transaction: source_records + outbox inserted atomically")
-ok(f"Step 5 — Kafka published: invoice.received")
+ok("Step 3 — Encrypted (ciphertext stored in source_records.ciphertext)")
+ok("Step 4 — DB transaction: source_records + outbox inserted atomically")
+ok("Step 5 — Kafka published: invoice.received")
 ok(f"source_record_id = {ing_result.source_record_id}")
 info(f"Idempotency key: {ing_result.idempotency_key}")
 info(f"Kafka messages on invoice.received: {broker.message_count('invoice.received')}")
@@ -139,7 +138,7 @@ ok(f"canonical_invoice_id  = {can_result.canonical_invoice_id}")
 ok(f"canonical_shipment_id = {can_result.canonical_shipment_id}")
 ok(f"canonical_hash        = {can_result.canonical_hash[:32]}...")
 info("This hash is THE reference — evidence, reasoning, ACR all anchor to it")
-ok(f"Kafka published: invoice.canonical")
+ok("Kafka published: invoice.canonical")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SERVICE 4 — CASE ORCHESTRATION
@@ -154,8 +153,8 @@ case_result = orchestrator.open_case(TENANT_ID, can_result.canonical_invoice_id,
 ok(f"case_id   = {case_result.case_id}")
 ok(f"state     = {case_result.state}")
 ok(f"is_new    = {case_result.is_new}")
-ok(f"APPEND-ONLY case_event logged: CASE_OPENED → OPENED")
-ok(f"Kafka published: case.opened")
+ok("APPEND-ONLY case_event logged: CASE_OPENED → OPENED")
+ok("Kafka published: case.opened")
 
 sub("State machine transitions")
 for from_s, to_s, actor in [
@@ -168,7 +167,7 @@ for from_s, to_s, actor in [
 
 sub("Idempotency: opening same case twice → same case_id")
 r2 = orchestrator.open_case(TENANT_ID, can_result.canonical_invoice_id)
-ok(f"Duplicate open attempt: is_new=False, case_id unchanged — idempotency works") if not r2.is_new else fail("BUG: second open was treated as new case")
+ok("Duplicate open attempt: is_new=False, case_id unchanged — idempotency works") if not r2.is_new else fail("BUG: second open was treated as new case")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # KAFKA SUMMARY

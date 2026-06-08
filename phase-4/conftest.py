@@ -24,12 +24,9 @@ def _db_available() -> bool:
         return False
 
 
-_DB_UP = _db_available()
-
-
 @pytest.fixture(scope="session")
 def db_url():
-    if not _DB_UP:
+    if not _db_available():
         pytest.skip("PostgreSQL not reachable")
     return DB_URL
 

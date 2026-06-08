@@ -4,12 +4,16 @@ from __future__ import annotations
 import os
 from logging.config import fileConfig
 
+from dotenv import load_dotenv
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+# Load .env first so DB_URL is available in both local dev and CI
+load_dotenv()
+
 config = context.config
 
-# Substitute DB_URL from environment if not already set in alembic.ini
+# Substitute DB_URL from environment (env var wins over alembic.ini default)
 db_url = os.environ.get("DB_URL")
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)

@@ -74,6 +74,35 @@ export default function AuditConditions() {
         </p>
       </div>
 
+      {/* SC-001 Ruleset */}
+      <div className="rounded-xl border border-blue-200 bg-blue-50 p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-xs font-bold bg-blue-600 text-white px-2.5 py-0.5 rounded-full">SC-001</span>
+          <h2 className="text-sm font-bold text-blue-900">Active Ruleset — Freight Overcharge Detection</h2>
+          <span className="ml-auto text-xs font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">ACTIVE</span>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { rule: "FUEL_CHARGE",   confidence: "100%", weight: "50%", desc: "Exact contract fuel rate match — disallowed surcharges flagged" },
+            { rule: "ACCESSORIAL",   confidence: "92%",  weight: "50%", desc: "Unauthorized accessorial charges not in contract" },
+          ].map(r => (
+            <div key={r.rule} className="bg-white rounded-lg p-3 border border-blue-100">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-bold text-slate-700">{r.rule}</span>
+                <div className="flex gap-2">
+                  <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-bold">Confidence {r.confidence}</span>
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold">Weight {r.weight}</span>
+                </div>
+              </div>
+              <p className="text-xs text-slate-500">{r.desc}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-blue-600 mt-3 font-medium">
+          Combined AI Confidence: <strong>96%</strong> (= 50% × 100% + 50% × 92%) — deterministic, never changes
+        </p>
+      </div>
+
       {caseList.length === 0 ? (
         <Card>
           <CardContent className="flex items-center justify-center py-16 text-sm text-muted-foreground">

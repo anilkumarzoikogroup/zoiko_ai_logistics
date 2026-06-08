@@ -7,7 +7,7 @@ Supports multiple topics, consumer groups, and per-group offset tracking.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Any
+from typing import Dict, List
 
 
 class MockKafkaBroker:

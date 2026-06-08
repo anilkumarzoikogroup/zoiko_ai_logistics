@@ -9,8 +9,7 @@ Run:
     cd phase-1
     py -3.13 demo_connected.py
 """
-import sys, os, json, hashlib, uuid
-from datetime import datetime, timezone
+import sys, os, hashlib, uuid
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -46,8 +45,8 @@ def info(msg): print(f"  {C}ℹ   {msg}{RS}")
 def arrow(msg):print(f"  {W}➜   {msg}{RS}")
 def box(lines):
     print(f"  {B}┌{'─'*56}┐{RS}")
-    for l in lines:
-        print(f"  {B}│{RS}  {l:<54}{B}│{RS}")
+    for line in lines:
+        print(f"  {B}│{RS}  {line:<54}{B}│{RS}")
     print(f"  {B}└{'─'*56}┘{RS}")
 
 
@@ -117,11 +116,11 @@ for k, v in raw_invoice.items():
 phase(0, "Step 2 — JCS Canonicalize (RFC 8785)")
 canon = canonicalize(raw_invoice)
 ok(f"Canonical bytes: {canon.decode()[:60]}...")
-ok(f"Keys are sorted, no spaces — byte-identical on ANY machine")
+ok("Keys are sorted, no spaces — byte-identical on ANY machine")
 
 phase(0, "Step 3 — Domain-Tagged SHA-256 Hash")
 invoice_hash = hash_leaf("zoiko/v1/source-record", canon)
-ok(f"hash(zoiko/v1/source-record + canonical) =")
+ok("hash(zoiko/v1/source-record + canonical) =")
 ok(f"  {invoice_hash.hex()}")
 info("Same domain tag = always same hash for this invoice")
 info("Different domain tag = completely different hash (prevents swapping)")
@@ -131,7 +130,7 @@ signer   = ZoikoSigner(LocalEd25519Backend())
 envelope = signer.sign(invoice_hash)
 ok(f"Signature:  {bytes(envelope.signature).hex()[:40]}...  (64 bytes)")
 ok(f"Key ID:     {envelope.kid}")
-ok(f"Stored in:  source_records, canonical_invoices, cases (26 tables)")
+ok("Stored in:  source_records, canonical_invoices, cases (26 tables)")
 
 phase(0, "Step 5 — AI Detects Overcharge")
 fuel_conf = 1.00   # exact match $120 == $120
@@ -139,10 +138,10 @@ acc_conf  = 0.92   # $100 billed, $0 in contract
 combined  = 0.96
 box([
     "AI Analysis Result:",
-    f"  Fuel charge:  $120 billed / $120 allowed  → OK   (conf=1.00)",
-    f"  Accessorial:  $100 billed / $0   allowed  → OVERCHARGE (conf=0.92)",
-    f"  Combined confidence: 0.96  (96%)",
-    f"  Proposed recovery:  $100.00 USD",
+    "  Fuel charge:  $120 billed / $120 allowed  → OK   (conf=1.00)",
+    "  Accessorial:  $100 billed / $0   allowed  → OVERCHARGE (conf=0.92)",
+    "  Combined confidence: 0.96  (96%)",
+    "  Proposed recovery:  $100.00 USD",
 ])
 
 phase(0, "Step 6 — ACR Merkle Tree (tamper-proof audit record)")
@@ -150,7 +149,7 @@ artifacts = {
     "source_record":     hashlib.sha256(b"source").digest(),
     "validation_result": hashlib.sha256(b"PASS").digest(),
     "canonical_invoice": invoice_hash,
-    "finding":           hashlib.sha256(f"confidence=0.96:OVERCHARGE".encode()).digest(),
+    "finding":           hashlib.sha256("confidence=0.96:OVERCHARGE".encode()).digest(),
     "decision_proposal": hashlib.sha256(b"RECOVER:100.00:USD").digest(),
     "gov_decision":      hashlib.sha256(b"APPROVED").digest(),
     "gov_token":         hashlib.sha256(b"EXECUTE:24h").digest(),
@@ -161,8 +160,8 @@ for d in artifacts.values():
     tree.append(d)
 merkle_root = tree.root()
 ok(f"8-artifact Merkle root: {merkle_root.hex()}")
-ok(f"Any change to any artifact changes the root completely")
-ok(f"Auditor can verify OFFLINE — zero access to Zoiko systems needed")
+ok("Any change to any artifact changes the root completely")
+ok("Auditor can verify OFFLINE — zero access to Zoiko systems needed")
 
 print(f"""
   {BO}{G}Phase 0 Summary:{RS}
@@ -269,7 +268,7 @@ for k in keys:
 
 step("KMS signs the DHL invoice hash (same hash from Phase 0)")
 backend     = LocalKMSBackend()
-sign_res    = f"dev/acme-logistics-signing-v1"
+sign_res    = "dev/acme-logistics-signing-v1"
 p1_sig      = backend.sign(sign_res, invoice_hash)
 p1_verified = backend.verify(sign_res, invoice_hash, p1_sig)
 ok(f"Invoice hash signed via KMS: {p1_sig.hex()[:32]}...")

@@ -48,7 +48,7 @@ export default function AnalystReview() {
   const nav   = useNavigate();
   const qc    = useQueryClient();
   const toast = useToast();
-  const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
+  const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases(), refetchInterval: 5000 });
   const [proposed, setProposed] = useState<Set<string>>(new Set());
 
   const queue = (cases || [])

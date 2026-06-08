@@ -140,7 +140,6 @@ export default function UserManagement() {
               >
                 <option value="analyst">Analyst — proposes recoveries</option>
                 <option value="manager">Manager — approves recoveries</option>
-                <option value="admin">Admin — full access + user mgmt</option>
               </select>
             </div>
           </div>

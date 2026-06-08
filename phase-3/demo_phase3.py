@@ -7,9 +7,8 @@ Run (from phase-3/ directory):
 SC-001 (Ravi/Ramu, Amazon, Hyderabad->Warangal, BlueDart, INR 4500 overcharge)
 Continues from Phase 2: evidence-svc → reasoning-svc → governance-svc → token-svc
 """
-import sys, os, uuid, json
+import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
-import paths  # sets up Phase 0 + Phase 1 sys.path
 
 # ── colour helpers ─────────────────────────────────────────────────────────────
 GREEN  = "\033[92m"; RED    = "\033[91m"; YELLOW = "\033[93m"
@@ -23,7 +22,7 @@ def header(t):
 def sub(t):    print(f"\n{YELLOW}{BOLD}  -- {t}{RESET}")
 
 # ── Setup ──────────────────────────────────────────────────────────────────────
-from shared.db import DB_URL, q1
+from shared.db import DB_URL
 from kafka.mock_kafka import MockKafkaBroker
 
 from services.evidence_svc.handler   import EvidenceHandler
@@ -64,7 +63,7 @@ conn.close()
 
 if not case_row:
     print(f"{RED}No active case found.  Run Phase 2 demo first:{RESET}")
-    print(f"  cd ../phase-2 && py demo_phase2.py")
+    print("  cd ../phase-2 && py demo_phase2.py")
     sys.exit(1)
 
 CASE_ID     = str(case_row["case_id"])
@@ -139,7 +138,7 @@ find_result = reasoning.analyze(
 )
 
 ok(f"Confidence score:   {find_result.confidence}  (SC-001 deterministic)")
-ok(f"Rule trace:         fuel_charge=1.00 (wt 0.5) + accessorial=0.92 (wt 0.5)")
+ok("Rule trace:         fuel_charge=1.00 (wt 0.5) + accessorial=0.92 (wt 0.5)")
 ok(f"finding_id:         {find_result.finding_id}")
 ok(f"proposal_id:        {find_result.proposal_id}  (action={find_result.proposed_action})")
 ok(f"Proposed credit:    INR {find_result.amount:.2f}")
@@ -188,7 +187,7 @@ decision = governance.decide(
 ok(f"decision_id:  {decision.decision_id}")
 ok(f"outcome:      {decision.outcome}")
 ok(f"decision_hash:{decision.decision_hash[:32]}...")
-ok(f"Case FSM: PENDING_APPROVAL -> APPROVED  (case_event appended)")
+ok("Case FSM: PENDING_APPROVAL -> APPROVED  (case_event appended)")
 info(f"Kafka: decision.made x{broker.message_count('decision.made')}")
 
 DECISION_ID = str(decision.decision_id)

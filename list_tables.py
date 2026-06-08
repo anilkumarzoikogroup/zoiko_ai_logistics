@@ -53,7 +53,7 @@ for cat, tables in categories.items():
 # Any uncategorized tables
 other = [r for r in rows if r["table_name"] not in categorized]
 if other:
-    print(f"\n  [OTHER]")
+    print("\n  [OTHER]")
     for r in other:
         print(f"    {r['table_name']:45} {r['col_count']:2} cols  {r['row_count'] or 0:>6} rows")
 

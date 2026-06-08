@@ -43,8 +43,9 @@ export default function ExecuteRecovery() {
       toast.success("Execution complete", `Case ${vars.caseId.slice(0, 8)} dispatched through all 8 gates`);
     },
     onError: (err: unknown) => {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toast.error("Execution failed", detail || "Unknown error — check backend terminal");
+      const e = err as {response?:{data?:{detail?:string}}};
+      const msg = e?.response?.data?.detail ?? "Execution failed — check backend";
+      toast.error("Execution failed", msg);
     },
   });
 
