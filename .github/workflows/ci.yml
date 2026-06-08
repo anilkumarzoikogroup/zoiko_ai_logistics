@@ -235,8 +235,10 @@ jobs:
     name: Phase 4 Tests
     runs-on: ubuntu-latest
     needs: phase1
-    env:
-      DB_URL: ${{ secrets.NEON_DB_URL }}
+    # Phase 4 tests are all unit tests (no DB required — use "unused-url" +
+    # MockKafkaBroker). The integration test is explicitly skipif(True).
+    # Running alembic in parallel with phase2/3 causes advisory lock conflicts
+    # on the shared Neon DB, so we skip migrations here entirely.
     steps:
       - uses: actions/checkout@v4
 
@@ -248,19 +250,6 @@ jobs:
 
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-
-      - name: Write .env
-        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
-
-      - name: Run migrations
-        run: alembic upgrade head
-
-      - name: Seed CI tenant
-        run: python scripts/ci_seed_tenant.py
-
-      - name: Seed contract rates
-        run: python seed_contract_rates.py
-        working-directory: phase-2
 
       - run: python -m pytest phase-4/tests/ -v --tb=short -q
 
