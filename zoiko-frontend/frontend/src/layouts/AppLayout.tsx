@@ -10,7 +10,7 @@ import {
   BarChart3, TrendingUp,
   Users, Settings, Building2,
   ChevronLeft, ChevronRight, LogOut,
-  Download, Zap, CheckSquare, FlaskConical, Sun, Moon,
+  Zap, CheckSquare, FlaskConical, Sun, Moon,
 } from "lucide-react";
 import { useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
@@ -110,8 +110,17 @@ export default function AppLayout() {
   const nav      = useNavigate();
   const location = useLocation();
   const dispatch = useAppDispatch();
-  const user     = useAppSelector(s => s.auth.user) || "User";
-  const role     = useAppSelector(s => s.auth.role) || "analyst";
+  const fullName = useAppSelector(s => s.auth.user)  || "";
+  const email    = useAppSelector(s => s.auth.sub)   || "";
+  const role     = useAppSelector(s => s.auth.role)  || "analyst";
+
+  // Display the full_name when it looks like a real name (has a space or
+  // isn't purely a role label). Fall back to the email username part.
+  const roleLabels = new Set(["freight analyst","analyst","manager","admin","platform admin","senior analyst"]);
+  const displayName = (fullName && !roleLabels.has(fullName.toLowerCase()))
+    ? fullName
+    : email.split("@")[0] || fullName || "User";
+  const user = displayName; // keep 'user' for backward compat in template
   const [collapsed, setCollapsed]   = useState(false);
   const [dateFilter, setDateFilter] = useState<DateRange>(getStoredDateFilter);
   const { theme, toggleTheme } = useTheme();
@@ -129,7 +138,10 @@ export default function AppLayout() {
     nav("/login");
   }
 
-  const initials = (user || "U").split(" ").map((w: string) => w[0] || "").join("").slice(0, 2).toUpperCase() || "U";
+  // Build initials from display name; fall back to first char of email
+  const initials = user.split(" ").filter(Boolean).map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()
+    || email.slice(0, 1).toUpperCase()
+    || "U";
 
   // ── Theme-aware class sets ─────────────────────────────────────────────────
   const sidebar = isDark
@@ -145,10 +157,6 @@ export default function AppLayout() {
   const groupLabel = isDark ? "text-slate-500" : "text-slate-400";
 
   const divider = isDark ? "border-slate-700/40" : "border-slate-200";
-
-  const headerBtn = isDark
-    ? "border-slate-700 text-slate-400 hover:bg-slate-700/60"
-    : "border-slate-200 text-slate-600 hover:bg-slate-50";
 
   const collapseBtn = isDark
     ? "text-slate-500 hover:bg-slate-700/40 hover:text-slate-300"
@@ -261,14 +269,6 @@ export default function AppLayout() {
               <ActionsMenu isDark={isDark} role={role} />
             </div>
 
-            {/* Export */}
-            <button className={cn(
-              "hidden md:flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs transition-colors",
-              headerBtn
-            )}>
-              <Download className="h-3.5 w-3.5" /> Export
-            </button>
-
             {/* ── Theme toggle ───────────────────────────────────────── */}
             <button
               onClick={toggleTheme}
@@ -298,14 +298,23 @@ export default function AppLayout() {
                 {initials}
               </div>
               <div className="hidden lg:block">
-                <p className={cn("text-xs font-semibold leading-tight", isDark ? "text-slate-200" : "text-slate-700")}>{user}</p>
-                <span style={{
-                  fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
-                  background: role === "admin" ? "#1e3a8a" : role === "manager" ? "#4c1d95" : "#064e3b",
-                  color: "#fff", textTransform: "uppercase", letterSpacing: "0.06em",
-                }}>
-                  {role}
-                </span>
+                <p className={cn("text-xs font-semibold leading-tight truncate max-w-[140px]", isDark ? "text-slate-200" : "text-slate-700")}>
+                  {user}
+                </p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span style={{
+                    fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
+                    background: role === "admin" ? "#1e3a8a" : role === "manager" ? "#4c1d95" : "#064e3b",
+                    color: "#fff", textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0,
+                  }}>
+                    {role}
+                  </span>
+                  {email && (
+                    <span className={cn("text-[9px] truncate max-w-[100px]", isDark ? "text-slate-500" : "text-slate-400")}>
+                      {email}
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Sign Out — top right, clearly visible */}
