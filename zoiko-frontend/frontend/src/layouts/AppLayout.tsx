@@ -8,8 +8,8 @@ import {
   FileClock, Truck, ShieldCheck, BookOpen,
   Key, Archive, ClipboardList,
   BarChart3, TrendingUp,
-  Users, Settings, Building2, Bell,
-  ChevronLeft, ChevronRight, LogOut, ChevronDown,
+  Users, Settings, Building2,
+  ChevronLeft, ChevronRight, LogOut,
   Download, Zap, CheckSquare, FlaskConical, Sun, Moon,
 } from "lucide-react";
 import { useState } from "react";
@@ -17,6 +17,8 @@ import { useTheme } from "@/hooks/useTheme";
 import ZoikoLogo from "@/components/ZoikoLogo";
 import GlobalSearch from "@/components/GlobalSearch";
 import DateFilter, { getStoredDateFilter, DateRange } from "@/components/DateFilter";
+import ActionsMenu from "@/components/ActionsMenu";
+import NotificationBell from "@/components/NotificationBell";
 
 const ROLE_COLORS: Record<string, string> = {
   analyst: "from-blue-500 to-blue-700",
@@ -279,13 +281,10 @@ export default function AppLayout() {
               />
             </div>
 
-            {/* Actions */}
-            <button className={cn(
-              "hidden md:flex items-center gap-1 px-3 py-1.5 rounded-lg border text-xs transition-colors",
-              headerBtn
-            )}>
-              Actions <ChevronDown className="h-3 w-3 text-slate-400" />
-            </button>
+            {/* ── Actions menu ─────────────────────────────────────── */}
+            <div className="hidden md:block">
+              <ActionsMenu isDark={isDark} role={role} />
+            </div>
 
             {/* Export */}
             <button className={cn(
@@ -312,14 +311,8 @@ export default function AppLayout() {
               }
             </button>
 
-            {/* Notifications */}
-            <button className={cn(
-              "relative p-2 rounded-lg transition-colors",
-              isDark ? "hover:bg-slate-700/60" : "hover:bg-slate-50"
-            )}>
-              <Bell className={cn("h-4 w-4", isDark ? "text-slate-400" : "text-slate-500")} />
-              <span className="absolute top-1 right-1 h-3.5 w-3.5 bg-red-500 rounded-full text-[8px] text-white flex items-center justify-center font-bold">3</span>
-            </button>
+            {/* ── Notifications (real-time) ──────────────────────── */}
+            <NotificationBell isDark={isDark} role={role} />
 
             {/* User pill */}
             <div className={cn("flex items-center gap-2 pl-2 border-l", divider)}>
