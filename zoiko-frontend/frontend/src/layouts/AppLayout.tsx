@@ -19,6 +19,7 @@ import GlobalSearch from "@/components/GlobalSearch";
 import DateFilter, { getStoredDateFilter, DateRange } from "@/components/DateFilter";
 import ActionsMenu from "@/components/ActionsMenu";
 import NotificationBell from "@/components/NotificationBell";
+import { DateFilterContext } from "@/context/DateFilterContext";
 
 const ROLE_COLORS: Record<string, string> = {
   analyst: "from-blue-500 to-blue-700",
@@ -338,7 +339,9 @@ export default function AppLayout() {
         {/* Page content */}
         <main className={cn("flex-1 overflow-y-auto transition-colors duration-200", mainBg)}>
           <div className="px-6 py-5 max-w-[1600px] mx-auto">
-            <Outlet />
+            <DateFilterContext.Provider value={dateFilter}>
+              <Outlet />
+            </DateFilterContext.Provider>
           </div>
         </main>
       </div>

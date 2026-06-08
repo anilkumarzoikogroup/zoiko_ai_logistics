@@ -4,6 +4,8 @@ import { useAppSelector } from "@/store";
 import { zoikoApi } from "@/api/zoiko";
 import { formatCurrency } from "@/utils/cn";
 import { useTheme } from "@/hooks/useTheme";
+import { useDateFilter } from "@/context/DateFilterContext";
+import { caseInRange } from "@/components/DateFilter";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, LineChart, Line, Cell, PieChart, Pie,
@@ -221,29 +223,39 @@ export default function Home() {
   const isDark = theme === "dark";
   const clr = mkClr(isDark);
 
+  const dateFilter = useDateFilter();
+
   const { data: cases = [],  isLoading } = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases(),   refetchInterval: 5000 });
   const { data: tokens = [] }            = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens(), refetchInterval: 10000 });
   const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats,            refetchInterval: 10000 });
 
   // ── Derived metrics ──────────────────────────────────────────────────────────
-  const allCases        = cases as Case[];
-  const allTokens       = tokens as GovernanceToken[];
-  const carriers        = carrierBreakdown(allCases);
-  const trend           = monthlyRecovery(allCases);
+  const allCases  = cases as Case[];
+  const allTokens = tokens as GovernanceToken[];
 
-  const totalInvoices   = stats?.total_cases      ?? allCases.length;
-  const totalOvercharge = allCases.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const totalRecovered  = allCases.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state))
-                                   .reduce((s, c) => s + (c.diff ?? 0), 0);
+  // Apply month filter: KPIs, carriers, funnel, recent cases use filteredCases.
+  // Trend chart uses allCases (shows historical months, not just selected one).
+  const filteredCases = dateFilter
+    ? allCases.filter(c => caseInRange(c.opened_at, dateFilter))
+    : allCases;
+
+  const carriers = carrierBreakdown(filteredCases);
+  const trend    = monthlyRecovery(allCases); // keep all-time for the trend chart
+
+  const totalInvoices   = filteredCases.length;
+  const totalOvercharge = filteredCases.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const totalRecovered  = filteredCases
+    .filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state))
+    .reduce((s, c) => s + (c.diff ?? 0), 0);
   const successRate     = totalOvercharge > 0
     ? Math.round((totalRecovered / totalOvercharge) * 100)
     : 0;
 
-  // Role-based action items
-  const needsProposal   = allCases.filter(c => c.state === "FINDING_GENERATED");
-  const needsApproval   = allCases.filter(c => c.state === "APPROVAL_PENDING");
-  const readyToExecute  = allCases.filter(c => c.state === "EXECUTION_READY");
-  const activeTokens    = allTokens.filter(t => t.status === "ACTIVE");
+  // Action Required always uses allCases — queues aren't date-filtered
+  const needsProposal  = allCases.filter(c => c.state === "FINDING_GENERATED");
+  const needsApproval  = allCases.filter(c => c.state === "APPROVAL_PENDING");
+  const readyToExecute = allCases.filter(c => c.state === "EXECUTION_READY");
+  const activeTokens   = allTokens.filter(t => t.status === "ACTIVE");
 
   const pendingApprovalAmt = needsApproval.reduce((s, c) => s + (c.diff ?? 0), 0);
   const proposalAmt        = needsProposal.reduce((s, c) => s + (c.diff ?? 0), 0);
@@ -252,15 +264,15 @@ export default function Home() {
   const hasActions = needsProposal.length > 0 || needsApproval.length > 0
                   || readyToExecute.length > 0 || activeTokens.length > 0;
 
-  const recentCases = allCases.slice(0, 8);
-  const openCases   = allCases.filter(c => !["CLOSED","ABORTED"].includes(c.state));
+  const recentCases = filteredCases.slice(0, 8);
+  const openCases   = filteredCases.filter(c => !["CLOSED","ABORTED"].includes(c.state));
 
-  // Funnel data
+  // Funnel data based on filtered cases
   const funnelData = [
-    { label: "Submitted",          value: allCases.length,                                                             color: "#3b82f6" },
-    { label: "AI Analyzed",        value: allCases.filter(c => !["NEW","EVIDENCE_PENDING"].includes(c.state)).length, color: "#8b5cf6" },
-    { label: "Awaiting Approval",  value: allCases.filter(c => c.state === "APPROVAL_PENDING").length,                color: "#f59e0b" },
-    { label: "Recovered",          value: allCases.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)).length, color: "#10b981" },
+    { label: "Submitted",         value: filteredCases.length,                                                              color: "#3b82f6" },
+    { label: "AI Analyzed",       value: filteredCases.filter(c => !["NEW","EVIDENCE_PENDING"].includes(c.state)).length,  color: "#8b5cf6" },
+    { label: "Awaiting Approval", value: filteredCases.filter(c => c.state === "APPROVAL_PENDING").length,                 color: "#f59e0b" },
+    { label: "Recovered",         value: filteredCases.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)).length, color: "#10b981" },
   ];
 
   const firstName = user.split(" ")[0];
@@ -274,6 +286,13 @@ export default function Home() {
           <h1 style={{ fontSize: 20, fontWeight: 800, color: clr.textPrimary, margin: 0 }}>
             Welcome back, {firstName}
           </h1>
+          <p style={{ fontSize: 13, color: clr.textMuted, margin: "2px 0 0" }}>
+            {dateFilter && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 600, color: "#3b82f6", background: isDark ? "rgba(59,130,246,0.12)" : "rgba(59,130,246,0.08)", padding: "1px 8px", borderRadius: 99, marginRight: 8 }}>
+                Showing: {dateFilter.label}
+              </span>
+            )}
+          </p>
           <p style={{ fontSize: 13, color: clr.textMuted, margin: "2px 0 0" }}>
             {role === "analyst" && "Review flagged invoices and propose recoveries"}
             {role === "manager" && "Approve pending recovery proposals"}
