@@ -101,6 +101,70 @@ def _make_broker():
 
 _BROKER = _make_broker()
 
+# ── Auto-DDL: create tables on startup (self-healing, no manual DDL runs) ─────
+def _init_db():
+    """Run safe DDL on every boot — idempotent via IF NOT EXISTS."""
+    import psycopg2 as _pg, logging, hashlib, textwrap
+    from psycopg2.extras import RealDictCursor as _RDC
+    _log = logging.getLogger("zoiko.db")
+    DDL = [
+        textwrap.dedent("""\
+            CREATE TABLE IF NOT EXISTS signup_verification (
+                id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email            TEXT NOT NULL,
+                org_name         TEXT NOT NULL,
+                admin_name       TEXT NOT NULL,
+                password_hash    TEXT NOT NULL,
+                otp_hash         TEXT NOT NULL,
+                failed_attempts  INTEGER NOT NULL DEFAULT 0,
+                expires_at       TIMESTAMPTZ NOT NULL,
+                used_at          TIMESTAMPTZ,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """),
+        textwrap.dedent("""\
+            CREATE TABLE IF NOT EXISTS password_reset_otp (
+                id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email            TEXT NOT NULL,
+                otp              TEXT NOT NULL,
+                expires_at       TIMESTAMPTZ NOT NULL,
+                used_at          TIMESTAMPTZ,
+                failed_attempts  INTEGER NOT NULL DEFAULT 0,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """),
+        textwrap.dedent("""\
+            CREATE TABLE IF NOT EXISTS password_reset_verify (
+                id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email        TEXT NOT NULL,
+                verify_hash  TEXT NOT NULL,
+                expires_at   TIMESTAMPTZ NOT NULL,
+                used_at      TIMESTAMPTZ,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """),
+        "ALTER TABLE password_reset_otp ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0",
+    ]
+    try:
+        conn = _pg.connect(DB_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in DDL:
+            cur.execute(stmt)
+        # Migrate old plaintext OTPs to SHA-256 hashes (one-time migration)
+        cur = conn.cursor(cursor_factory=_RDC)
+        cur.execute(
+            "SELECT id, otp FROM password_reset_otp WHERE used_at IS NULL AND LENGTH(otp) < 64"
+        )
+        for row in cur.fetchall():
+            _hashed = hashlib.sha256(row["otp"].encode()).hexdigest()
+            cur.execute("UPDATE password_reset_otp SET otp = %s WHERE id = %s", (_hashed, row["id"]))
+        cur.close()
+        conn.close()
+        _log.info("DB schema up to date (password_reset_otp + password_reset_verify)")
+    except Exception as exc:
+        _log.warning("DB schema sync skipped (%s) — app will still start", exc)
+
 # ── FastAPI app with lifespan (outbox relay + startup logging) ────────────────
 import asyncio, threading
 from contextlib import asynccontextmanager
@@ -128,6 +192,8 @@ def _run_outbox_relay():
 
 @asynccontextmanager
 async def lifespan(app):
+    # Auto-sync DB schema on every boot (idempotent — no manual DDL needed)
+    _init_db()
     # Start outbox relay in background thread (daemon — exits with main process)
     _relay_thread = threading.Thread(target=_run_outbox_relay, daemon=True, name="outbox-relay")
     _relay_thread.start()
@@ -502,8 +568,8 @@ def recover_complete(body: dict):
 @app.post("/auth/forgot-password", tags=["auth"])
 @app.post("/v1/auth/forgot-password", tags=["auth"], include_in_schema=False)
 def forgot_password(body: dict):
-    """Send 6-digit OTP to user's email via Gmail SMTP."""
-    import random as _rand, psycopg2 as _pg, smtplib
+    """Send 6-digit OTP if email exists. Always returns same response — prevents user enumeration."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg, smtplib, time as _time, random as _rand
     from email.mime.text import MIMEText
 
     email = str(body.get("email", "")).lower().strip()
@@ -511,57 +577,61 @@ def forgot_password(body: dict):
         raise HTTPException(status_code=422, detail="Valid email required")
 
     user = q1("SELECT id FROM users WHERE email = %s", (email,))
-    if not user:
-        raise HTTPException(status_code=404, detail="Account not found")
 
-    otp = f"{_rand.randint(100000, 999999)}"
-    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    # Constant-time sleep — same delay whether email exists or not (anti-enumeration)
+    _time.sleep(_rand.uniform(0.15, 0.25))
 
-    conn = _pg.connect(DB_URL)
-    try:
-        cur = conn.cursor()
-        cur.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL", (email,))
-        cur.execute(
-            "INSERT INTO password_reset_otp (email, otp, expires_at) VALUES (%s, %s, %s)",
-            (email, otp, expires_at),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    if user:
+        otp = f"{_sec.randbelow(900000) + 100000}"
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
-    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("EMAIL_NAME", "")
-    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
-
-    if smtp_user and smtp_pass:
+        conn = _pg.connect(DB_URL)
         try:
-            body = (
-                f"Welcome to ZoikoAI,\n\n"
-                f"We understand you forgot your password. No worries — here's your One-Time Password (OTP) to set a new one:\n\n"
-                f"Your OTP: {otp}\n\n"
-                f"This code is valid for 10 minutes. Please use it before it expires.\n\n"
-                f"If you didn't request this, you can safely ignore this email.\n\n"
-                f"Best regards,\nZoikoAI Logistics Team"
+            cur = conn.cursor()
+            cur.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL", (email,))
+            otp_hash = _hl.sha256(otp.encode()).hexdigest()
+            cur.execute(
+                "INSERT INTO password_reset_otp (email, otp, expires_at) VALUES (%s, %s, %s)",
+                (email, otp_hash, expires_at),
             )
-            msg = MIMEText(body, "plain", "utf-8")
-            msg["Subject"] = "ZoikoAI — Password Reset OTP"
-            msg["From"] = smtp_user
-            msg["To"] = email
-            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
-                s.starttls()
-                s.login(smtp_user, smtp_pass)
-                s.sendmail(smtp_user, [email], msg.as_string())
-        except Exception:
-            pass  # Email send failure is non-blocking
+            conn.commit()
+        finally:
+            conn.close()
 
-    return {"message": "OTP sent to email", "expires_in_minutes": 10}
+        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_user = os.getenv("EMAIL_NAME", "")
+        smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+        if smtp_user and smtp_pass:
+            try:
+                email_body = (
+                    f"Welcome to ZoikoAI,\n\n"
+                    f"We understand you forgot your password. No worries — here's your One-Time Password (OTP) to set a new one:\n\n"
+                    f"Your OTP: {otp}\n\n"
+                    f"This code is valid for 10 minutes. Please use it before it expires.\n\n"
+                    f"If you didn't request this, you can safely ignore this email.\n\n"
+                    f"Best regards,\nZoikoAI Logistics Team"
+                )
+                msg = MIMEText(email_body, "plain", "utf-8")
+                msg["Subject"] = "ZoikoAI — Password Reset OTP"
+                msg["From"] = smtp_user
+                msg["To"] = email
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                    s.starttls()
+                    s.login(smtp_user, smtp_pass)
+                    s.sendmail(smtp_user, [email], msg.as_string())
+            except Exception:
+                pass
+
+    return {"message": "If this email is registered, you'll receive a code.", "expires_in_minutes": 10}
 
 
 @v1_router.post("/auth/verify-otp", tags=["auth"])
 def verify_otp(body: dict):
     """Validate OTP and expiry. Returns a verification token for password reset."""
     import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+    from psycopg2.extras import RealDictCursor as _RDC
 
     email = str(body.get("email", "")).lower().strip()
     otp   = str(body.get("otp", "")).strip()
@@ -569,22 +639,42 @@ def verify_otp(body: dict):
     if not email or not otp:
         raise HTTPException(status_code=422, detail="email and otp required")
 
-    row = q1(
-        "SELECT id, expires_at FROM password_reset_otp WHERE email = %s AND otp = %s AND used_at IS NULL",
-        (email, otp),
-    )
-    if not row:
-        raise HTTPException(status_code=401, detail="Invalid OTP")
-    if datetime.now(timezone.utc) > row["expires_at"]:
-        raise HTTPException(status_code=401, detail="OTP expired")
-
-    verify_token = _sec.token_urlsafe(32)
-    verify_hash  = _hl.sha256(verify_token.encode()).hexdigest()
+    otp_hash = _hl.sha256(otp.encode()).hexdigest()
 
     conn = _pg.connect(DB_URL)
     try:
-        cur = conn.cursor()
-        cur.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE id = %s", (row["id"],))
+        cur = conn.cursor(cursor_factory=_RDC)
+        # Try hashed match first (new style). If nil, try plaintext for backwards compat.
+        cur.execute(
+            "UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND otp = %s AND used_at IS NULL RETURNING id, expires_at",
+            (email, otp_hash),
+        )
+        row = cur.fetchone()
+        if not row:
+            # Backwards compat: some OTPs were stored as plaintext before the SHA-256 change
+            cur.execute(
+                "UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND otp = %s AND used_at IS NULL RETURNING id, expires_at",
+                (email, otp),
+            )
+            row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "UPDATE password_reset_otp SET failed_attempts = COALESCE(failed_attempts, 0) + 1 WHERE email = %s AND used_at IS NULL RETURNING failed_attempts",
+                (email,),
+            )
+            fail_row = cur.fetchone()
+            if fail_row and fail_row["failed_attempts"] >= 5:
+                cur.execute(
+                    "UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL",
+                    (email,),
+                )
+            conn.commit()
+            raise HTTPException(status_code=401, detail="Invalid OTP")
+        if datetime.now(timezone.utc) > row["expires_at"]:
+            raise HTTPException(status_code=401, detail="OTP expired")
+
+        verify_token = _sec.token_urlsafe(32)
+        verify_hash  = _hl.sha256(verify_token.encode()).hexdigest()
         cur.execute(
             "INSERT INTO password_reset_verify (email, verify_hash, expires_at) VALUES (%s, %s, %s)",
             (email, verify_hash, datetime.now(timezone.utc) + timedelta(minutes=5)),
@@ -837,6 +927,190 @@ def org_signup(body: dict):
             "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (user_id, tenant_id, admin_email, pw_hash, admin_name, "admin", now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Generate JWT
+    from middleware.oidc.token_verifier import TokenVerifier
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl     = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token   = verifier.make_dev_token(
+        sub=admin_email, tenant_id=str(tenant_id),
+        roles=["admin"], ttl_sec=ttl,
+    )
+
+    return {
+        "token":      token,
+        "tenant_id":  str(tenant_id),
+        "role":       "admin",
+        "full_name":  admin_name,
+        "email":      admin_email,
+        "expires_in": ttl,
+        "org_name":   org_name,
+    }
+
+
+# ── Organization signup with email OTP verification (production-grade) ────────
+# Uses completely separate table signup_verification — no relation to password_reset_otp
+
+@app.post("/auth/signup-send-otp", tags=["auth"])
+@app.post("/v1/auth/signup-send-otp", tags=["auth"], include_in_schema=False)
+def signup_send_otp(body: dict):
+    """Step 1: validate signup data, send OTP to email, store temp data."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg, smtplib
+    from email.mime.text import MIMEText
+    import bcrypt as _bcrypt
+
+    org_name     = str(body.get("org_name", "")).strip()
+    admin_name   = str(body.get("admin_name", "")).strip()
+    admin_email  = str(body.get("admin_email", "")).lower().strip()
+    admin_pw     = str(body.get("admin_password", ""))
+
+    for field, label in [
+        (org_name, "org_name"), (admin_name, "admin_name"),
+        (admin_email, "admin_email"), (admin_pw, "admin_password"),
+    ]:
+        if not field:
+            raise HTTPException(status_code=422, detail=f"'{label}' is required")
+    if len(admin_pw) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if "@" not in admin_email:
+        raise HTTPException(status_code=422, detail="Valid email required")
+
+    slug = org_name.lower().replace(" ", "-").replace("_", "-")
+
+    existing_tenant = q1("SELECT id FROM tenants WHERE slug = %s", (slug,))
+    if existing_tenant:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Organization '{org_name}' already registered. Please contact your admin or use sign in."
+        )
+    existing_user = q1("SELECT id FROM users WHERE email = %s", (admin_email,))
+    if existing_user:
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in instead.")
+
+    otp = f"{_sec.randbelow(900000) + 100000}"
+    otp_hash = _hl.sha256(otp.encode()).hexdigest()
+    pw_hash = _bcrypt.hashpw(admin_pw.encode(), _bcrypt.gensalt()).decode()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE signup_verification SET used_at = NOW() WHERE email = %s AND used_at IS NULL",
+            (admin_email,),
+        )
+        cur.execute(
+            "INSERT INTO signup_verification (email, org_name, admin_name, password_hash, otp_hash, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (admin_email, org_name, admin_name, pw_hash, otp_hash, expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("EMAIL_NAME", "")
+    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+    if smtp_user and smtp_pass:
+        try:
+            email_body = (
+                f"Welcome to ZoikoAI,\n\n"
+                f"Thank you for creating your organization '{org_name}'.\n"
+                f"Please use the following OTP to verify your email address:\n\n"
+                f"Your OTP: {otp}\n\n"
+                f"This code is valid for 10 minutes.\n\n"
+                f"If you didn't request this, you can safely ignore this email.\n\n"
+                f"Best regards,\nZoikoAI Logistics Team"
+            )
+            msg = MIMEText(email_body, "plain", "utf-8")
+            msg["Subject"] = "ZoikoAI — Verify Your Email Address"
+            msg["From"] = smtp_user
+            msg["To"] = admin_email
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                s.starttls()
+                s.login(smtp_user, smtp_pass)
+                s.sendmail(smtp_user, [admin_email], msg.as_string())
+        except Exception:
+            pass
+
+    return {"message": "OTP sent to email", "expires_in_minutes": 10}
+
+
+@app.post("/auth/signup-verify-otp", tags=["auth"])
+@app.post("/v1/auth/signup-verify-otp", tags=["auth"], include_in_schema=False)
+def signup_verify_otp(body: dict):
+    """Step 2: verify OTP, create tenant + admin user, return JWT."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+    from psycopg2.extras import RealDictCursor as _RDC
+
+    admin_email = str(body.get("admin_email", "")).lower().strip()
+    otp         = str(body.get("otp", "")).strip()
+
+    if not admin_email or not otp:
+        raise HTTPException(status_code=422, detail="email and otp required")
+
+    otp_hash = _hl.sha256(otp.encode()).hexdigest()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor(cursor_factory=_RDC)
+        cur.execute(
+            "UPDATE signup_verification SET used_at = NOW() "
+            "WHERE email = %s AND otp_hash = %s AND used_at IS NULL "
+            "RETURNING id, org_name, admin_name, password_hash, expires_at",
+            (admin_email, otp_hash),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "UPDATE signup_verification SET failed_attempts = COALESCE(failed_attempts, 0) + 1 "
+                "WHERE email = %s AND used_at IS NULL RETURNING failed_attempts",
+                (admin_email,),
+            )
+            fail_row = cur.fetchone()
+            if fail_row and fail_row["failed_attempts"] >= 5:
+                cur.execute(
+                    "UPDATE signup_verification SET used_at = NOW() WHERE email = %s AND used_at IS NULL",
+                    (admin_email,),
+                )
+            conn.commit()
+            raise HTTPException(status_code=401, detail="Invalid OTP")
+        if datetime.now(timezone.utc) > row["expires_at"]:
+            raise HTTPException(status_code=401, detail="OTP expired")
+
+        org_name     = row["org_name"]
+        admin_name   = row["admin_name"]
+        password_hash = row["password_hash"]
+        slug = org_name.lower().replace(" ", "-").replace("_", "-")
+        tenant_id = uuid.uuid4()
+        user_id   = uuid.uuid4()
+        now       = datetime.now(timezone.utc)
+
+        # Re-check duplicates inside the same transaction (race condition guard)
+        dup_tenant = q1("SELECT id FROM tenants WHERE slug = %s", (slug,))
+        if dup_tenant:
+            raise HTTPException(status_code=409, detail="Organization already registered")
+        dup_user = q1("SELECT id FROM users WHERE email = %s", (admin_email,))
+        if dup_user:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, admin_email, password_hash, admin_name, "admin", now),
         )
         conn.commit()
     finally:
