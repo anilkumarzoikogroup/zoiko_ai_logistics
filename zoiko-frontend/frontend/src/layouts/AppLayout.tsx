@@ -144,10 +144,6 @@ export default function AppLayout() {
 
   const groupLabel = isDark ? "text-slate-500" : "text-slate-400";
 
-  const userPill  = isDark
-    ? "text-slate-200 hover:bg-slate-700/60"
-    : "text-slate-700 hover:bg-slate-100";
-
   const divider = isDark ? "border-slate-700/40" : "border-slate-200";
 
   const headerBtn = isDark
@@ -217,22 +213,8 @@ export default function AppLayout() {
           })}
         </nav>
 
-        {/* Sidebar footer */}
-        <div className={cn("border-t px-2 py-3 space-y-1 flex-shrink-0", divider)}>
-          {!collapsed && (
-            <div className={cn("flex items-center gap-2 px-3 py-2 mb-1 rounded-lg transition-colors cursor-default", userPill)}>
-              <div className={cn(
-                "h-7 w-7 rounded-full bg-gradient-to-br flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0",
-                ROLE_COLORS[role] || "from-slate-500 to-slate-700"
-              )}>
-                {initials}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className={cn("text-xs font-semibold truncate", isDark ? "text-white" : "text-slate-800")}>{user}</p>
-                <p className={cn("text-[10px] capitalize", isDark ? "text-slate-500" : "text-slate-400")}>{role}</p>
-              </div>
-            </div>
-          )}
+        {/* Sidebar footer — collapse toggle only */}
+        <div className={cn("border-t px-2 py-3 flex-shrink-0", divider)}>
           <button
             onClick={() => setCollapsed(c => !c)}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
