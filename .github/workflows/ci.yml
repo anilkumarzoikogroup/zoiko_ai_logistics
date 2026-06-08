@@ -180,6 +180,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
 
+      - name: Write .env
+        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
+
       - name: Run migrations
         run: alembic upgrade head
 
@@ -212,6 +215,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
 
+      - name: Write .env
+        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
+
       - name: Run migrations
         run: alembic upgrade head
 
@@ -242,6 +248,9 @@ jobs:
 
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+
+      - name: Write .env
+        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
 
       - name: Run migrations
         run: alembic upgrade head
@@ -323,5 +332,9 @@ jobs:
 
       - run: pip install -r requirements.txt
       - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+
+      - name: Write .env
+        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
+
       - run: alembic upgrade head
       - run: python phase-0/scripts/tenant_fuzzer.py
