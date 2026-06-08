@@ -231,13 +231,6 @@ export default function AppLayout() {
                 <p className={cn("text-xs font-semibold truncate", isDark ? "text-white" : "text-slate-800")}>{user}</p>
                 <p className={cn("text-[10px] capitalize", isDark ? "text-slate-500" : "text-slate-400")}>{role}</p>
               </div>
-              <button
-                onClick={handleLogout}
-                title="Sign out"
-                className={cn("transition-colors ml-1", isDark ? "text-slate-600 hover:text-red-400" : "text-slate-400 hover:text-red-500")}
-              >
-                <LogOut className="h-3.5 w-3.5" />
-              </button>
             </div>
           )}
           <button
@@ -314,7 +307,7 @@ export default function AppLayout() {
             {/* ── Notifications (real-time) ──────────────────────── */}
             <NotificationBell isDark={isDark} role={role} />
 
-            {/* User pill */}
+            {/* User pill + Sign Out */}
             <div className={cn("flex items-center gap-2 pl-2 border-l", divider)}>
               <div className={cn(
                 "h-7 w-7 rounded-full bg-gradient-to-br flex items-center justify-center text-white text-[11px] font-bold",
@@ -332,6 +325,21 @@ export default function AppLayout() {
                   {role}
                 </span>
               </div>
+
+              {/* Sign Out — top right, clearly visible */}
+              <button
+                onClick={handleLogout}
+                title="Sign out"
+                className={cn(
+                  "ml-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150",
+                  isDark
+                    ? "border-red-900/60 text-red-400 hover:bg-red-900/30 hover:border-red-700"
+                    : "border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300"
+                )}
+              >
+                <LogOut className="h-3 w-3" />
+                <span className="hidden xl:inline">Sign out</span>
+              </button>
             </div>
           </div>
         </header>
