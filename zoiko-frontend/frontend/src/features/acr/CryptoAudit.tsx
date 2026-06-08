@@ -517,7 +517,7 @@ export default function CryptoAudit() {
                     <div className="rounded border bg-secondary/30 p-3 space-y-2 text-[10px]">
                       <div>
                         <span className="text-muted-foreground">Merkle Root:</span>
-                        <code className="ml-2 text-purple-700 break-all">{LIVE_PREVIEW.merkleRoot}</code>
+                        <code className="ml-2 text-purple-600 dark:text-purple-400 break-all">{LIVE_PREVIEW.merkleRoot}</code>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Algorithm:</span>
@@ -529,19 +529,19 @@ export default function CryptoAudit() {
                       </div>
                       <div>
                         <span className="text-muted-foreground">Signature:</span>
-                        <code className="ml-2 text-emerald-700 break-all">0xed25519::computed-on-generate…</code>
+                        <code className="ml-2 text-emerald-600 dark:text-emerald-400 break-all">0xed25519::computed-on-generate…</code>
                       </div>
                     </div>
                   </div>
 
                   {/* Verified badge */}
-                  <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-center gap-3">
-                    <CheckCircle2 className="h-5 w-5 text-emerald-600 flex-shrink-0" />
+                  <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 px-4 py-3 flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
                     <div>
-                      <p className="font-semibold text-emerald-800 text-xs">Report integrity verified</p>
-                      <p className="text-[10px] text-emerald-600">Ed25519 signature valid · Merkle root matches all {LIVE_PREVIEW.entries} log entries</p>
+                      <p className="font-semibold text-emerald-800 dark:text-emerald-300 text-xs">Report integrity verified</p>
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-500">Ed25519 signature valid · Merkle root matches all {LIVE_PREVIEW.entries} log entries</p>
                     </div>
-                    <Lock className="h-4 w-4 text-emerald-600 ml-auto flex-shrink-0" />
+                    <Lock className="h-4 w-4 text-emerald-600 dark:text-emerald-400 ml-auto flex-shrink-0" />
                   </div>
 
                   <p className="text-[10px] text-muted-foreground text-center">

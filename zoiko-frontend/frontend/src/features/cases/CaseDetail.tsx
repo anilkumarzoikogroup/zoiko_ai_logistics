@@ -40,20 +40,20 @@ const NEXT_ACTION: Partial<Record<CaseState, {
   label: string; route: string; icon: React.ElementType;
   color: string; bgColor: string; explain: string;
 }>> = {
-  NEW:               { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "AI analysis done. Review and propose recovery in the Analyst queue." },
-  EVIDENCE_PENDING:  { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "Evidence is being collected. Once done, propose recovery." },
-  FINDING_GENERATED: { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "96% confidence overcharge detected. Open Analyst Review to propose recovery." },
-  APPROVAL_PENDING:  { label: "Manager Approval", route: "/manager",  icon: CheckCircle2,color: "text-amber-700",   bgColor: "bg-amber-50 border-amber-200", explain: "Recovery proposed. A manager must approve to issue the governance token." },
-  EXECUTION_READY:   { label: "Execute Recovery", route: "/execute",  icon: Zap,         color: "text-emerald-700", bgColor: "bg-emerald-50 border-emerald-200", explain: "Token ACTIVE — 15-min window. Run 8-gate execution to issue the credit memo." },
+  NEW:               { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700 dark:text-blue-400",    bgColor: "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50",   explain: "AI analysis done. Review and propose recovery in the Analyst queue." },
+  EVIDENCE_PENDING:  { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700 dark:text-blue-400",    bgColor: "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50",   explain: "Evidence is being collected. Once done, propose recovery." },
+  FINDING_GENERATED: { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700 dark:text-blue-400",    bgColor: "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50",   explain: "96% confidence overcharge detected. Open Analyst Review to propose recovery." },
+  APPROVAL_PENDING:  { label: "Manager Approval", route: "/manager",  icon: CheckCircle2,color: "text-amber-700 dark:text-amber-400",   bgColor: "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50", explain: "Recovery proposed. A manager must approve to issue the governance token." },
+  EXECUTION_READY:   { label: "Execute Recovery", route: "/execute",  icon: Zap,         color: "text-emerald-700 dark:text-emerald-400", bgColor: "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50", explain: "Token ACTIVE — 15-min window. Run 8-gate execution to issue the credit memo." },
 };
 
 const STATE_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
-  NEW:               { label: "New",              cls: "bg-slate-100 text-slate-600",     dot: "bg-slate-400"  },
-  EVIDENCE_PENDING:  { label: "Evidence Pending", cls: "bg-slate-100 text-slate-600",     dot: "bg-slate-400"  },
-  FINDING_GENERATED: { label: "AI Analyzed",      cls: "bg-purple-100 text-purple-700",   dot: "bg-purple-500" },
-  APPROVAL_PENDING:  { label: "Pending Approval", cls: "bg-amber-100 text-amber-700",     dot: "bg-amber-500"  },
-  EXECUTION_READY:   { label: "Execution Ready",  cls: "bg-blue-100 text-blue-700",       dot: "bg-blue-500"   },
-  DISPATCHED:        { label: "Dispatched",       cls: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500"},
+  NEW:               { label: "New",              cls: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400",       dot: "bg-slate-400"  },
+  EVIDENCE_PENDING:  { label: "Evidence Pending", cls: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400",       dot: "bg-slate-400"  },
+  FINDING_GENERATED: { label: "AI Analyzed",      cls: "bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400", dot: "bg-purple-500" },
+  APPROVAL_PENDING:  { label: "Pending Approval", cls: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400",     dot: "bg-amber-500"  },
+  EXECUTION_READY:   { label: "Execution Ready",  cls: "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400",         dot: "bg-blue-500"   },
+  DISPATCHED:        { label: "Dispatched",       cls: "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400", dot: "bg-emerald-500"},
   OUTCOME_RECORDED:  { label: "Outcome Recorded", cls: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500"},
   CLOSED:            { label: "Closed",           cls: "bg-slate-100 text-slate-500",     dot: "bg-slate-400"  },
   ABORTED:           { label: "Aborted",          cls: "bg-red-100 text-red-700",         dot: "bg-red-500"    },
@@ -75,42 +75,34 @@ function SectionCard({ title, icon: Icon, status, children }: {
 }) {
   return (
     <div className={cn(
-      "bg-white rounded-xl border p-4 shadow-sm transition-opacity",
-      status === "pending" ? "opacity-50 border-slate-200" : "border-slate-200",
+      "bg-white dark:bg-card rounded-xl border p-4 shadow-sm transition-opacity",
+      status === "pending" ? "opacity-50 border-slate-200 dark:border-border" : "border-slate-200 dark:border-border",
     )}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className={cn(
             "h-7 w-7 rounded-lg flex items-center justify-center",
-            status === "done"   ? "bg-emerald-100" :
-            status === "active" ? "bg-blue-100"    : "bg-slate-100"
+            status === "done"   ? "bg-emerald-100 dark:bg-emerald-900/40" :
+            status === "active" ? "bg-blue-100 dark:bg-blue-900/40"       : "bg-slate-100 dark:bg-slate-800"
           )}>
             <Icon className={cn(
               "h-3.5 w-3.5",
-              status === "done"   ? "text-emerald-600" :
-              status === "active" ? "text-blue-600"    : "text-slate-400"
+              status === "done"   ? "text-emerald-600 dark:text-emerald-400" :
+              status === "active" ? "text-blue-600 dark:text-blue-400"       : "text-slate-400 dark:text-slate-500"
             )} />
           </div>
-          <p className="text-sm font-bold text-slate-700">{title}</p>
+          <p className="text-sm font-bold text-slate-700 dark:text-slate-200">{title}</p>
         </div>
         <span className={cn(
           "text-[10px] font-bold px-2 py-0.5 rounded-full",
-          status === "done"   ? "bg-emerald-100 text-emerald-700" :
-          status === "active" ? "bg-blue-100 text-blue-700"       : "bg-slate-100 text-slate-400"
+          status === "done"   ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400" :
+          status === "active" ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"             :
+                                "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
         )}>
           {status === "done" ? "DONE" : status === "active" ? "ACTIVE" : "PENDING"}
         </span>
       </div>
       {children}
-    </div>
-  );
-}
-
-function DataRow({ label, value, valueClass }: { label: string; value: React.ReactNode; valueClass?: string }) {
-  return (
-    <div className="flex items-center justify-between py-1.5 border-b border-slate-50 last:border-0">
-      <p className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">{label}</p>
-      <p className={cn("text-xs font-semibold text-slate-700", valueClass)}>{value}</p>
     </div>
   );
 }
@@ -214,8 +206,8 @@ export default function CaseDetail() {
         <div className="h-12 w-12 rounded-full bg-red-50 flex items-center justify-center">
           <AlertTriangle className="h-6 w-6 text-red-400" />
         </div>
-        <p className="font-semibold text-slate-700">Case not found</p>
-        <p className="text-sm text-slate-400">The case ID <code className="bg-slate-100 px-1 rounded">{id}</code> was not found.</p>
+        <p className="font-semibold text-slate-700 dark:text-slate-200">Case not found</p>
+        <p className="text-sm text-slate-400 dark:text-slate-500">The case ID <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">{id}</code> was not found.</p>
         <button
           onClick={() => nav("/cases")}
           className="flex items-center gap-1.5 text-blue-600 text-sm font-semibold hover:underline"
@@ -240,24 +232,24 @@ export default function CaseDetail() {
       <div>
         <button
           onClick={() => nav("/cases")}
-          className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 mb-2 transition-colors"
+          className="flex items-center gap-1 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 mb-2 transition-colors"
         >
           <ArrowLeft className="h-3 w-3" /> All Cases
         </button>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold text-slate-800">
-              {cs.carrier} <span className="text-slate-400 font-normal">·</span> {cs.shipment_ref}
+            <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+              {cs.carrier} <span className="text-slate-400 dark:text-slate-500 font-normal">·</span> {cs.shipment_ref}
             </h1>
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-              <code className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded">{cs.id}</code>
+              <code className="text-[10px] font-mono text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">{cs.id}</code>
               <StateBadge state={cs.state} />
-              <span className="text-[11px] text-slate-400">Opened {formatDate(cs.opened_at)}</span>
+              <span className="text-[11px] text-slate-400 dark:text-slate-500">Opened {formatDate(cs.opened_at)}</span>
             </div>
           </div>
           <button
             onClick={() => cq.refetch()}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
             title="Refresh"
           >
             <RefreshCw className="h-4 w-4" />
@@ -268,13 +260,13 @@ export default function CaseDetail() {
       {/* ── KPI row ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: "Invoice Amount",  value: formatCurrency(cs.amount, cs.currency),                                                      top: "border-l-blue-500",   val: "text-slate-800" },
+          { label: "Invoice Amount",  value: formatCurrency(cs.amount, cs.currency),                                                      top: "border-l-blue-500",   val: "text-slate-800 dark:text-slate-100" },
           { label: "Overcharge",      value: cs.diff > 0 ? formatCurrency(cs.diff, cs.currency) : "—",                                    top: "border-l-red-500",    val: "text-red-600"   },
           { label: "Contract Rate",   value: valQ.data ? formatCurrency(valQ.data.contract_amount, cs.currency) : formatCurrency(cs.amount - cs.diff, cs.currency), top: "border-l-amber-500", val: "text-amber-600" },
           { label: "AI Confidence",   value: cs.confidence ? `${(cs.confidence * 100).toFixed(0)}%` : (findQ.data ? `${(findQ.data.confidence * 100).toFixed(0)}%` : "—"), top: "border-l-emerald-500", val: (cs.confidence ?? 0) >= 0.9 ? "text-emerald-600 font-bold" : "text-amber-600" },
         ].map(k => (
-          <div key={k.label} className={cn("bg-white rounded-xl border border-slate-200 border-l-4 px-4 py-3.5 shadow-sm", k.top)}>
-            <p className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">{k.label}</p>
+          <div key={k.label} className={cn("bg-white dark:bg-card rounded-xl border border-slate-200 dark:border-border border-l-4 px-4 py-3.5 shadow-sm dark:shadow-none", k.top)}>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wide font-semibold">{k.label}</p>
             <p className={cn("text-xl font-bold mt-1.5 leading-tight", k.val)}>{k.value}</p>
           </div>
         ))}

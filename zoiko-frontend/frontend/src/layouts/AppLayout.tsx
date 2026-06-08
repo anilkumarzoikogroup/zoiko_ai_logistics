@@ -8,13 +8,15 @@ import {
   FileClock, Truck, ShieldCheck, BookOpen,
   Key, Archive, ClipboardList,
   BarChart3, TrendingUp,
-  Users, Settings, Building2, Bell, Search,
-  ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
+  Users, Settings, Building2, Bell,
+  ChevronLeft, ChevronRight, LogOut, ChevronDown,
   Download, Zap, CheckSquare, FlaskConical, Sun, Moon,
 } from "lucide-react";
 import { useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
 import ZoikoLogo from "@/components/ZoikoLogo";
+import GlobalSearch from "@/components/GlobalSearch";
+import DateFilter, { getStoredDateFilter, DateRange } from "@/components/DateFilter";
 
 const ROLE_COLORS: Record<string, string> = {
   analyst: "from-blue-500 to-blue-700",
@@ -108,7 +110,8 @@ export default function AppLayout() {
   const dispatch = useAppDispatch();
   const user     = useAppSelector(s => s.auth.user) || "User";
   const role     = useAppSelector(s => s.auth.role) || "analyst";
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed]   = useState(false);
+  const [dateFilter, setDateFilter] = useState<DateRange>(getStoredDateFilter);
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
 
@@ -137,17 +140,13 @@ export default function AppLayout() {
 
   const mainBg = isDark ? "bg-[#0b1020]" : "bg-slate-50";
 
-  const groupLabel = isDark ? "text-slate-600" : "text-slate-400";
+  const groupLabel = isDark ? "text-slate-500" : "text-slate-400";
 
   const userPill  = isDark
     ? "text-slate-200 hover:bg-slate-700/60"
     : "text-slate-700 hover:bg-slate-100";
 
   const divider = isDark ? "border-slate-700/40" : "border-slate-200";
-
-  const searchBox = isDark
-    ? "bg-slate-800 border-slate-700 text-slate-300 placeholder:text-slate-500 focus:ring-blue-500/30"
-    : "bg-slate-50 border-slate-200 text-slate-600 placeholder:text-slate-400 focus:ring-blue-500/30";
 
   const headerBtn = isDark
     ? "border-slate-700 text-slate-400 hover:bg-slate-700/60"
@@ -265,33 +264,20 @@ export default function AppLayout() {
             {pageTitle}
           </div>
 
+          {/* ── Live Search ────────────────────────────────────────────── */}
           <div className="flex-1 flex items-center gap-3">
-            <div className="relative">
-              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search invoices, cases, carriers…"
-                className={cn(
-                  "pl-9 pr-10 py-1.5 border rounded-lg text-sm focus:outline-none focus:ring-2 w-64 transition-all focus:w-80",
-                  searchBox
-                )}
-              />
-              <span className={cn(
-                "absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono px-1 rounded",
-                isDark ? "text-slate-500 bg-slate-700" : "text-slate-400 bg-slate-100"
-              )}>⌘K</span>
-            </div>
+            <GlobalSearch isDark={isDark} />
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Date range */}
-            <button className={cn(
-              "hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs transition-colors",
-              headerBtn
-            )}>
-              <Calendar className="h-3.5 w-3.5 text-slate-400" />
-              <span>Jul 2025</span>
-            </button>
+            {/* ── Date filter ────────────────────────────────────────── */}
+            <div className="hidden md:block">
+              <DateFilter
+                isDark={isDark}
+                value={dateFilter}
+                onChange={setDateFilter}
+              />
+            </div>
 
             {/* Actions */}
             <button className={cn(
