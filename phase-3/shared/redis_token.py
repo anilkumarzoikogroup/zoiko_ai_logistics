@@ -56,3 +56,17 @@ def get_status(token_id: str) -> str | None:
         return _client.get(_key(token_id))
     except Exception:
         return None
+
+
+def release_consumed(token_id: str) -> None:
+    """Release the Redis CONSUMED lock.
+
+    Call ONLY when a DB write fails after mark_consumed() succeeded, so
+    the token can be retried. Never call after a successful DB commit.
+    """
+    if not _AVAILABLE:
+        return
+    try:
+        _client.delete(_key(token_id))
+    except Exception:
+        pass

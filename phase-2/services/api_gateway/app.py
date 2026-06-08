@@ -20,10 +20,13 @@ import paths  # noqa: F401 — must be first
 
 load_dotenv()
 
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse as _JSONResponse
+from fastapi.security import HTTPBearer as _HTTPBearer, HTTPAuthorizationCredentials as _HTTPCreds
+from typing import Optional
 
-from services.api_gateway.auth   import get_claims
+from services.api_gateway.auth   import get_claims, get_claims_by_cookie
 from zoiko_common.middleware.feature_flags import require_feature_flag
 import re as _re, uuid, hashlib, json
 from decimal import Decimal
@@ -212,10 +215,29 @@ _canonical  = CanonicalHandler(DB_URL, _BROKER, TENANT_SLUG)
 _cases      = CaseHandler(DB_URL, _BROKER)
 
 
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _auth_cookie_response(data: dict, token: str, ttl: int, status_code: int = 200):
+    """Return auth data as JSON and set the JWT in an HttpOnly cookie.
+    Token is never exposed in the response body — XSS cannot read it."""
+    resp = _JSONResponse(status_code=status_code, content=data)
+    is_prod = os.getenv("ZOIKO_ENV", "development").lower() == "production"
+    resp.set_cookie(
+        key="zoiko_jwt",
+        value=token,
+        httponly=True,           # JS cannot read this cookie
+        secure=is_prod,          # HTTPS-only in production; HTTP allowed in dev
+        samesite="strict",       # blocks CSRF
+        max_age=ttl,
+        path="/",
+    )
+    return resp
+
+
 # ── Auth — public endpoints (no JWT required) ─────────────────────────────────
 
-@app.post("/auth/login", response_model=LoginResponse, tags=["auth"])
-@app.post("/v1/auth/login", response_model=LoginResponse, tags=["auth"], include_in_schema=False)
+@app.post("/auth/login", tags=["auth"])
+@app.post("/v1/auth/login", tags=["auth"], include_in_schema=False)
 def login(body: LoginRequest):
     """Email + password → JWT. Works for all roles (analyst / manager / admin)."""
     import bcrypt as _bcrypt
@@ -228,6 +250,8 @@ def login(body: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail="Account is disabled. Contact your admin.")
+    if not row["password_hash"]:
+        raise HTTPException(status_code=401, detail="This account was created with Google Sign-In. Please use the 'Sign in with Google' button to log in.")
     if not _bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -241,13 +265,9 @@ def login(body: LoginRequest):
         roles     = [row["role"]],
         ttl_sec   = ttl,
     )
-    return LoginResponse(
-        token      = token,
-        tenant_id  = str(row["tenant_id"]),
-        role       = row["role"],
-        full_name  = row["full_name"],
-        email      = row["email"],
-        expires_in = ttl,
+    return _auth_cookie_response(
+        {"tenant_id": str(row["tenant_id"]), "role": row["role"], "full_name": row["full_name"], "email": row["email"], "expires_in": ttl},
+        token=token, ttl=ttl,
     )
 
 
@@ -698,15 +718,295 @@ def org_signup(body: dict):
         roles=["admin"], ttl_sec=ttl,
     )
 
-    return {
-        "token":      token,
-        "tenant_id":  str(tenant_id),
-        "role":       "admin",
-        "full_name":  admin_name,
-        "email":      admin_email,
-        "expires_in": ttl,
-        "org_name":   org_name,
-    }
+    return _auth_cookie_response(
+        {"tenant_id": str(tenant_id), "role": "admin", "full_name": admin_name, "email": admin_email, "expires_in": ttl, "org_name": org_name},
+        token=token, ttl=ttl, status_code=201,
+    )
+
+
+# ── Google OAuth — verify GSI ID token, find or create user ───────────────────
+
+@app.post("/auth/google", tags=["auth"])
+@app.post("/v1/auth/google", tags=["auth"], include_in_schema=False)
+def google_auth(body: dict):
+    """
+    Accepts a Google Identity Services (GSI) credential (ID token).
+
+    Responses:
+      200 — existing user found → returns JWT immediately
+      201 — new user, org created → returns JWT
+      202 — new user, no org yet → returns {status:'new_user', email, name}
+              (frontend should collect org_name and re-POST with it)
+
+    Body: { credential: str, org_name?: str }
+    """
+    import requests as _req, psycopg2 as _pg
+
+    credential = str(body.get("credential", "")).strip()
+    org_name   = str(body.get("org_name", "")).strip()
+
+    if not credential:
+        raise HTTPException(status_code=422, detail="'credential' is required")
+
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    if not google_client_id:
+        raise HTTPException(status_code=503, detail="Google auth is not configured on this server")
+
+    # Verify the Google ID token via Google's tokeninfo endpoint
+    try:
+        r = _req.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+            timeout=10,
+        )
+    except _req.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Could not reach Google: {exc}")
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
+
+    info = r.json()
+    if info.get("aud") != google_client_id:
+        raise HTTPException(status_code=401, detail="Token audience mismatch — wrong Google client")
+    if info.get("email_verified") not in (True, "true"):
+        raise HTTPException(status_code=401, detail="Google email is not verified")
+
+    email = info.get("email", "").lower().strip()
+    name  = (info.get("name") or info.get("given_name") or email.split("@")[0]).strip()
+
+    if not email:
+        raise HTTPException(status_code=422, detail="Google account has no email address")
+
+    # ── Existing user → return JWT immediately ────────────────────────────────
+    existing = q1(
+        "SELECT id, tenant_id, full_name, role FROM users WHERE email = %s AND is_active = true",
+        (email,),
+    )
+    if existing:
+        from middleware.oidc.token_verifier import TokenVerifier
+        secret   = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+        issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+        ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+        verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+        token    = verifier.make_dev_token(
+            sub=email, tenant_id=str(existing["tenant_id"]),
+            roles=[existing["role"]], ttl_sec=ttl,
+        )
+        return _auth_cookie_response(
+            {"tenant_id": str(existing["tenant_id"]), "role": existing["role"], "full_name": existing["full_name"], "email": email, "expires_in": ttl},
+            token=token, ttl=ttl,
+        )
+
+    # ── New user — need org_name before creating account ─────────────────────
+    if not org_name:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={
+            "status": "new_user",
+            "email":  email,
+            "name":   name,
+        })
+
+    # ── Create tenant + user (Google SSO — no password) ───────────────────────
+    import bcrypt as _bcrypt
+    slug = _re.sub(r"[^a-z0-9-]", "", org_name.lower().replace(" ", "-").replace("_", "-"))
+    if not slug:
+        raise HTTPException(status_code=422, detail="Invalid organization name")
+
+    if q1("SELECT id FROM tenants WHERE slug = %s", (slug,)):
+        raise HTTPException(status_code=409, detail=f"Organization '{org_name}' already registered.")
+    if q1("SELECT id FROM users WHERE email = %s", (email,)):
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    now       = datetime.now(timezone.utc)
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, email, '', name, "admin", now),  # empty = Google SSO, no password login
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from middleware.oidc.token_verifier import TokenVerifier
+    from fastapi.responses import JSONResponse
+    secret   = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token    = verifier.make_dev_token(
+        sub=email, tenant_id=str(tenant_id), roles=["admin"], ttl_sec=ttl,
+    )
+    return _auth_cookie_response(
+        {"tenant_id": str(tenant_id), "role": "admin", "full_name": name, "email": email, "expires_in": ttl, "org_name": org_name},
+        token=token, ttl=ttl, status_code=201,
+    )
+
+
+# ── Google OAuth — Authorization Code exchange ────────────────────────────────
+
+@app.post("/auth/google/callback", tags=["auth"])
+@app.post("/v1/auth/google/callback", tags=["auth"], include_in_schema=False)
+def google_callback(body: dict):
+    """
+    Exchange Google authorization code (from redirect) for user info.
+    Returns JWT for existing users, or 202 + signup_token for new users.
+    Body: { code: str, redirect_uri: str }
+    """
+    import requests as _req, jwt as _jwt, time as _time
+
+    code         = str(body.get("code", "")).strip()
+    redirect_uri = str(body.get("redirect_uri", "")).strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="'code' is required")
+
+    g_client_id  = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    g_secret     = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if not g_client_id or not g_secret:
+        raise HTTPException(status_code=503, detail="Google auth not configured on this server")
+
+    # Exchange code → tokens
+    try:
+        r = _req.post("https://oauth2.googleapis.com/token", data={
+            "code":          code,
+            "client_id":     g_client_id,
+            "client_secret": g_secret,
+            "redirect_uri":  redirect_uri,
+            "grant_type":    "authorization_code",
+        }, timeout=10)
+    except _req.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Could not reach Google: {exc}")
+
+    if r.status_code != 200:
+        detail = r.json().get("error_description", r.text)
+        raise HTTPException(status_code=401, detail=f"Google token exchange failed: {detail}")
+
+    id_token = r.json().get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=401, detail="No ID token returned by Google")
+
+    # Decode payload (we trust Google's HTTPS response — no signature re-verify needed)
+    payload = _jwt.decode(id_token, options={"verify_signature": False})
+    email   = payload.get("email", "").lower().strip()
+    name    = (payload.get("name") or payload.get("given_name") or email.split("@")[0]).strip()
+    if not email:
+        raise HTTPException(status_code=422, detail="Google account has no email")
+
+    # Existing user → JWT immediately
+    existing = q1(
+        "SELECT id, tenant_id, full_name, role FROM users WHERE email = %s AND is_active = true",
+        (email,),
+    )
+    dev_secret = os.getenv("ZOIKO_DEV_SECRET", "")
+    issuer     = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl        = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+
+    if existing:
+        from middleware.oidc.token_verifier import TokenVerifier
+        verifier = TokenVerifier(dev_secret=dev_secret.encode(), issuer=issuer)
+        token    = verifier.make_dev_token(
+            sub=email, tenant_id=str(existing["tenant_id"]),
+            roles=[existing["role"]], ttl_sec=ttl,
+        )
+        return _auth_cookie_response(
+            {"tenant_id": str(existing["tenant_id"]), "role": existing["role"], "full_name": existing["full_name"], "email": email, "expires_in": ttl},
+            token=token, ttl=ttl,
+        )
+
+    # New user — issue a 10-min signup token (avoids re-verifying with Google)
+    now          = int(_time.time())
+    signup_token = _jwt.encode(
+        {"sub": email, "name": name, "type": "google_signup", "iat": now, "exp": now + 600},
+        dev_secret, algorithm="HS256",
+    )
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={
+        "status":       "new_user",
+        "email":        email,
+        "name":         name,
+        "signup_token": signup_token,
+    })
+
+
+# ── Google OAuth — complete signup after org name is collected ─────────────────
+
+@app.post("/auth/google/complete-signup", tags=["auth"], status_code=201)
+@app.post("/v1/auth/google/complete-signup", tags=["auth"], include_in_schema=False, status_code=201)
+def google_complete_signup(body: dict):
+    """
+    Finish Google signup: verify 10-min signup_token, create tenant + user, return JWT.
+    Body: { signup_token: str, org_name: str }
+    """
+    import jwt as _jwt, psycopg2 as _pg, bcrypt as _bcrypt
+
+    signup_token = str(body.get("signup_token", "")).strip()
+    org_name     = str(body.get("org_name", "")).strip()
+    if not signup_token or not org_name:
+        raise HTTPException(status_code=422, detail="'signup_token' and 'org_name' are required")
+
+    dev_secret = os.getenv("ZOIKO_DEV_SECRET", "")
+    try:
+        claims = _jwt.decode(signup_token, dev_secret, algorithms=["HS256"])
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Signup session expired. Please sign in with Google again.")
+    except _jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid signup token.")
+
+    if claims.get("type") != "google_signup":
+        raise HTTPException(status_code=401, detail="Invalid token type.")
+
+    email = claims.get("sub", "").lower().strip()
+    name  = claims.get("name", email.split("@")[0]).strip()
+
+    slug = _re.sub(r"[^a-z0-9-]", "", org_name.lower().replace(" ", "-").replace("_", "-"))
+    if not slug:
+        raise HTTPException(status_code=422, detail="Invalid organization name.")
+
+    if q1("SELECT id FROM tenants WHERE slug = %s", (slug,)):
+        raise HTTPException(status_code=409, detail=f"Organization '{org_name}' already registered.")
+    if q1("SELECT id FROM users WHERE email = %s", (email,)):
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    now       = datetime.now(timezone.utc)
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, email, '', name, "admin", now),  # empty = Google SSO, no password login
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from middleware.oidc.token_verifier import TokenVerifier
+    from fastapi.responses import JSONResponse
+    issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=dev_secret.encode(), issuer=issuer)
+    token    = verifier.make_dev_token(sub=email, tenant_id=str(tenant_id), roles=["admin"], ttl_sec=ttl)
+
+    return _auth_cookie_response(
+        {"tenant_id": str(tenant_id), "role": "admin", "full_name": name, "email": email, "expires_in": ttl, "org_name": org_name},
+        token=token, ttl=ttl, status_code=201,
+    )
 
 
 # ── Sign out ──────────────────────────────────────────────────────────────────
@@ -714,15 +1014,20 @@ def org_signup(body: dict):
 @app.post("/auth/signout", tags=["auth"], status_code=204)
 @app.post("/v1/auth/signout", tags=["auth"], include_in_schema=False, status_code=204)
 def signout():
-    """Client clears its JWT. Server-side: stateless JWT so nothing to revoke here."""
-    return  # Client removes token from storage
+    """Clear auth cookie. Stateless JWT — nothing to revoke server-side."""
+    from fastapi.responses import Response as _Response
+    resp = _Response(status_code=204)
+    resp.delete_cookie(key="zoiko_jwt", path="/")
+    return resp
 
 
 # ── Profile — user & tenant settings ──────────────────────────────────────────
 
 @app.get("/auth/me")
 @app.get("/v1/auth/me", include_in_schema=False)
-def get_profile(claims: ZoikoClaims = Depends(get_claims)):
+def get_profile(claims: ZoikoClaims = Depends(get_claims_by_cookie)):
+    """Return profile for the authenticated user.
+    Uses cookie-based auth — no X-Tenant-ID required, enabling session restoration."""
     row = q1(
         "SELECT full_name, email, role, title, is_active, created_at FROM users WHERE email = %s AND tenant_id = %s::uuid",
         (claims.sub, claims.tenant_id),
@@ -736,6 +1041,7 @@ def get_profile(claims: ZoikoClaims = Depends(get_claims)):
         "title":      row["title"] or "",
         "is_active":  row["is_active"],
         "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+        "tenant_id":  str(claims.tenant_id),
     }
 
 @app.put("/auth/me")

@@ -81,6 +81,13 @@ export default function Login() {
     return () => clearInterval(t);
   }, []);
 
+  useEffect(() => {
+    const p   = new URLSearchParams(window.location.search);
+    const err = p.get("error");
+    if (err === "google_cancelled") setError("Google sign-in was cancelled.");
+    else if (err === "google_failed") setError("Google sign-in failed. Please try again.");
+  }, []);
+
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault(); setLoading(true); setError("");
     try {
@@ -106,7 +113,17 @@ export default function Login() {
   }
 
   function handleGoogle() {
-    setError("Google SSO activates after GCP deployment. Use email & password for now.");
+    const clientId  = "66759743532-eqjs0v4hk2g7p5r43qvd4dljdqh08vl4.apps.googleusercontent.com";
+    const redirectUri = `${window.location.origin}/auth/google/callback`;
+    const params = new URLSearchParams({
+      client_id:     clientId,
+      redirect_uri:  redirectUri,
+      response_type: "code",
+      scope:         "email profile",
+      access_type:   "online",
+      prompt:        "select_account",
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
   }
 
   // Dark mode theme values
@@ -386,6 +403,20 @@ export default function Login() {
                         {loading ? "Creating account…" : <><UserPlus size={15}/> Create Account</>}
                       </button>
                     </form>
+
+                    {/* Divider */}
+                    <div style={{display:"flex",alignItems:"center",gap:"12px",margin:"12px 0 10px"}}>
+                      <div style={{flex:1,height:"1px",background:"linear-gradient(to right,transparent,#E2E8F0)"}}/>
+                      <span style={{fontSize:"11px",fontWeight:600,color:"#CBD5E1",whiteSpace:"nowrap"}}>or sign up with</span>
+                      <div style={{flex:1,height:"1px",background:"linear-gradient(to left,transparent,#E2E8F0)"}}/>
+                    </div>
+
+                    {/* Google signup — triggers One Tap, pre-fills name + email */}
+                    <button type="button" onClick={handleGoogle}
+                            style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:"10px",borderRadius:"12px",padding:"12px",fontSize:"14px",fontWeight:600,color:"#334155",background:"white",border:"1.5px solid #E2E8F0",cursor:"pointer",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",transition:"all .2s"}}>
+                      <GoogleIcon/>
+                      Sign up with Google
+                    </button>
                   </div>
                 )}
 
@@ -424,6 +455,7 @@ export default function Login() {
                     </button>
                   </div>
                 )}
+
 
               </div>
 
