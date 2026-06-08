@@ -51,6 +51,29 @@ TOPICS: Dict[str, str] = {
 
 REGISTERED_TOPICS = set(TOPICS.values())
 
+# Operational topic names used by ZoikoProducer and written to the outbox table.
+# Kept in sync with REGISTERED_TOPICS in phase-1/kafka/producer.py.
+# The outbox relay validates against this copy (producer.py is in a different package).
+PRODUCER_TOPICS: set = {
+    # Core pipeline
+    "zoiko.source.record.received",     "zoiko.source.record.validated",    "zoiko.canonical.invoice.created",
+    "zoiko.case.opened",                "zoiko.case.updated",               "zoiko.case.closed",
+    "zoiko.evidence.bundled",           "zoiko.finding.generated",          "zoiko.proposal.created",
+    "zoiko.governance.decision.issued", "zoiko.governance.token.issued",    "zoiko.governance.token.consumed",
+    "zoiko.execution.dispatched",       "zoiko.execution.completed",
+    "zoiko.reconciliation.updated",     "zoiko.acr.generated",              "zoiko.audit.artifact.written",
+    # Security event stream (FR-024)
+    "zoiko.security.event-detected.v1",
+    # Retry topics — transient failures re-queued for backoff/retry
+    "zoiko.evidence.bundled.retry",           "zoiko.finding.generated.retry",
+    "zoiko.governance.decision.issued.retry", "zoiko.governance.token.issued.retry",
+    "zoiko.execution.dispatched.retry",       "zoiko.reconciliation.updated.retry",
+    # DLQ topics — exhausted retries land here for manual review / alerting
+    "zoiko.evidence.bundled.dlq",             "zoiko.finding.generated.dlq",
+    "zoiko.governance.decision.issued.dlq",   "zoiko.governance.token.issued.dlq",
+    "zoiko.execution.dispatched.dlq",         "zoiko.reconciliation.updated.dlq",
+}
+
 
 @dataclass
 class KafkaMessage:
@@ -141,7 +164,21 @@ class KafkaEventEnvelope:
     @classmethod
     def from_bytes(cls, data: bytes) -> "KafkaEventEnvelope":
         doc = json.loads(data.decode("utf-8"))
-        env = cls.__new__(cls)
-        for k, v in doc.items():
-            object.__setattr__(env, k, v)
-        return env
+        # Reconstruct via __init__ so __post_init__ runs validation and
+        # recomputes payload_hash — prevents tampered messages from bypassing
+        # the integrity check by supplying a forged payload_hash field.
+        return cls(
+            topic          = doc["topic"],
+            tenant_id      = doc["tenant_id"],
+            aggregate_type = doc["aggregate_type"],
+            aggregate_id   = doc["aggregate_id"],
+            payload        = doc["payload"],
+            event_id       = doc.get("event_id", str(uuid.uuid4())),
+            schema_version = doc.get("schema_version", "1.0"),
+            occurred_at    = doc.get("occurred_at", datetime.now(timezone.utc).isoformat()),
+            producer       = doc.get("producer", "spiffe://zoiko.internal/service/unknown"),
+            traceparent    = doc.get("traceparent"),
+            correlation_id = doc.get("correlation_id"),
+            causation_id   = doc.get("causation_id"),
+            signature      = doc.get("signature"),
+        )

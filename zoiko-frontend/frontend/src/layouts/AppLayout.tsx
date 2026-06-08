@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAppDispatch, useAppSelector } from "@/store";
 import { logout as logoutAction } from "@/store/authSlice";
 import { queryClient } from "@/lib/queryClient";
+import axios from "axios";
 import { cn } from "@/utils/cn";
 import {
   LayoutDashboard, FileText, FolderOpen,
@@ -134,6 +135,8 @@ export default function AppLayout() {
   const pageTitle = activeItem?.label ?? "Dashboard";
 
   function handleLogout() {
+    // Tell backend to delete the HttpOnly cookie, then clear local state
+    axios.post("/api/v1/auth/signout", {}, { withCredentials: true }).catch(() => {});
     dispatch(logoutAction());
     queryClient.clear();
     nav("/login");

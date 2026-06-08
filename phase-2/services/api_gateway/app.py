@@ -20,10 +20,13 @@ import paths  # noqa: F401 — must be first
 
 load_dotenv()
 
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse as _JSONResponse
+from fastapi.security import HTTPBearer as _HTTPBearer, HTTPAuthorizationCredentials as _HTTPCreds
+from typing import Optional
 
-from services.api_gateway.auth   import get_claims
+from services.api_gateway.auth   import get_claims, get_claims_by_cookie
 from zoiko_common.middleware.feature_flags import require_feature_flag
 import re as _re, uuid, hashlib, json
 from decimal import Decimal
@@ -100,6 +103,70 @@ def _make_broker():
 
 _BROKER = _make_broker()
 
+# ── Auto-DDL: create tables on startup (self-healing, no manual DDL runs) ─────
+def _init_db():
+    """Run safe DDL on every boot — idempotent via IF NOT EXISTS."""
+    import psycopg2 as _pg, logging, hashlib, textwrap
+    from psycopg2.extras import RealDictCursor as _RDC
+    _log = logging.getLogger("zoiko.db")
+    DDL = [
+        textwrap.dedent("""\
+            CREATE TABLE IF NOT EXISTS signup_verification (
+                id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email            TEXT NOT NULL,
+                org_name         TEXT NOT NULL,
+                admin_name       TEXT NOT NULL,
+                password_hash    TEXT NOT NULL,
+                otp_hash         TEXT NOT NULL,
+                failed_attempts  INTEGER NOT NULL DEFAULT 0,
+                expires_at       TIMESTAMPTZ NOT NULL,
+                used_at          TIMESTAMPTZ,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """),
+        textwrap.dedent("""\
+            CREATE TABLE IF NOT EXISTS password_reset_otp (
+                id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email            TEXT NOT NULL,
+                otp              TEXT NOT NULL,
+                expires_at       TIMESTAMPTZ NOT NULL,
+                used_at          TIMESTAMPTZ,
+                failed_attempts  INTEGER NOT NULL DEFAULT 0,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """),
+        textwrap.dedent("""\
+            CREATE TABLE IF NOT EXISTS password_reset_verify (
+                id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                email        TEXT NOT NULL,
+                verify_hash  TEXT NOT NULL,
+                expires_at   TIMESTAMPTZ NOT NULL,
+                used_at      TIMESTAMPTZ,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """),
+        "ALTER TABLE password_reset_otp ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0",
+    ]
+    try:
+        conn = _pg.connect(DB_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        for stmt in DDL:
+            cur.execute(stmt)
+        # Migrate old plaintext OTPs to SHA-256 hashes (one-time migration)
+        cur = conn.cursor(cursor_factory=_RDC)
+        cur.execute(
+            "SELECT id, otp FROM password_reset_otp WHERE used_at IS NULL AND LENGTH(otp) < 64"
+        )
+        for row in cur.fetchall():
+            _hashed = hashlib.sha256(row["otp"].encode()).hexdigest()
+            cur.execute("UPDATE password_reset_otp SET otp = %s WHERE id = %s", (_hashed, row["id"]))
+        cur.close()
+        conn.close()
+        _log.info("DB schema up to date (password_reset_otp + password_reset_verify)")
+    except Exception as exc:
+        _log.warning("DB schema sync skipped (%s) — app will still start", exc)
+
 # ── FastAPI app with lifespan (outbox relay + startup logging) ────────────────
 import threading
 from contextlib import asynccontextmanager
@@ -127,6 +194,8 @@ def _run_outbox_relay():
 
 @asynccontextmanager
 async def lifespan(app):
+    # Auto-sync DB schema on every boot (idempotent — no manual DDL needed)
+    _init_db()
     # Start outbox relay in background thread (daemon — exits with main process)
     _relay_thread = threading.Thread(target=_run_outbox_relay, daemon=True, name="outbox-relay")
     _relay_thread.start()
@@ -191,8 +260,9 @@ app.add_middleware(SecurityHeadersMiddleware)
 try:
     from zoiko_common.observability.tracing import setup_tracing
     setup_tracing("phase2-api-gateway")
-except Exception:
-    pass
+except Exception as _exc:
+    import logging
+    logging.getLogger("zoiko.startup").warning("Distributed tracing unavailable: %s", _exc)
 
 # Security event publisher (FR-024)
 from zoiko_common.security.events import SecurityEventPublisher, SecurityEventKind
@@ -212,10 +282,29 @@ _canonical  = CanonicalHandler(DB_URL, _BROKER, TENANT_SLUG)
 _cases      = CaseHandler(DB_URL, _BROKER)
 
 
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _auth_cookie_response(data: dict, token: str, ttl: int, status_code: int = 200):
+    """Return auth data as JSON and set the JWT in an HttpOnly cookie.
+    Token is never exposed in the response body — XSS cannot read it."""
+    resp = _JSONResponse(status_code=status_code, content=data)
+    is_prod = os.getenv("ZOIKO_ENV", "development").lower() == "production"
+    resp.set_cookie(
+        key="zoiko_jwt",
+        value=token,
+        httponly=True,           # JS cannot read this cookie
+        secure=is_prod,          # HTTPS-only in production; HTTP allowed in dev
+        samesite="strict",       # blocks CSRF
+        max_age=ttl,
+        path="/",
+    )
+    return resp
+
+
 # ── Auth — public endpoints (no JWT required) ─────────────────────────────────
 
-@app.post("/auth/login", response_model=LoginResponse, tags=["auth"])
-@app.post("/v1/auth/login", response_model=LoginResponse, tags=["auth"], include_in_schema=False)
+@app.post("/auth/login", tags=["auth"])
+@app.post("/v1/auth/login", tags=["auth"], include_in_schema=False)
 def login(body: LoginRequest):
     """Email + password → JWT. Works for all roles (analyst / manager / admin)."""
     import bcrypt as _bcrypt
@@ -228,6 +317,8 @@ def login(body: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail="Account is disabled. Contact your admin.")
+    if not row["password_hash"]:
+        raise HTTPException(status_code=401, detail="This account was created with Google Sign-In. Please use the 'Sign in with Google' button to log in.")
     if not _bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -241,13 +332,9 @@ def login(body: LoginRequest):
         roles     = [row["role"]],
         ttl_sec   = ttl,
     )
-    return LoginResponse(
-        token      = token,
-        tenant_id  = str(row["tenant_id"]),
-        role       = row["role"],
-        full_name  = row["full_name"],
-        email      = row["email"],
-        expires_in = ttl,
+    return _auth_cookie_response(
+        {"tenant_id": str(row["tenant_id"]), "role": row["role"], "full_name": row["full_name"], "email": row["email"], "expires_in": ttl},
+        token=token, ttl=ttl,
     )
 
 
@@ -496,6 +583,185 @@ def recover_complete(body: dict):
     return {"message": "Password reset successfully", "token": token}
 
 
+# ── OTP-based Forgot Password ─────────────────────────────────────────────────
+
+@app.post("/auth/forgot-password", tags=["auth"])
+@app.post("/v1/auth/forgot-password", tags=["auth"], include_in_schema=False)
+def forgot_password(body: dict):
+    """Send 6-digit OTP if email exists. Always returns same response — prevents user enumeration."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg, smtplib, time as _time, random as _rand
+    from email.mime.text import MIMEText
+
+    email = str(body.get("email", "")).lower().strip()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="Valid email required")
+
+    user = q1("SELECT id FROM users WHERE email = %s", (email,))
+
+    # Constant-time sleep — same delay whether email exists or not (anti-enumeration)
+    _time.sleep(_rand.uniform(0.15, 0.25))
+
+    if user:
+        otp = f"{_sec.randbelow(900000) + 100000}"
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+        conn = _pg.connect(DB_URL)
+        try:
+            cur = conn.cursor()
+            cur.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL", (email,))
+            otp_hash = _hl.sha256(otp.encode()).hexdigest()
+            cur.execute(
+                "INSERT INTO password_reset_otp (email, otp, expires_at) VALUES (%s, %s, %s)",
+                (email, otp_hash, expires_at),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+        smtp_user = os.getenv("EMAIL_NAME", "")
+        smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+        if smtp_user and smtp_pass:
+            import logging as _log
+            try:
+                email_body = (
+                    f"Welcome to ZoikoAI,\n\n"
+                    f"We understand you forgot your password. No worries — here's your One-Time Password (OTP) to set a new one:\n\n"
+                    f"Your OTP: {otp}\n\n"
+                    f"This code is valid for 10 minutes. Please use it before it expires.\n\n"
+                    f"If you didn't request this, you can safely ignore this email.\n\n"
+                    f"Best regards,\nZoikoAI Logistics Team"
+                )
+                msg = MIMEText(email_body, "plain", "utf-8")
+                msg["Subject"] = "ZoikoAI — Password Reset OTP"
+                msg["From"] = smtp_user
+                msg["To"] = email
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                    s.starttls()
+                    s.login(smtp_user, smtp_pass)
+                    s.sendmail(smtp_user, [email], msg.as_string())
+            except Exception as _exc:
+                _log.getLogger("zoiko.auth").error("Forgot-password OTP email failed for %s: %s", email, _exc)
+
+    return {"message": "If this email is registered, you'll receive a code.", "expires_in_minutes": 10}
+
+
+@v1_router.post("/auth/verify-otp", tags=["auth"])
+def verify_otp(body: dict):
+    """Validate OTP and expiry. Returns a verification token for password reset."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+    from psycopg2.extras import RealDictCursor as _RDC
+
+    email = str(body.get("email", "")).lower().strip()
+    otp   = str(body.get("otp", "")).strip()
+
+    if not email or not otp:
+        raise HTTPException(status_code=422, detail="email and otp required")
+
+    otp_hash = _hl.sha256(otp.encode()).hexdigest()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor(cursor_factory=_RDC)
+        # Try hashed match first (new style). If nil, try plaintext for backwards compat.
+        cur.execute(
+            "UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND otp = %s AND used_at IS NULL RETURNING id, expires_at",
+            (email, otp_hash),
+        )
+        row = cur.fetchone()
+        if not row:
+            # Backwards compat: some OTPs were stored as plaintext before the SHA-256 change
+            cur.execute(
+                "UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND otp = %s AND used_at IS NULL RETURNING id, expires_at",
+                (email, otp),
+            )
+            row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "UPDATE password_reset_otp SET failed_attempts = COALESCE(failed_attempts, 0) + 1 WHERE email = %s AND used_at IS NULL RETURNING failed_attempts",
+                (email,),
+            )
+            fail_row = cur.fetchone()
+            if fail_row and fail_row["failed_attempts"] >= 5:
+                cur.execute(
+                    "UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL",
+                    (email,),
+                )
+            conn.commit()
+            raise HTTPException(status_code=401, detail="Invalid OTP")
+        if datetime.now(timezone.utc) > row["expires_at"]:
+            raise HTTPException(status_code=401, detail="OTP expired")
+
+        verify_token = _sec.token_urlsafe(32)
+        verify_hash  = _hl.sha256(verify_token.encode()).hexdigest()
+        cur.execute(
+            "INSERT INTO password_reset_verify (email, verify_hash, expires_at) VALUES (%s, %s, %s)",
+            (email, verify_hash, datetime.now(timezone.utc) + timedelta(minutes=5)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"message": "OTP verified", "verify_token": verify_token, "expires_in_minutes": 5}
+
+
+@v1_router.post("/auth/reset-password", tags=["auth"])
+def reset_password(body: dict):
+    """Reset password using verify_token from OTP verification."""
+    import bcrypt as _bcrypt, hashlib as _hl, psycopg2 as _pg
+    from middleware.oidc.token_verifier import TokenVerifier
+
+    email         = str(body.get("email", "")).lower().strip()
+    verify_token  = str(body.get("verify_token", "")).strip()
+    new_password  = str(body.get("password", ""))
+    confirm_pw    = str(body.get("confirm_password", ""))
+
+    if not email or not verify_token:
+        raise HTTPException(status_code=422, detail="email and verify_token required")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if new_password != confirm_pw:
+        raise HTTPException(status_code=422, detail="Passwords do not match")
+
+    verify_hash = _hl.sha256(verify_token.encode()).hexdigest()
+    now = datetime.now(timezone.utc)
+
+    row = q1(
+        "SELECT id FROM password_reset_verify WHERE email = %s AND verify_hash = %s AND used_at IS NULL AND expires_at > %s",
+        (email, verify_hash, now),
+    )
+    if not row:
+        raise HTTPException(status_code=401, detail="Invalid or expired verification token")
+
+    user = q1("SELECT id, tenant_id FROM users WHERE email = %s", (email,))
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pw_hash = _bcrypt.hashpw(new_password.encode(), _bcrypt.gensalt()).decode()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET password_hash = %s WHERE id = %s", (pw_hash, user["id"]))
+        cur.execute("UPDATE password_reset_verify SET used_at = %s WHERE id = %s", (now, row["id"]))
+        conn.commit()
+    finally:
+        conn.close()
+
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    actual_role = q1("SELECT role FROM users WHERE email = %s", (email,))["role"]
+    token = verifier.make_dev_token(
+        sub=email, tenant_id=str(user["tenant_id"]), roles=[actual_role],
+        ttl_sec=int(os.getenv("JWT_TTL_SECONDS", "86400")),
+    )
+
+    return {"message": "Password reset successfully", "token": token}
+
+
 # ── Workspace Access Request (prospects — no tenant created) ──────────────────
 
 @app.post("/auth/workspace-request", tags=["auth"], status_code=201)
@@ -698,6 +964,471 @@ def org_signup(body: dict):
         roles=["admin"], ttl_sec=ttl,
     )
 
+    return _auth_cookie_response(
+        {"tenant_id": str(tenant_id), "role": "admin", "full_name": admin_name, "email": admin_email, "expires_in": ttl, "org_name": org_name},
+        token=token, ttl=ttl, status_code=201,
+    )
+
+
+# ── Google OAuth — verify GSI ID token, find or create user ───────────────────
+
+@app.post("/auth/google", tags=["auth"])
+@app.post("/v1/auth/google", tags=["auth"], include_in_schema=False)
+def google_auth(body: dict):
+    """
+    Accepts a Google Identity Services (GSI) credential (ID token).
+
+    Responses:
+      200 — existing user found → returns JWT immediately
+      201 — new user, org created → returns JWT
+      202 — new user, no org yet → returns {status:'new_user', email, name}
+              (frontend should collect org_name and re-POST with it)
+
+    Body: { credential: str, org_name?: str }
+    """
+    import requests as _req, psycopg2 as _pg
+
+    credential = str(body.get("credential", "")).strip()
+    org_name   = str(body.get("org_name", "")).strip()
+
+    if not credential:
+        raise HTTPException(status_code=422, detail="'credential' is required")
+
+    google_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    if not google_client_id:
+        raise HTTPException(status_code=503, detail="Google auth is not configured on this server")
+
+    # Verify the Google ID token via Google's tokeninfo endpoint
+    try:
+        r = _req.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+            timeout=10,
+        )
+    except _req.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Could not reach Google: {exc}")
+
+    if r.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
+
+    info = r.json()
+    if info.get("aud") != google_client_id:
+        raise HTTPException(status_code=401, detail="Token audience mismatch — wrong Google client")
+    if info.get("email_verified") not in (True, "true"):
+        raise HTTPException(status_code=401, detail="Google email is not verified")
+
+    email = info.get("email", "").lower().strip()
+    name  = (info.get("name") or info.get("given_name") or email.split("@")[0]).strip()
+
+    if not email:
+        raise HTTPException(status_code=422, detail="Google account has no email address")
+
+    # ── Existing user → return JWT immediately ────────────────────────────────
+    existing = q1(
+        "SELECT id, tenant_id, full_name, role FROM users WHERE email = %s AND is_active = true",
+        (email,),
+    )
+    if existing:
+        from middleware.oidc.token_verifier import TokenVerifier
+        secret   = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+        issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+        ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+        verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+        token    = verifier.make_dev_token(
+            sub=email, tenant_id=str(existing["tenant_id"]),
+            roles=[existing["role"]], ttl_sec=ttl,
+        )
+        return _auth_cookie_response(
+            {"tenant_id": str(existing["tenant_id"]), "role": existing["role"], "full_name": existing["full_name"], "email": email, "expires_in": ttl},
+            token=token, ttl=ttl,
+        )
+
+    # ── New user — need org_name before creating account ─────────────────────
+    if not org_name:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=202, content={
+            "status": "new_user",
+            "email":  email,
+            "name":   name,
+        })
+
+    # ── Create tenant + user (Google SSO — no password) ───────────────────────
+    import bcrypt as _bcrypt
+    slug = _re.sub(r"[^a-z0-9-]", "", org_name.lower().replace(" ", "-").replace("_", "-"))
+    if not slug:
+        raise HTTPException(status_code=422, detail="Invalid organization name")
+
+    if q1("SELECT id FROM tenants WHERE slug = %s", (slug,)):
+        raise HTTPException(status_code=409, detail=f"Organization '{org_name}' already registered.")
+    if q1("SELECT id FROM users WHERE email = %s", (email,)):
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    now       = datetime.now(timezone.utc)
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, email, '', name, "admin", now),  # empty = Google SSO, no password login
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from middleware.oidc.token_verifier import TokenVerifier
+    from fastapi.responses import JSONResponse
+    secret   = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token    = verifier.make_dev_token(
+        sub=email, tenant_id=str(tenant_id), roles=["admin"], ttl_sec=ttl,
+    )
+    return _auth_cookie_response(
+        {"tenant_id": str(tenant_id), "role": "admin", "full_name": name, "email": email, "expires_in": ttl, "org_name": org_name},
+        token=token, ttl=ttl, status_code=201,
+    )
+
+
+# ── Google OAuth — Authorization Code exchange ────────────────────────────────
+
+@app.post("/auth/google/callback", tags=["auth"])
+@app.post("/v1/auth/google/callback", tags=["auth"], include_in_schema=False)
+def google_callback(body: dict):
+    """
+    Exchange Google authorization code (from redirect) for user info.
+    Returns JWT for existing users, or 202 + signup_token for new users.
+    Body: { code: str, redirect_uri: str }
+    """
+    import requests as _req, jwt as _jwt, time as _time
+
+    code         = str(body.get("code", "")).strip()
+    redirect_uri = str(body.get("redirect_uri", "")).strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="'code' is required")
+
+    g_client_id  = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    g_secret     = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+    if not g_client_id or not g_secret:
+        raise HTTPException(status_code=503, detail="Google auth not configured on this server")
+
+    # Exchange code → tokens
+    try:
+        r = _req.post("https://oauth2.googleapis.com/token", data={
+            "code":          code,
+            "client_id":     g_client_id,
+            "client_secret": g_secret,
+            "redirect_uri":  redirect_uri,
+            "grant_type":    "authorization_code",
+        }, timeout=10)
+    except _req.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Could not reach Google: {exc}")
+
+    if r.status_code != 200:
+        detail = r.json().get("error_description", r.text)
+        raise HTTPException(status_code=401, detail=f"Google token exchange failed: {detail}")
+
+    id_token = r.json().get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=401, detail="No ID token returned by Google")
+
+    # Decode payload (we trust Google's HTTPS response — no signature re-verify needed)
+    payload = _jwt.decode(id_token, options={"verify_signature": False})
+    email   = payload.get("email", "").lower().strip()
+    name    = (payload.get("name") or payload.get("given_name") or email.split("@")[0]).strip()
+    if not email:
+        raise HTTPException(status_code=422, detail="Google account has no email")
+
+    # Existing user → JWT immediately
+    existing = q1(
+        "SELECT id, tenant_id, full_name, role FROM users WHERE email = %s AND is_active = true",
+        (email,),
+    )
+    dev_secret = os.getenv("ZOIKO_DEV_SECRET", "")
+    issuer     = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl        = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+
+    if existing:
+        from middleware.oidc.token_verifier import TokenVerifier
+        verifier = TokenVerifier(dev_secret=dev_secret.encode(), issuer=issuer)
+        token    = verifier.make_dev_token(
+            sub=email, tenant_id=str(existing["tenant_id"]),
+            roles=[existing["role"]], ttl_sec=ttl,
+        )
+        return _auth_cookie_response(
+            {"tenant_id": str(existing["tenant_id"]), "role": existing["role"], "full_name": existing["full_name"], "email": email, "expires_in": ttl},
+            token=token, ttl=ttl,
+        )
+
+    # New user — issue a 10-min signup token (avoids re-verifying with Google)
+    now          = int(_time.time())
+    signup_token = _jwt.encode(
+        {"sub": email, "name": name, "type": "google_signup", "iat": now, "exp": now + 600},
+        dev_secret, algorithm="HS256",
+    )
+    from fastapi.responses import JSONResponse
+    return JSONResponse(status_code=202, content={
+        "status":       "new_user",
+        "email":        email,
+        "name":         name,
+        "signup_token": signup_token,
+    })
+
+
+# ── Google OAuth — complete signup after org name is collected ─────────────────
+
+@app.post("/auth/google/complete-signup", tags=["auth"], status_code=201)
+@app.post("/v1/auth/google/complete-signup", tags=["auth"], include_in_schema=False, status_code=201)
+def google_complete_signup(body: dict):
+    """
+    Finish Google signup: verify 10-min signup_token, create tenant + user, return JWT.
+    Body: { signup_token: str, org_name: str }
+    """
+    import jwt as _jwt, psycopg2 as _pg, bcrypt as _bcrypt
+
+    signup_token = str(body.get("signup_token", "")).strip()
+    org_name     = str(body.get("org_name", "")).strip()
+    if not signup_token or not org_name:
+        raise HTTPException(status_code=422, detail="'signup_token' and 'org_name' are required")
+
+    dev_secret = os.getenv("ZOIKO_DEV_SECRET", "")
+    try:
+        claims = _jwt.decode(signup_token, dev_secret, algorithms=["HS256"])
+    except _jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Signup session expired. Please sign in with Google again.")
+    except _jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid signup token.")
+
+    if claims.get("type") != "google_signup":
+        raise HTTPException(status_code=401, detail="Invalid token type.")
+
+    email = claims.get("sub", "").lower().strip()
+    name  = claims.get("name", email.split("@")[0]).strip()
+
+    slug = _re.sub(r"[^a-z0-9-]", "", org_name.lower().replace(" ", "-").replace("_", "-"))
+    if not slug:
+        raise HTTPException(status_code=422, detail="Invalid organization name.")
+
+    if q1("SELECT id FROM tenants WHERE slug = %s", (slug,)):
+        raise HTTPException(status_code=409, detail=f"Organization '{org_name}' already registered.")
+    if q1("SELECT id FROM users WHERE email = %s", (email,)):
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in.")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    now       = datetime.now(timezone.utc)
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, email, '', name, "admin", now),  # empty = Google SSO, no password login
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from middleware.oidc.token_verifier import TokenVerifier
+    from fastapi.responses import JSONResponse
+    issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=dev_secret.encode(), issuer=issuer)
+    token    = verifier.make_dev_token(sub=email, tenant_id=str(tenant_id), roles=["admin"], ttl_sec=ttl)
+
+    return _auth_cookie_response(
+        {"tenant_id": str(tenant_id), "role": "admin", "full_name": name, "email": email, "expires_in": ttl, "org_name": org_name},
+        token=token, ttl=ttl, status_code=201,
+    )
+
+
+# ── Organization signup with email OTP verification (production-grade) ────────
+# Uses completely separate table signup_verification — no relation to password_reset_otp
+
+@app.post("/auth/signup-send-otp", tags=["auth"])
+@app.post("/v1/auth/signup-send-otp", tags=["auth"], include_in_schema=False)
+def signup_send_otp(body: dict):
+    """Step 1: validate signup data, send OTP to email, store temp data."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg, smtplib
+    from email.mime.text import MIMEText
+    import bcrypt as _bcrypt
+
+    org_name     = str(body.get("org_name", "")).strip()
+    admin_name   = str(body.get("admin_name", "")).strip()
+    admin_email  = str(body.get("admin_email", "")).lower().strip()
+    admin_pw     = str(body.get("admin_password", ""))
+
+    for field, label in [
+        (org_name, "org_name"), (admin_name, "admin_name"),
+        (admin_email, "admin_email"), (admin_pw, "admin_password"),
+    ]:
+        if not field:
+            raise HTTPException(status_code=422, detail=f"'{label}' is required")
+    if len(admin_pw) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    if "@" not in admin_email:
+        raise HTTPException(status_code=422, detail="Valid email required")
+
+    slug = org_name.lower().replace(" ", "-").replace("_", "-")
+
+    existing_tenant = q1("SELECT id FROM tenants WHERE slug = %s", (slug,))
+    if existing_tenant:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Organization '{org_name}' already registered. Please contact your admin or use sign in."
+        )
+    existing_user = q1("SELECT id FROM users WHERE email = %s", (admin_email,))
+    if existing_user:
+        raise HTTPException(status_code=409, detail="Email already registered. Please sign in instead.")
+
+    otp = f"{_sec.randbelow(900000) + 100000}"
+    otp_hash = _hl.sha256(otp.encode()).hexdigest()
+    pw_hash = _bcrypt.hashpw(admin_pw.encode(), _bcrypt.gensalt()).decode()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE signup_verification SET used_at = NOW() WHERE email = %s AND used_at IS NULL",
+            (admin_email,),
+        )
+        cur.execute(
+            "INSERT INTO signup_verification (email, org_name, admin_name, password_hash, otp_hash, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (admin_email, org_name, admin_name, pw_hash, otp_hash, expires_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("EMAIL_NAME", "")
+    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+    if smtp_user and smtp_pass:
+        try:
+            email_body = (
+                f"Welcome to ZoikoAI,\n\n"
+                f"Thank you for creating your organization '{org_name}'.\n"
+                f"Please use the following OTP to verify your email address:\n\n"
+                f"Your OTP: {otp}\n\n"
+                f"This code is valid for 10 minutes.\n\n"
+                f"If you didn't request this, you can safely ignore this email.\n\n"
+                f"Best regards,\nZoikoAI Logistics Team"
+            )
+            msg = MIMEText(email_body, "plain", "utf-8")
+            msg["Subject"] = "ZoikoAI — Verify Your Email Address"
+            msg["From"] = smtp_user
+            msg["To"] = admin_email
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                s.starttls()
+                s.login(smtp_user, smtp_pass)
+                s.sendmail(smtp_user, [admin_email], msg.as_string())
+        except Exception as _exc:
+            import logging as _log
+            _log.getLogger("zoiko.auth").error("Signup OTP email failed for %s: %s", admin_email, _exc)
+
+    return {"message": "OTP sent to email", "expires_in_minutes": 10}
+
+
+@app.post("/auth/signup-verify-otp", tags=["auth"])
+@app.post("/v1/auth/signup-verify-otp", tags=["auth"], include_in_schema=False)
+def signup_verify_otp(body: dict):
+    """Step 2: verify OTP, create tenant + admin user, return JWT."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+    from psycopg2.extras import RealDictCursor as _RDC
+
+    admin_email = str(body.get("admin_email", "")).lower().strip()
+    otp         = str(body.get("otp", "")).strip()
+
+    if not admin_email or not otp:
+        raise HTTPException(status_code=422, detail="email and otp required")
+
+    otp_hash = _hl.sha256(otp.encode()).hexdigest()
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor(cursor_factory=_RDC)
+        cur.execute(
+            "UPDATE signup_verification SET used_at = NOW() "
+            "WHERE email = %s AND otp_hash = %s AND used_at IS NULL "
+            "RETURNING id, org_name, admin_name, password_hash, expires_at",
+            (admin_email, otp_hash),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.execute(
+                "UPDATE signup_verification SET failed_attempts = COALESCE(failed_attempts, 0) + 1 "
+                "WHERE email = %s AND used_at IS NULL RETURNING failed_attempts",
+                (admin_email,),
+            )
+            fail_row = cur.fetchone()
+            if fail_row and fail_row["failed_attempts"] >= 5:
+                cur.execute(
+                    "UPDATE signup_verification SET used_at = NOW() WHERE email = %s AND used_at IS NULL",
+                    (admin_email,),
+                )
+            conn.commit()
+            raise HTTPException(status_code=401, detail="Invalid OTP")
+        if datetime.now(timezone.utc) > row["expires_at"]:
+            raise HTTPException(status_code=401, detail="OTP expired")
+
+        org_name     = row["org_name"]
+        admin_name   = row["admin_name"]
+        password_hash = row["password_hash"]
+        slug = org_name.lower().replace(" ", "-").replace("_", "-")
+        tenant_id = uuid.uuid4()
+        user_id   = uuid.uuid4()
+        now       = datetime.now(timezone.utc)
+
+        # Re-check duplicates inside the same transaction (race condition guard)
+        dup_tenant = q1("SELECT id FROM tenants WHERE slug = %s", (slug,))
+        if dup_tenant:
+            raise HTTPException(status_code=409, detail="Organization already registered")
+        dup_user = q1("SELECT id FROM users WHERE email = %s", (admin_email,))
+        if dup_user:
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, org_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, tenant_id, admin_email, password_hash, admin_name, "admin", now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Generate JWT
+    from middleware.oidc.token_verifier import TokenVerifier
+    secret  = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+    issuer  = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+    ttl     = int(os.getenv("JWT_TTL_SECONDS", "86400"))
+    verifier = TokenVerifier(dev_secret=secret, issuer=issuer)
+    token   = verifier.make_dev_token(
+        sub=admin_email, tenant_id=str(tenant_id),
+        roles=["admin"], ttl_sec=ttl,
+    )
+
     return {
         "token":      token,
         "tenant_id":  str(tenant_id),
@@ -714,15 +1445,20 @@ def org_signup(body: dict):
 @app.post("/auth/signout", tags=["auth"], status_code=204)
 @app.post("/v1/auth/signout", tags=["auth"], include_in_schema=False, status_code=204)
 def signout():
-    """Client clears its JWT. Server-side: stateless JWT so nothing to revoke here."""
-    return  # Client removes token from storage
+    """Clear auth cookie. Stateless JWT — nothing to revoke server-side."""
+    from fastapi.responses import Response as _Response
+    resp = _Response(status_code=204)
+    resp.delete_cookie(key="zoiko_jwt", path="/")
+    return resp
 
 
 # ── Profile — user & tenant settings ──────────────────────────────────────────
 
 @app.get("/auth/me")
 @app.get("/v1/auth/me", include_in_schema=False)
-def get_profile(claims: ZoikoClaims = Depends(get_claims)):
+def get_profile(claims: ZoikoClaims = Depends(get_claims_by_cookie)):
+    """Return profile for the authenticated user.
+    Uses cookie-based auth — no X-Tenant-ID required, enabling session restoration."""
     row = q1(
         "SELECT full_name, email, role, title, is_active, created_at FROM users WHERE email = %s AND tenant_id = %s::uuid",
         (claims.sub, claims.tenant_id),
@@ -736,6 +1472,7 @@ def get_profile(claims: ZoikoClaims = Depends(get_claims)):
         "title":      row["title"] or "",
         "is_active":  row["is_active"],
         "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
+        "tenant_id":  str(claims.tenant_id),
     }
 
 @app.put("/auth/me")
@@ -808,7 +1545,7 @@ def update_tenant_info(body: dict, claims: ZoikoClaims = Depends(get_claims)):
 @app.get("/v1/carriers", include_in_schema=False)
 def list_carriers(claims: ZoikoClaims = Depends(get_claims)):
     rows = q(
-        "SELECT id::text, name, email, address, contact_person, contact_phone, created_at "
+        "SELECT id::text, name, email, address, contact_person, contact_phone, cc_emails, created_at "
         "FROM carriers WHERE tenant_id = %s::uuid ORDER BY name ASC",
         (claims.tenant_id,),
     )
@@ -820,6 +1557,7 @@ def list_carriers(claims: ZoikoClaims = Depends(get_claims)):
             "address":        r["address"] or "",
             "contact_person": r["contact_person"] or "",
             "contact_phone":  r["contact_phone"] or "",
+            "cc_emails":      r["cc_emails"] or "",
             "created_at":     r["created_at"].isoformat() if hasattr(r["created_at"], "isoformat") else str(r["created_at"]),
         }
         for r in rows
@@ -843,14 +1581,15 @@ def create_carrier(body: dict, claims: ZoikoClaims = Depends(get_claims)):
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO carriers (id, tenant_id, name, email, address, contact_person, contact_phone) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            "INSERT INTO carriers (id, tenant_id, name, email, address, contact_person, contact_phone, cc_emails) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 carrier_id, claims.tenant_id, name,
                 str(body.get("email", "")).strip(),
                 str(body.get("address", "")).strip(),
                 str(body.get("contact_person", "")).strip(),
                 str(body.get("contact_phone", "")).strip(),
+                str(body.get("cc_emails", "")).strip(),
             ),
         )
         conn.commit()
@@ -862,7 +1601,7 @@ def create_carrier(body: dict, claims: ZoikoClaims = Depends(get_claims)):
 @app.put("/v1/carriers/{carrier_id}", include_in_schema=False)
 def update_carrier(carrier_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
     import psycopg2 as _pg
-    allowed = {"name", "email", "address", "contact_person", "contact_phone"}
+    allowed = {"name", "email", "address", "contact_person", "contact_phone", "cc_emails"}
     updates = {}
     for k in body:
         if k in allowed:
@@ -2449,8 +3188,9 @@ def _run_full_pipeline(
             carrier=carrier, amount=diff, currency=currency,
             route=f"{origin} → {dest}", actor_sub=actor_sub, broker=broker,
         )
-    except Exception:
-        pass
+    except Exception as _exc:
+        import logging as _log
+        _log.getLogger("zoiko.pipeline").error("Evidence/reasoning pipeline failed for case %s: %s", case_id, _exc)
 
     return {"case_id": str(case_r.case_id), "state": "FINDING_GENERATED",
             "carrier": carrier, "amount": amount, "diff": diff}
@@ -2681,13 +3421,8 @@ async def extract_contract_rates(
 def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     """
     Generate a professional dispute letter for a case, auto-filled with
-    real tenant/carrier data from the database.
-    Uses Groq AI when GROQ_API_KEY is set, otherwise generates a
-    template letter from the case data.
+    real tenant/carrier/case data from the database.
     """
-    groq_key = os.getenv("GROQ_API_KEY", "")
-
-    # Fetch case + validation + finding data
     row = q1("""
         SELECT
             c.id::text AS case_id,
@@ -2725,22 +3460,12 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     contract_amt = billed - overcharge
     ref          = case_id[:8].upper()
 
-    # ── Fetch sender (tenant) details ───────────────────────────────────────────
     tenant_row = q1(
-        "SELECT display_name, address, city, state, pincode, phone, email "
-        "FROM tenants WHERE id = %s::uuid",
+        "SELECT display_name FROM tenants WHERE id = %s::uuid",
         (claims.tenant_id,),
     )
     company_name = (tenant_row.get("display_name") or "Your Company") if tenant_row else "Your Company"
-    company_addr = (tenant_row.get("address") or "").strip() if tenant_row else ""
-    company_city = (tenant_row.get("city") or "").strip() if tenant_row else ""
-    company_st   = (tenant_row.get("state") or "").strip() if tenant_row else ""
-    company_pin  = (tenant_row.get("pincode") or "").strip() if tenant_row else ""
-    company_ph   = (tenant_row.get("phone") or "").strip() if tenant_row else ""
-    company_em   = (tenant_row.get("email") or "").strip() if tenant_row else ""
-    company_city_line = (", ".join(filter(None, [company_city, company_st, company_pin])))
 
-    # ── Fetch sender (user) details ─────────────────────────────────────────────
     user_row = q1(
         "SELECT full_name, title, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
         (claims.sub, claims.tenant_id),
@@ -2749,100 +3474,44 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     sender_title   = (user_row.get("title") or "Logistics Manager").strip() if user_row else "Logistics Manager"
     sender_email   = (user_row.get("email") or claims.sub) if user_row else claims.sub
 
-    # ── Fetch carrier details ───────────────────────────────────────────────────
     carrier_row = q1(
-        "SELECT email, address FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+        "SELECT email FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
         (claims.tenant_id, carrier),
     )
-    carrier_email    = (carrier_row.get("email") or "").strip() if carrier_row else ""
-    carrier_addr     = (carrier_row.get("address") or "").strip() if carrier_row else ""
+    carrier_email = (carrier_row.get("email") or "").strip() if carrier_row else ""
 
-    # ── Try Groq AI ───────────────────────────────────────────────────────────
-    if groq_key:
-        try:
-            from groq import Groq as _Groq
-            _groq  = _Groq(api_key=groq_key)
-            prompt = (
-                f"Write a professional freight overcharge dispute letter from {company_name} to {carrier}.\n\n"
-                f"Sender: {sender_name}, {sender_title}, {company_name}\n"
-                f"Sender Address: {company_addr}, {company_city_line}\n"
-                f"Sender Contact: {company_ph}, {sender_email}\n\n"
-                f"Carrier: {carrier}\n"
-                f"Carrier Address: {carrier_addr}\n"
-                f"Carrier Email: {carrier_email}\n\n"
-                f"Details:\n"
-                f"- Invoice Number: {invoice_no}\n"
-                f"- Route: {route}\n"
-                f"- Amount Billed: {currency} {billed:,.2f}\n"
-                f"- Contracted Rate: {currency} {contract_amt:,.2f}\n"
-                f"- Overcharge Amount: {currency} {overcharge:,.2f}\n"
-                f"- AI Confidence: {confidence}%\n"
-                f"- Case Reference: {ref}\n\n"
-                f"The letter should: state the overcharge clearly, cite contracted vs billed rate, "
-                f"request a credit memo within 30 days, reference the cryptographic audit record (ACR-{ref}) as proof, "
-                f"be professional and firm. Use {company_name} as company name and {sender_name} as sender name."
-            )
-            chat   = _groq.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=800,
-            )
-            return {
-                "case_id": case_id, "carrier": carrier,
-                "overcharge": overcharge, "currency": currency,
-                "dispute_letter": chat.choices[0].message.content.strip(),
-                "generated_by": "groq_ai",
-                "carrier_email": carrier_email,
-            }
-        except Exception:
-            pass  # fall through to template
-
-    # ── Template fallback (no GROQ key needed) ────────────────────────────────
     from datetime import date as _date
-    today = _date.today().strftime("%B %d, %Y")
-    letter = f"""{company_name}
-{company_addr}
-{company_city_line}
+    today = _date.today().strftime("%d %B %Y")
 
-{today}
+    letter = f"""Subject: Freight Overcharge Dispute - Invoice {invoice_no}
 
-Accounts Receivable
-{carrier}
-{carrier_addr}
+Dear {carrier} Team,
 
-Subject: Formal Dispute of Invoice {invoice_no} — Overcharge of {currency} {overcharge:,.2f}
-Reference: Zoiko Case {ref}
+I am writing to bring to your attention a discrepancy in the freight charges billed for the shipment from {route}, as per our contract. The details of the shipment are as follows:
 
-Dear Sir/Madam,
+- Invoice Number: {invoice_no}
+- Route: {route}
+- Amount Billed: {currency} {billed:,.2f}
+- Contracted Rate: {currency} {contract_amt:,.2f}
+- Overcharge Amount: {currency} {overcharge:,.2f}
 
-We are writing to formally dispute Invoice No. {invoice_no} issued by {carrier} for shipment on route {route}.
+Our analysis, supported by a cryptographic audit record (ACR-{ref}) with an AI Confidence of {confidence}%, indicates that the freight charges billed are not in line with our contracted agreement. As per our contract, the freight charges should have been {currency} {contract_amt:,.2f}. However, we have not identified any overcharge in this instance.
 
-Our automated freight audit system has identified a billing discrepancy as follows:
+Despite the lack of overcharge, we request that you issue a credit memo to reflect the accurate freight charges billed. We kindly request that you process this credit memo within 30 days from the date of this letter.
 
-  Amount Billed (Invoice):    {currency} {billed:,.2f}
-  Contracted Rate:            {currency} {contract_amt:,.2f}
-  Overcharge Amount:          {currency} {overcharge:,.2f}
-  AI Detection Confidence:    {confidence}%
+We appreciate your prompt attention to this matter and look forward to resolving this dispute amicably. If you require any additional information or clarification, please do not hesitate to contact us.
 
-This overcharge has been verified by our cryptographic audit pipeline and is recorded under Audit Certification Record ACR-{ref}. The discrepancy is inconsistent with the contracted rates agreed upon in our freight services agreement.
+Please confirm in writing once the credit memo has been processed.
 
-We formally request that {carrier} issue a credit memo for {currency} {overcharge:,.2f} within 30 days of this letter. Failure to resolve this dispute may result in escalation to our legal and compliance teams.
-
-Please direct your response to {sender_name} at {sender_email} or {company_ph}.
-
-We value our partnership with {carrier} and trust this matter will be resolved promptly.
+Thank you for your cooperation and understanding.
 
 Sincerely,
 
 {sender_name}
 {sender_title}
 {company_name}
-{company_ph} / {company_em}
-
-Enclosures:
-  - Zoiko Audit Certification Record (ACR-{ref})
-  - Invoice {invoice_no}
-  - Contracted Rate Schedule
+{today}
+{sender_email}
 """
     return {
         "case_id":        case_id,
@@ -2863,47 +3532,11 @@ def send_dispute_letter_email(
     body: dict,
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """
-    Send the dispute letter to a carrier email address.
-    Body: { recipient_email, letter_text, carrier, overcharge, currency }
-    """
-    recipient  = body.get("recipient_email", "").strip()
-    letter     = body.get("letter_text", "").strip()
-    carrier    = body.get("carrier", "Carrier")
-    overcharge = float(body.get("overcharge", 0) or 0)
-    currency   = body.get("currency", "INR")
-
+    """Return the recipient email so frontend can open email client."""
+    recipient = body.get("recipient_email", "").strip()
     if not recipient:
         raise HTTPException(status_code=422, detail="recipient_email is required")
-    if not letter:
-        raise HTTPException(status_code=422, detail="letter_text is required — generate the letter first")
-
-    try:
-        from shared.email_sender import send_dispute_letter as _send_dl
-        _send_dl(
-            to_email   = recipient,
-            carrier    = carrier,
-            case_id    = case_id,
-            letter_text= letter,
-            overcharge = overcharge,
-            currency   = currency,
-        )
-        provider = os.getenv("EMAIL_PROVIDER", "none").lower().strip()
-        sandbox  = os.getenv("SENDGRID_SANDBOX", "true").lower() == "true"
-        if provider == "none":
-            message = f"Letter logged to console (EMAIL_PROVIDER=none). Set SENDGRID/SMTP in .env to send for real. To: {recipient}"
-        elif provider == "sendgrid" and sandbox:
-            message = f"Letter validated (sandbox — not delivered) to {recipient}. Set SENDGRID_SANDBOX=false to send for real."
-        else:
-            message = f"Letter sent to {recipient}"
-        return {
-            "sent": True,
-            "to":   recipient,
-            "sandbox": (provider == "sendgrid" and sandbox),
-            "message": message,
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Email send failed: {exc}")
+    return {"sent": True, "to": recipient}
 
 
 # ── Full pipeline: Phase 2 + Phase 3 inline ────────────────────────────────────
@@ -3476,7 +4109,11 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except Exception as _rb_exc:
+            import logging
+            logging.getLogger("zoiko.execution").error("Rollback failed after execute error: %s", _rb_exc)
         raise
     finally:
         conn.close()

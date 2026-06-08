@@ -1,10 +1,15 @@
 import { Routes, Route, Navigate } from "react-router-dom";
+import { useEffect, useRef } from "react";
 import AppLayout from "./layouts/AppLayout";
 import { Toaster } from "@/components/ui/toast";
-import { useAppSelector } from "@/store";
+import { useAppSelector, useAppDispatch } from "@/store";
+import { login as loginAction } from "@/store/authSlice";
+import axios from "axios";
 
 // auth
-import Login from "./auth/Login";
+import Login          from "./auth/Login";
+import GoogleCallback from "./auth/GoogleCallback";
+import ForgotPassword from "./auth/ForgotPassword";
 
 // features/dashboard
 import Home        from "./features/dashboard/Home";
@@ -55,12 +60,40 @@ function RequireRole({ allowed, children }: { allowed: string[]; children: React
   return allowed.includes(role) ? <>{children}</> : <Navigate to="/" replace />;
 }
 
+const API_BASE = (import.meta.env.VITE_API_BASE || "/api") + "/v1";
+
 export default function App() {
+  const dispatch  = useAppDispatch();
+  const role      = useAppSelector(state => state.auth.role);
+  const meCalled  = useRef(false);
+
+  // On page reload, localStorage has tenant/role/user/sub but not the JWT (it's in an HttpOnly
+  // cookie). If localStorage was cleared but the cookie is still valid, this restores the session.
+  useEffect(() => {
+    if (meCalled.current || role) return;
+    meCalled.current = true;
+    axios
+      .get(`${API_BASE}/auth/me`, { withCredentials: true })
+      .then(({ data }) => {
+        dispatch(loginAction({
+          token:    "__cookie__",
+          tenantId: data.tenant_id,
+          role:     data.role,
+          user:     data.full_name,
+          sub:      data.email,
+        }));
+      })
+      .catch(() => { /* not logged in — stay on login page */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   return (
     <>
     <Toaster />
     <Routes>
-      <Route path="/login" element={<Login />} />
+      <Route path="/login"                element={<Login />} />
+      <Route path="/auth/google/callback" element={<GoogleCallback />} />
+      <Route path="/forgot-password"      element={<ForgotPassword />} />
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         {/* Dashboard */}
         <Route path="/"                  element={<Home />} />

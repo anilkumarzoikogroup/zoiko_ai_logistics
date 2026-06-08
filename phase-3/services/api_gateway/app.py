@@ -87,7 +87,9 @@ def add_evidence_item(
             actor_sub     = claims.sub,
         )
     except Exception as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        import logging
+        logging.getLogger("zoiko.evidence").error("add_evidence_item failed for case %s: %s", case_id, e)
+        raise HTTPException(status_code=422, detail="Failed to add evidence item")
     return AddEvidenceResponse(
         item_id     = str(result.item_id),
         bundle_id   = str(result.bundle_id),
@@ -176,7 +178,9 @@ def analyze(
             contract_rate   = body.contract_rate,  # ← NEW
         )
     except Exception as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        import logging
+        logging.getLogger("zoiko.reasoning").error("analyze failed for case %s: %s", case_id, e)
+        raise HTTPException(status_code=422, detail="Analysis failed — check inputs and try again")
     return AnalyzeResponse(
         finding_id      = str(result.finding_id),
         proposal_id     = str(result.proposal_id),
@@ -211,7 +215,9 @@ def get_findings(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import logging
+        logging.getLogger("zoiko.reasoning").error("get_findings failed for case %s: %s", case_id, e)
+        raise HTTPException(status_code=500, detail="Internal error retrieving findings")
     return GetFindingsResponse(
         case_id   = case_id,
         tenant_id = str(claims.tenant_id),
@@ -238,7 +244,9 @@ def create_governance_task(
             proposer_sub = body.proposer_sub,
         )
     except Exception as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        import logging
+        logging.getLogger("zoiko.governance").error("create_task failed: %s", e)
+        raise HTTPException(status_code=422, detail="Failed to create governance task")
     return CreateTaskResponse(
         task_id      = str(result.task_id),
         proposal_id  = result.proposal_id,
@@ -268,7 +276,9 @@ def decide_governance_task(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import logging
+        logging.getLogger("zoiko.governance").error("decide_task %s failed: %s", task_id, e)
+        raise HTTPException(status_code=500, detail="Internal error processing decision")
     return DecideResponse(
         decision_id   = str(result.decision_id) if result.decision_id is not None else None,
         task_id       = result.task_id,
@@ -297,7 +307,9 @@ def mint_token(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import logging
+        logging.getLogger("zoiko.tokens").error("mint_token failed: %s", e)
+        raise HTTPException(status_code=500, detail="Internal error minting token")
     return MintTokenResponse(
         token_id       = str(result.token_id),
         decision_id    = result.decision_id,

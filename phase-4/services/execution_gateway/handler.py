@@ -41,7 +41,7 @@ from services.execution_gateway.models import (
 
 psycopg2.extras.register_uuid()
 
-_SCOPE_ALLOWED = {"EXECUTE_CREDIT_MEMO", "CREDIT_MEMO", "EXECUTE_DEBIT_NOTE"}
+_SCOPE_ALLOWED = {"EXECUTE_CREDIT_MEMO", "EXECUTE_DEBIT_NOTE"}
 
 
 class ExecutionGateway:
@@ -75,16 +75,22 @@ class ExecutionGateway:
     # ── Gate runners ────────────────────────────────────────────────────────────
 
     def _run_gates(self, token: dict, req: ExecutionRequest) -> list[GateResult]:
-        return [
-            self._gate1_signature(token),
-            self._gate2_expiry(token),
-            self._gate3_consumed(token),
-            self._gate4_tenant_binding(token, req.tenant_id),
-            self._gate5_scope(token),
-            self._gate6_sanctions(token, req),
-            self._gate7_fx_lock(token),
-            self._gate8_connector(token),
-        ]
+        results: list[GateResult] = []
+        for fn in [
+            lambda: self._gate1_signature(token),
+            lambda: self._gate2_expiry(token),
+            lambda: self._gate3_consumed(token),
+            lambda: self._gate4_tenant_binding(token, req.tenant_id),
+            lambda: self._gate5_scope(token),
+            lambda: self._gate6_sanctions(token, req),
+            lambda: self._gate7_fx_lock(token),
+            lambda: self._gate8_connector(token),
+        ]:
+            result = fn()
+            results.append(result)
+            if not result.passed:
+                break  # short-circuit — no external calls for invalid tokens
+        return results
 
     def _gate1_signature(self, token: dict) -> GateResult:
         """Verify Ed25519 signature over token_hash using KMS public key."""
@@ -120,25 +126,27 @@ class ExecutionGateway:
         return GateResult(2, "not_expired", True, f"Expires in {(expires_at - now).total_seconds():.0f}s")
 
     def _gate3_consumed(self, token: dict) -> GateResult:
-        """Atomically mark token CONSUMED in Redis + check DB status."""
+        """Read-only check: token not consumed in DB or Redis.
+
+        Does NOT claim the token here — claiming happens in _dispatch() after
+        all 8 gates pass, so a transient failure in gates 4-8 never permanently
+        locks the token in Redis.
+        """
         token_id = str(token["id"])
 
-        # Check DB status first
         if token.get("status") == "CONSUMED":
             return GateResult(3, "not_consumed", False, "Token already CONSUMED in DB")
 
-        # Redis atomic SET NX
         try:
-            from shared.redis_token import mark_consumed as _mark
-            claimed = _mark(token_id)
-            if not claimed:
+            from shared.redis_token import get_status as _get_status
+            if _get_status(token_id) == "CONSUMED":
                 return GateResult(3, "not_consumed", False, "Token already consumed (Redis)")
         except ImportError:
-            pass  # redis_token from phase-3 not on path — skip Redis gate
+            pass  # redis_token from phase-3 not on path
         except Exception:
             pass  # Redis unavailable — DB is authoritative
 
-        return GateResult(3, "not_consumed", True, "Token atomically claimed")
+        return GateResult(3, "not_consumed", True, "Token not yet consumed")
 
     def _gate4_tenant_binding(self, token: dict, tenant_id: str) -> GateResult:
         """Verify tenant_binding = SHA-256(tenant_id + decision_id)."""
@@ -271,73 +279,95 @@ class ExecutionGateway:
             "passed": g.passed, "detail": g.detail,
         } for g in gates])
 
-        with _db.get_conn(self._db_url) as conn:
-          try:
-            cur = conn.cursor()
+        # Atomically claim Redis lock now — all 8 gates passed, safe to commit.
+        # If two requests race past gate 3, only one wins SET NX here.
+        _redis_claimed = False
+        try:
+            from shared.redis_token import mark_consumed as _mark
+            if not _mark(token_id):
+                raise ValueError("Token already consumed (Redis race — duplicate execution blocked)")
+            _redis_claimed = True
+        except ImportError:
+            pass  # redis_token not on path — DB CONSUMED update is authoritative
+        except ValueError:
+            raise
+        except Exception:
+            pass  # Redis unavailable — DB is authoritative
 
-            # Write execution_envelopes
-            cur.execute("""
-                INSERT INTO execution_envelopes
-                    (id, tenant_id, token_id, case_id, scope, amount, currency,
-                     actor_sub, gate_results, connector_ref, status, dispatched_at)
-                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
-            """, (
-                env_id, req.tenant_id, token_id,
-                uuid.UUID(case_id) if case_id else None,
-                scope, amount, currency,
-                req.actor_sub, gate_json, connector_ref,
-                "DISPATCHED", now,
-            ))
+        try:
+            with _db.get_conn(self._db_url) as conn:
+                cur = conn.cursor()
 
-            # Mark token CONSUMED in DB
-            cur.execute("""
-                UPDATE governance_tokens
-                SET status='CONSUMED', consumed_at=%s
-                WHERE id=%s::uuid AND tenant_id=%s::uuid
-            """, (now, token_id, req.tenant_id))
-
-            # Advance case FSM to DISPATCHED
-            if case_id:
+                # Write execution_envelopes
                 cur.execute("""
-                    UPDATE cases SET state='DISPATCHED'
-                    WHERE id=%s::uuid AND tenant_id=%s::uuid
-                      AND state IN ('EXECUTION_READY', 'APPROVED')
-                """, (uuid.UUID(case_id), req.tenant_id))
-                cur.execute("""
-                    INSERT INTO case_events
-                        (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
-                    VALUES (%s, %s::uuid, %s::uuid, 'EXECUTION_DISPATCHED',
-                            'EXECUTION_READY', 'DISPATCHED', %s, %s::jsonb, %s)
+                    INSERT INTO execution_envelopes
+                        (id, tenant_id, token_id, case_id, scope, amount, currency,
+                         actor_sub, gate_results, connector_ref, status, dispatched_at)
+                    VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
                 """, (
-                    uuid.uuid4(), req.tenant_id, uuid.UUID(case_id),
-                    req.actor_sub,
-                    json.dumps({"envelope_id": str(env_id), "connector_ref": connector_ref}),
+                    env_id, req.tenant_id, token_id,
+                    uuid.UUID(case_id) if case_id else None,
+                    scope, amount, currency,
+                    req.actor_sub, gate_json, connector_ref,
+                    "DISPATCHED", now,
+                ))
+
+                # Mark token CONSUMED in DB
+                cur.execute("""
+                    UPDATE governance_tokens
+                    SET status='CONSUMED', consumed_at=%s
+                    WHERE id=%s::uuid AND tenant_id=%s::uuid
+                """, (now, token_id, req.tenant_id))
+
+                # Advance case FSM to DISPATCHED
+                if case_id:
+                    cur.execute("""
+                        UPDATE cases SET state='DISPATCHED'
+                        WHERE id=%s::uuid AND tenant_id=%s::uuid
+                          AND state IN ('EXECUTION_READY', 'APPROVED')
+                    """, (uuid.UUID(case_id), req.tenant_id))
+                    cur.execute("""
+                        INSERT INTO case_events
+                            (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
+                        VALUES (%s, %s::uuid, %s::uuid, 'EXECUTION_DISPATCHED',
+                                'EXECUTION_READY', 'DISPATCHED', %s, %s::jsonb, %s)
+                    """, (
+                        uuid.uuid4(), req.tenant_id, uuid.UUID(case_id),
+                        req.actor_sub,
+                        json.dumps({"envelope_id": str(env_id), "connector_ref": connector_ref}),
+                        now,
+                    ))
+
+                # Write outbox event
+                cur.execute("""
+                    INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
+                    VALUES (%s, %s::uuid, %s, %s, %s::jsonb, %s)
+                """, (
+                    uuid.uuid4(), req.tenant_id,
+                    "zoiko.execution.dispatched",
+                    case_id or token_id,
+                    json.dumps({
+                        "envelope_id":   str(env_id),
+                        "token_id":      token_id,
+                        "case_id":       case_id,
+                        "scope":         scope,
+                        "amount":        amount,
+                        "currency":      currency,
+                        "connector_ref": connector_ref,
+                    }),
                     now,
                 ))
 
-            # Write outbox event
-            cur.execute("""
-                INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
-                VALUES (%s, %s::uuid, %s, %s, %s::jsonb, %s)
-            """, (
-                uuid.uuid4(), req.tenant_id,
-                "zoiko.execution.dispatched",
-                case_id or token_id,
-                json.dumps({
-                    "envelope_id":   str(env_id),
-                    "token_id":      token_id,
-                    "case_id":       case_id,
-                    "scope":         scope,
-                    "amount":        amount,
-                    "currency":      currency,
-                    "connector_ref": connector_ref,
-                }),
-                now,
-            ))
-
-            conn.commit()
-          finally:
-            pass  # pool returns connection via context manager
+                conn.commit()
+        except Exception:
+            # DB failed after Redis claim — release so the token can be retried
+            if _redis_claimed:
+                try:
+                    from shared.redis_token import release_consumed as _release
+                    _release(token_id)
+                except Exception:
+                    pass
+            raise
 
         # Kafka publish after commit
         try:

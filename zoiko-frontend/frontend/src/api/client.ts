@@ -19,13 +19,19 @@ const API_BASE  = (import.meta.env.VITE_API_BASE  || "/api")  + "/v1";
 const API3_BASE = (import.meta.env.VITE_API3_BASE || "/api3") + "/v1"; // Phase 3 port 8002
 const API4_BASE = (import.meta.env.VITE_API4_BASE || "/api4") + "/v1"; // Phase 4 port 8001
 
-// JWT + tenant come from auth store (set on login)
+// JWT lives in an HttpOnly cookie — the browser sends it automatically on every request.
+// We only need to attach X-Tenant-ID (non-sensitive) and, in dev-only, VITE_DEV_JWT.
 function getAuthHeaders(): Record<string, string> {
-  const token  = localStorage.getItem("zoiko_jwt")    || import.meta.env.VITE_DEV_JWT    || "";
-  const tenant = localStorage.getItem("zoiko_tenant") || import.meta.env.VITE_DEV_TENANT || "";
   const headers: Record<string, string> = {};
-  if (token)  headers["Authorization"] = `Bearer ${token}`;
-  if (tenant) headers["X-Tenant-ID"]   = tenant;
+  // Dev override: allow VITE_DEV_JWT to bypass cookie auth (local testing without a browser cookie)
+  const devJwt = import.meta.env.VITE_DEV_JWT;
+  if (devJwt) headers["Authorization"] = `Bearer ${devJwt}`;
+  // Tenant ID is not secret — safe to keep in localStorage for X-Tenant-ID header
+  const tenant = store.getState().auth.tenantId
+    || localStorage.getItem("zoiko_tenant")
+    || import.meta.env.VITE_DEV_TENANT
+    || "";
+  if (tenant) headers["X-Tenant-ID"] = tenant;
   return headers;
 }
 
@@ -62,8 +68,10 @@ function attachInterceptors(instance: AxiosInstance): AxiosInstance {
   return instance;
 }
 
-const api  = attachInterceptors(axios.create({ baseURL: API_BASE,  timeout: 60000 }));  // 60s for Neon cold starts
-const api3 = attachInterceptors(axios.create({ baseURL: API3_BASE, timeout: 60000 }));
-const api4 = attachInterceptors(axios.create({ baseURL: API4_BASE, timeout: 60000 }));
+// withCredentials=true is required for the browser to send the HttpOnly auth cookie cross-origin
+// (dev: frontend :5173 → backend :8000 via Vite proxy; production: same origin, always works)
+const api  = attachInterceptors(axios.create({ baseURL: API_BASE,  timeout: 60000, withCredentials: true }));
+const api3 = attachInterceptors(axios.create({ baseURL: API3_BASE, timeout: 60000, withCredentials: true }));
+const api4 = attachInterceptors(axios.create({ baseURL: API4_BASE, timeout: 60000, withCredentials: true }));
 
 export { api, api3, api4, USE_MOCK };

@@ -117,9 +117,9 @@ export default function CaseDetail() {
   const [disputeLetter, setDisputeLetter]   = useState<string>("");
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
-  const [sendLoading,   setSendLoading]     = useState(false);
-  const [sendResult,    setSendResult]      = useState<{sent:boolean;sandbox:boolean;message:string}|null>(null);
   const [showSendForm,  setShowSendForm]    = useState(false);
+  const [sendLoading,   setSendLoading]     = useState(false);
+  const [sendResult,    setSendResult]      = useState<{message: string; sandbox?: boolean} | null>(null);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
   const eventsQ  = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),        retry: 1 });
@@ -153,7 +153,7 @@ export default function CaseDetail() {
   }
 
   async function handleGenerateLetter() {
-    setLetterLoading(true); setDisputeLetter(""); setSendResult(null); setShowSendForm(false);
+    setLetterLoading(true); setDisputeLetter(""); setShowSendForm(false);
     try {
       const { data } = await api.post(`/cases/${id}/dispute-letter`);
       setDisputeLetter(data.dispute_letter || "");
@@ -689,7 +689,7 @@ export default function CaseDetail() {
                   Copy to clipboard
                 </button>
                 <button
-                  onClick={() => { setShowSendForm(v => !v); setSendResult(null); }}
+                  onClick={() => setShowSendForm(v => !v)}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors"
                 >
                   ✉ Send to Carrier
@@ -709,20 +709,20 @@ export default function CaseDetail() {
                     />
                     <button
                       onClick={handleSendLetter}
-                      disabled={sendLoading || !sendEmail.trim()}
+                      disabled={!sendEmail.trim() || sendLoading}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
                     >
                       {sendLoading ? "Sending…" : "Send Email"}
                     </button>
                   </div>
-                  <p className="text-[10px] text-slate-500">
-                    💡 The letter is logged to console in dev mode. To send real emails, set <code>EMAIL_PROVIDER=sendgrid</code> and <code>SENDGRID_API_KEY</code> in .env.
-                  </p>
                   {sendResult && (
-                    <div className={`rounded-lg p-3 text-xs font-semibold ${sendResult.sandbox ? "bg-amber-50 text-amber-700 border border-amber-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>
-                      {sendResult.sandbox ? "🧪 Sandbox:" : "✅"} {sendResult.message}
-                    </div>
+                    <p className={`text-[11px] font-medium ${sendResult.sandbox ? "text-amber-600" : "text-emerald-600"}`}>
+                      {sendResult.sandbox ? "Sandbox mode — validated only." : "Email sent successfully."} {sendResult.message}
+                    </p>
                   )}
+                  <p className="text-[10px] text-slate-500">
+                    Sends via SendGrid. Ensure SENDGRID_API_KEY is set in your .env file.
+                  </p>
                 </div>
               )}
             </div>

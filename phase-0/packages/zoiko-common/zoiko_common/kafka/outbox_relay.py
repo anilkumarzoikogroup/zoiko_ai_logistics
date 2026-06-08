@@ -23,6 +23,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from zoiko_common.kafka.schemas import PRODUCER_TOPICS as _REGISTERED_TOPICS
+
 log = logging.getLogger(__name__)
 
 
@@ -72,9 +74,14 @@ class OutboxRelay:
         return published
 
     def _publish_row(self, row: dict) -> None:
+        topic = row["topic"]
+        # Reject unregistered topics — raised as ValueError so run_once() logs
+        # and skips this row rather than silently publishing to a phantom topic.
+        if topic not in _REGISTERED_TOPICS:
+            raise ValueError(f"Outbox row {row['id']}: unregistered topic '{topic}'")
         payload = row["payload"] if isinstance(row["payload"], dict) else json.loads(row["payload"])
         self._broker.send(
-            topic   = row["topic"],
+            topic   = topic,
             key     = str(row["partition_key"]).encode("utf-8"),
             value   = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"),
             headers = [

@@ -11,8 +11,11 @@ The consumer:
 from __future__ import annotations
 
 import json
+import logging
 from typing import Callable, Dict, Any, Optional
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 
 MessageHandler = Callable[[str, Dict[str, Any]], None]
@@ -43,7 +46,9 @@ class ZoikoConsumer:
         self._handlers: Dict[str, MessageHandler] = {}
 
     def subscribe(self, topic: str, handler: MessageHandler) -> None:
-        """Register a handler for a topic. One handler per topic."""
+        """Register a handler for a topic. Raises if a handler is already registered."""
+        if topic in self._handlers:
+            raise ValueError(f"Handler already registered for topic '{topic}' in group '{self._group_id}'")
         self._handlers[topic] = handler
         if hasattr(self._broker, "subscribe"):
             self._broker.subscribe([topic], group_id=self._group_id)
@@ -61,9 +66,13 @@ class ZoikoConsumer:
                 continue
             for raw in msgs:
                 msg = self._parse(topic, raw)
-                if msg:
+                if not msg:
+                    continue
+                try:
                     handler(msg.tenant_id, msg.payload)
                     count += 1
+                except Exception as exc:
+                    log.error("Handler error on topic '%s' key '%s': %s", topic, msg.key, exc)
         return count
 
     def close(self) -> None:
@@ -74,13 +83,18 @@ class ZoikoConsumer:
         try:
             body    = json.loads(raw["value"])
             headers = {k: v.decode() for k, v in raw.get("headers", [])}
+            tenant_id = headers.get("tenant_id", body.get("tenant_id", ""))
+            if not tenant_id:
+                log.error("Dropping message on topic '%s': missing tenant_id", topic)
+                return None
             return ConsumedMessage(
                 topic           = topic,
                 key             = raw.get("key", b"").decode(),
-                tenant_id       = headers.get("tenant_id", body.get("tenant_id", "")),
+                tenant_id       = tenant_id,
                 idempotency_key = headers.get("idempotency_key", body.get("idempotency_key", "")),
                 payload         = body.get("payload", {}),
                 schema_version  = body.get("schema_version", "1.0"),
             )
-        except Exception:
+        except Exception as exc:
+            log.error("Dropping malformed message on topic '%s': %s", topic, exc)
             return None
