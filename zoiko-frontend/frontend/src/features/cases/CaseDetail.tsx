@@ -118,6 +118,8 @@ export default function CaseDetail() {
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
   const [showSendForm,  setShowSendForm]    = useState(false);
+  const [sendLoading,   setSendLoading]     = useState(false);
+  const [sendResult,    setSendResult]      = useState<{message: string; sandbox?: boolean} | null>(null);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
   const eventsQ  = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),        retry: 1 });
@@ -164,7 +166,7 @@ export default function CaseDetail() {
     }
   }
 
-  function handleSendLetter() {
+  async function handleSendLetter() {
     if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
     setSendLoading(true); setSendResult(null);
     try {
@@ -707,14 +709,19 @@ export default function CaseDetail() {
                     />
                     <button
                       onClick={handleSendLetter}
-                      disabled={!sendEmail.trim()}
+                      disabled={!sendEmail.trim() || sendLoading}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
                     >
-                      Open Email Client
+                      {sendLoading ? "Sending…" : "Send Email"}
                     </button>
                   </div>
+                  {sendResult && (
+                    <p className={`text-[11px] font-medium ${sendResult.sandbox ? "text-amber-600" : "text-emerald-600"}`}>
+                      {sendResult.sandbox ? "Sandbox mode — validated only." : "Email sent successfully."} {sendResult.message}
+                    </p>
+                  )}
                   <p className="text-[10px] text-slate-500">
-                    💡 Opens your default email app (Outlook, Gmail, etc.) with the letter pre-filled. Zoiko never stores or sends your emails.
+                    Sends via SendGrid. Ensure SENDGRID_API_KEY is set in your .env file.
                   </p>
                 </div>
               )}
