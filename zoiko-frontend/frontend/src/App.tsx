@@ -9,6 +9,7 @@ import axios from "axios";
 // auth
 import Login          from "./auth/Login";
 import GoogleCallback from "./auth/GoogleCallback";
+import ForgotPassword from "./auth/ForgotPassword";
 
 // features/dashboard
 import Home        from "./features/dashboard/Home";
@@ -92,6 +93,7 @@ export default function App() {
     <Routes>
       <Route path="/login"                    element={<Login />} />
       <Route path="/auth/google/callback"     element={<GoogleCallback />} />
+      <Route path="/forgot-password"          element={<ForgotPassword />} />
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         {/* Dashboard */}
         <Route path="/"                  element={<Home />} />

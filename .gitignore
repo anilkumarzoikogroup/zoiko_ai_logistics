@@ -27,3 +27,4 @@ node_modules/
 !*.tfvars.example
 .vercel
 .env*
+superadmin.md
