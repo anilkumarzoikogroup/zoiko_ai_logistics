@@ -213,18 +213,34 @@ class TestT028Gate3Consumed:
         assert result.gate == 3
 
     def test_t028_8_gates_all_present(self):
+        import os, hashlib
         from services.execution_gateway.handler import ExecutionGateway
         from services.execution_gateway.models  import ExecutionRequest
         from kafka.mock_kafka import MockKafkaBroker
 
-        gw  = ExecutionGateway("unused", MockKafkaBroker())
-        tok = self._token()
+        tenant_id   = "11111111-1111-1111-1111-111111111111"
+        decision_id = str(uuid.uuid4())
+        binding     = hashlib.sha256(tenant_id.encode() + decision_id.encode()).digest()
+        tok = self._token(
+            tenant_id      = tenant_id,
+            decision_id    = decision_id,
+            tenant_binding = binding,
+        )
         req = ExecutionRequest(
             token_id  = tok["id"],
             tenant_id = tok["tenant_id"],
             actor_sub = "test-user",
         )
-        results = gw._run_gates(tok, req)
+        _prev = os.environ.get("ZOIKO_DEV_MODE")
+        os.environ["ZOIKO_DEV_MODE"] = "true"
+        try:
+            gw      = ExecutionGateway("unused", MockKafkaBroker())
+            results = gw._run_gates(tok, req)
+        finally:
+            if _prev is None:
+                os.environ.pop("ZOIKO_DEV_MODE", None)
+            else:
+                os.environ["ZOIKO_DEV_MODE"] = _prev
         assert len(results) == 8
         gate_numbers = {r.gate for r in results}
         assert gate_numbers == {1, 2, 3, 4, 5, 6, 7, 8}
