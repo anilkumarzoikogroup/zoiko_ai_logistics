@@ -20,11 +20,9 @@ import paths  # noqa: F401 — must be first
 
 load_dotenv()
 
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, Request, Security
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse as _JSONResponse
-from fastapi.security import HTTPBearer as _HTTPBearer, HTTPAuthorizationCredentials as _HTTPCreds
-from typing import Optional
 
 from services.api_gateway.auth   import get_claims, get_claims_by_cookie
 from zoiko_common.middleware.feature_flags import require_feature_flag
@@ -40,8 +38,7 @@ from services.api_gateway.models import (
     TransitionRequest, TransitionResponse,
     SubmitCaseRequest, UIProposalRequest, UIDecideRequest,
     ContractRateRequest,
-    LoginRequest, LoginResponse,
-    RegisterRequest, RegisterResponse,
+    LoginRequest, RegisterRequest, RegisterResponse,
     UsersListResponse, UserItem,
     TenantCreateRequest,
     ExecuteRequest,
@@ -1053,7 +1050,6 @@ def google_auth(body: dict):
         })
 
     # ── Create tenant + user (Google SSO — no password) ───────────────────────
-    import bcrypt as _bcrypt
     slug = _re.sub(r"[^a-z0-9-]", "", org_name.lower().replace(" ", "-").replace("_", "-"))
     if not slug:
         raise HTTPException(status_code=422, detail="Invalid organization name")
@@ -1192,7 +1188,7 @@ def google_complete_signup(body: dict):
     Finish Google signup: verify 10-min signup_token, create tenant + user, return JWT.
     Body: { signup_token: str, org_name: str }
     """
-    import jwt as _jwt, psycopg2 as _pg, bcrypt as _bcrypt
+    import jwt as _jwt, psycopg2 as _pg
 
     signup_token = str(body.get("signup_token", "")).strip()
     org_name     = str(body.get("org_name", "")).strip()
@@ -1243,7 +1239,6 @@ def google_complete_signup(body: dict):
         conn.close()
 
     from middleware.oidc.token_verifier import TokenVerifier
-    from fastapi.responses import JSONResponse
     issuer   = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
     ttl      = int(os.getenv("JWT_TTL_SECONDS", "86400"))
     verifier = TokenVerifier(dev_secret=dev_secret.encode(), issuer=issuer)
@@ -1350,7 +1345,7 @@ def signup_send_otp(body: dict):
 @app.post("/v1/auth/signup-verify-otp", tags=["auth"], include_in_schema=False)
 def signup_verify_otp(body: dict):
     """Step 2: verify OTP, create tenant + admin user, return JWT."""
-    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+    import hashlib as _hl, psycopg2 as _pg
     from psycopg2.extras import RealDictCursor as _RDC
 
     admin_email = str(body.get("admin_email", "")).lower().strip()
@@ -3190,7 +3185,7 @@ def _run_full_pipeline(
         )
     except Exception as _exc:
         import logging as _log
-        _log.getLogger("zoiko.pipeline").error("Evidence/reasoning pipeline failed for case %s: %s", case_id, _exc)
+        _log.getLogger("zoiko.pipeline").error("Evidence/reasoning pipeline failed for case %s: %s", case_r.case_id, _exc)
 
     return {"case_id": str(case_r.case_id), "state": "FINDING_GENERATED",
             "carrier": carrier, "amount": amount, "diff": diff}
