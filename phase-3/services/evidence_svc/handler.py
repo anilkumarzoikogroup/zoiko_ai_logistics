@@ -101,7 +101,7 @@ class EvidenceHandler:
             bundle_sig, bundle_kid = sign(self.tenant_slug, bundle_hash)
             cur.execute("""
                 UPDATE evidence_bundles
-                SET bundle_hash=%s, signature=%s, kid=%s
+                SET bundle_hash=%s, signature=%s, kid=%s, completeness_status='INCOMPLETE'
                 WHERE id=%s
             """, (bundle_hash, bundle_sig, bundle_kid, bundle_id))
 

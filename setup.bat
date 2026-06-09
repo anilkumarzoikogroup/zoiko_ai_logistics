@@ -85,6 +85,14 @@ echo.
 
 REM ── Step 5: Frontend setup ───────────────────────────────────
 echo [5/5] Setting up frontend...
+
+REM Check Node.js >= 18
+node -e "if(parseInt(process.versions.node)<18){process.exit(1)}" 2>nul
+if errorlevel 1 (
+    echo  ERROR: Node.js 18+ is required. Install it from https://nodejs.org
+    pause & exit /b 1
+)
+
 cd zoiko-frontend\frontend
 call npm install --silent 2>nul
 if errorlevel 1 (

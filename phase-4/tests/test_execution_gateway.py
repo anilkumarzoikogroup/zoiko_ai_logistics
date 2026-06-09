@@ -79,14 +79,30 @@ class TestGateValidation:
         assert result.gate == 3
 
     def test_run_gates_returns_8_results(self):
-        gw    = self._gw()
-        token = self._make_token()
-        req   = ExecutionRequest(
+        import os, hashlib
+        tenant_id   = "11111111-1111-1111-1111-111111111111"
+        decision_id = str(uuid.uuid4())
+        binding     = hashlib.sha256(tenant_id.encode() + decision_id.encode()).digest()
+        token = self._make_token(
+            tenant_id      = tenant_id,
+            decision_id    = decision_id,
+            tenant_binding = binding,
+        )
+        req = ExecutionRequest(
             token_id  = token["id"],
             tenant_id = token["tenant_id"],
             actor_sub = "test-user",
         )
-        results = gw._run_gates(token, req)
+        _prev = os.environ.get("ZOIKO_DEV_MODE")
+        os.environ["ZOIKO_DEV_MODE"] = "true"
+        try:
+            gw      = self._gw()
+            results = gw._run_gates(token, req)
+        finally:
+            if _prev is None:
+                os.environ.pop("ZOIKO_DEV_MODE", None)
+            else:
+                os.environ["ZOIKO_DEV_MODE"] = _prev
         assert len(results) == 8
         for r in results:
             assert isinstance(r, GateResult)

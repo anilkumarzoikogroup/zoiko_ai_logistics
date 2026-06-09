@@ -4,7 +4,7 @@ Zoiko AI Logistics — End-to-End Dashboard
   streamlit run dashboard.py
 """
 import sys, os, json, hashlib, uuid, io, re
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"   # easyocr / torch conflict fix
 load_dotenv()
@@ -39,14 +39,14 @@ def parse_invoice_ocr(texts):
         m = re.search(pattern, joined, re.IGNORECASE)
         if m:
             try: return cast(m.group(1).strip())
-            except: pass
+            except Exception: pass
         return default
 
     def rx_num(pattern, default=0.0):
         m = re.search(pattern, clean, re.IGNORECASE)
         if m:
             try: return float(m.group(1))
-            except: pass
+            except Exception: pass
         return default
 
     # Invoice number — e.g. BD-2026-0512
@@ -95,7 +95,7 @@ try:
     from middleware.opa.client   import MockOPAClient, OPADecision, OPAClient, OPAUnavailableError
     from kafka.mock_kafka        import MockKafkaBroker
     from kafka.producer          import ZoikoProducer, KafkaMessage, REGISTERED_TOPICS
-    from kafka.consumer          import ZoikoConsumer
+
     P1_AVAILABLE = True
 except ImportError as e:
     P1_AVAILABLE = False; _p1_err_msg = str(e)
@@ -230,14 +230,14 @@ STEPS = [
     ("5", "Manager\nApproval",   "Phase 3 👤"),
     ("6", "Token &\nExecute",    "Phase 4"),
 ]
-+
+
+
 def render_stepper(js):
     step = current_step(js)
     cols = st.columns(len(STEPS))
     for i, (col, (num, label, sub)) in enumerate(zip(cols, STEPS)):
         done    = (i + 1) < step
         active  = (i + 1) == step
-        locked  = (i + 1) > step
         icon    = "✅" if done else ("⚡" if active else "🔒")
         bg      = "#d4edda" if done else ("#fff3cd" if active else "#f8f9fa")
         border  = "#28a745" if done else ("#ffc107" if active else "#dee2e6")
@@ -285,7 +285,7 @@ with st.sidebar:
             if st.button(label, key=f"case_{c['id']}", use_container_width=True):
                 st.session_state.active_case_id = str(c["id"])
                 st.session_state.page = "journey"
-    except:
+    except Exception:
         st.caption("⚠️ DB offline")
 
     st.divider()
@@ -354,7 +354,7 @@ if page == "hub":
                                JOIN governance_decisions gd ON gd.proposal_id=dp.id
                                WHERE gd.outcome='APPROVED'""")
         recovered      = float(recovered_row.get("total", 0))
-    except:
+    except Exception:
         total_cases = pending = approved = active_tokens = closed = 0; recovered = 0.0
 
     m1,m2,m3,m4,m5,m6 = st.columns(6)
@@ -696,10 +696,10 @@ elif page == "submit":
                     weight_lbs=float(weight) * 2.205,
                 )
                 ing = handler.ingest_invoice(tenant["id"], invoice)
-                st.write(f"✅ Step 1 — JCS + SHA-256 domain hash")
-                st.write(f"✅ Step 2 — Encrypted and stored")
-                st.write(f"✅ Step 3 — DB transaction: source_records + outbox (atomic)")
-                st.write(f"✅ Step 4 — Kafka: invoice.received published")
+                st.write("✅ Step 1 — JCS + SHA-256 domain hash")
+                st.write("✅ Step 2 — Encrypted and stored")
+                st.write("✅ Step 3 — DB transaction: source_records + outbox (atomic)")
+                st.write("✅ Step 4 — Kafka: invoice.received published")
                 st.write(f"✅ source_record_id: `{str(ing.source_record_id)[:20]}...`")
                 s1.update(label="Phase 2 Step 1 ✅ — Invoice ingested", state="complete")
                 results["source_record_id"] = str(ing.source_record_id)
@@ -733,7 +733,7 @@ elif page == "submit":
                     st.write(f"🚨 Status: **FAIL** — Overcharge detected: **{currency}{overcharge:,.0f}**")
                 else:
                     st.write(f"✅ Status: {val.status} — within contract")
-                st.write(f"✅ Kafka: invoice.validated published")
+                st.write("✅ Kafka: invoice.validated published")
                 s2.update(label=f"Phase 2 Step 2 ✅ — Overcharge: {currency}{overcharge:,.0f}", state="complete")
                 results["overcharge"] = overcharge
                 results["val_status"] = val.status
@@ -756,10 +756,10 @@ elif page == "submit":
                     origin_city=origin,
                     dest_city=dest,
                 )
-                st.write(f"✅ canonical_invoice row written — THE single source of truth")
+                st.write("✅ canonical_invoice row written — THE single source of truth")
                 st.write(f"✅ canonical_hash: `{can.canonical_hash[:32]}...`")
                 st.write(f"✅ canonical_shipment: {origin} → {dest}, {weight:.0f} kg")
-                st.write(f"✅ Kafka: invoice.canonical published")
+                st.write("✅ Kafka: invoice.canonical published")
                 s3.update(label="Phase 2 Step 3 ✅ — Canonical truth locked", state="complete")
                 results["canonical_hash"] = can.canonical_hash
                 results["canonical_invoice_id"] = str(can.canonical_invoice_id)
@@ -778,9 +778,9 @@ elif page == "submit":
                 ohandler.transition_state(tenant["id"], case_id, "UNDER_REVIEW",       "system")
                 ohandler.transition_state(tenant["id"], case_id, "PENDING_APPROVAL",   "system")
                 st.write(f"✅ Case opened: `{case_id[:20]}...`")
-                st.write(f"✅ State: OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL")
-                st.write(f"✅ Every transition logged as APPEND-ONLY case_event (permanent)")
-                st.write(f"✅ Kafka: case.opened + case.updated × 3 published")
+                st.write("✅ State: OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL")
+                st.write("✅ Every transition logged as APPEND-ONLY case_event (permanent)")
+                st.write("✅ Kafka: case.opened + case.updated × 3 published")
                 s4.update(label="Phase 2 Step 4 ✅ — Case opened: PENDING_APPROVAL", state="complete")
                 results["case_id"] = case_id
             except Exception as e:
@@ -944,7 +944,7 @@ elif page == "upload":
         sig_envelope = signer.sign(bytes.fromhex(fingerprint))
 
         st.write(f"✅ **Step 1** — JCS RFC 8785: keys sorted by Unicode, {len(canon_bytes)} bytes")
-        st.write(f"✅ **Step 2** — SHA-256 domain tag `zoiko.ingestion.invoice.v1:`")
+        st.write("✅ **Step 2** — SHA-256 domain tag `zoiko.ingestion.invoice.v1:`")
         st.write(f"✅ **Step 3** — Ed25519 signed with tenant key `{sig_envelope.kid}`")
         st.code(
             f"Canonical form: {canon_bytes.decode()}\n"
@@ -995,15 +995,15 @@ elif page == "upload":
             }
             opa_dec = opa.evaluate("zoiko/freight_dispute", opa_in)
             if opa_dec.allow:
-                st.write(f"✅ **OPA Policy — ALLOW** | rule: `zoiko/freight_dispute` | action: `SUBMIT_INVOICE`")
-                st.write(f"   Fail-closed: if OPA is unreachable → 503, never permit")
+                st.write("✅ **OPA Policy — ALLOW** | rule: `zoiko/freight_dispute` | action: `SUBMIT_INVOICE`")
+                st.write("   Fail-closed: if OPA is unreachable → 503, never permit")
             else:
                 st.write(f"❌ OPA denied: {opa_dec.reason()}")
 
             # 1d — Kafka broker ready
-            st.write(f"✅ **Kafka broker ready** — MockKafkaBroker (17 registered topics)")
-            st.write(f"   Topics used this pipeline: `invoice.received` · `invoice.validated` · `invoice.canonical`")
-            st.write(f"   `case.opened` · `case.updated` · `evidence.bundled` · `finding.created` · `case.updated` · `token.issued`")
+            st.write("✅ **Kafka broker ready** — MockKafkaBroker (17 registered topics)")
+            st.write("   Topics used this pipeline: `invoice.received` · `invoice.validated` · `invoice.canonical`")
+            st.write("   `case.opened` · `case.updated` · `evidence.bundled` · `finding.created` · `case.updated` · `token.issued`")
 
             s_p1.update(label="🔑 Phase 1 ✅ — KMS keys · JWT verified · OPA ALLOW · Kafka ready", state="complete")
 
@@ -1018,9 +1018,9 @@ elif page == "upload":
                 weight_lbs=float(weight) * 2.205,
             )
             ing = ihandler.ingest_invoice(tenant["id"], invoice)
-            st.write(f"✅ 5-step write pattern: JCS hash → encrypt → DB atomic transaction → outbox → Kafka")
+            st.write("✅ 5-step write pattern: JCS hash → encrypt → DB atomic transaction → outbox → Kafka")
             st.write(f"✅ source_record_id: `{str(ing.source_record_id)[:24]}…`")
-            st.write(f"✅ Kafka: `invoice.received` published")
+            st.write("✅ Kafka: `invoice.received` published")
             pipeline["source_record_id"] = str(ing.source_record_id)
             s1.update(label="📥 Phase 2 Step 1 ✅ — Invoice ingested", state="complete")
         except Exception as e:
@@ -1041,11 +1041,11 @@ elif page == "upload":
             )
             overcharge = val.overcharge_amount
             if val.status == "FAIL":
-                st.write(f"🚨 **Status: FAIL** — Overcharge detected!")
+                st.write("🚨 **Status: FAIL** — Overcharge detected!")
                 st.write(f"🚨 Contract max: **{currency} {contract_rate:,.0f}** | Billed: **{currency} {amount:,.0f}** | Delta: **{currency} {overcharge:,.0f}**")
             else:
                 st.write(f"✅ Status: {val.status} — within contract limits")
-            st.write(f"✅ Kafka: `invoice.validated` published")
+            st.write("✅ Kafka: `invoice.validated` published")
             pipeline["overcharge"] = overcharge
             pipeline["val_status"] = val.status
             s2.update(label=f"✔ Phase 2 Step 2 ✅ — Overcharge: {currency} {overcharge:,.0f}", state="complete")
@@ -1062,9 +1062,9 @@ elif page == "upload":
                 total_amount=float(amount), currency=currency,
                 origin_city=origin, dest_city=dest,
             )
-            st.write(f"✅ Single authoritative `canonical_invoices` row written")
+            st.write("✅ Single authoritative `canonical_invoices` row written")
             st.write(f"✅ canonical_hash: `{can.canonical_hash[:32]}…`")
-            st.write(f"✅ Kafka: `invoice.canonical` published")
+            st.write("✅ Kafka: `invoice.canonical` published")
             pipeline["canonical_hash"]       = can.canonical_hash
             pipeline["canonical_invoice_id"] = str(can.canonical_invoice_id)
             s3.update(label="📄 Phase 2 Step 3 ✅ — Canonical truth locked", state="complete")
@@ -1081,9 +1081,9 @@ elif page == "upload":
             ohandler.transition_state(tenant["id"], case_id, "UNDER_REVIEW",       "system")
             ohandler.transition_state(tenant["id"], case_id, "PENDING_APPROVAL",   "system")
             st.write(f"✅ Case opened: `{case_id[:24]}…`")
-            st.write(f"✅ FSM: OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL")
-            st.write(f"✅ Every transition written as APPEND-ONLY `case_event`")
-            st.write(f"✅ Kafka: `case.opened` + `case.updated` × 3 published")
+            st.write("✅ FSM: OPENED → EVIDENCE_GATHERING → UNDER_REVIEW → PENDING_APPROVAL")
+            st.write("✅ Every transition written as APPEND-ONLY `case_event`")
+            st.write("✅ Kafka: `case.opened` + `case.updated` × 3 published")
             pipeline["case_id"] = case_id
             s4.update(label="🗂 Phase 2 Step 4 ✅ — Case in PENDING_APPROVAL", state="complete")
         except Exception as e:
@@ -1117,7 +1117,7 @@ elif page == "upload":
 
             bundle_row = ev_handler.get_bundle(tenant["id"], case_id)
             st.write(f"✅ Evidence bundle Merkle root: `{bundle_row.bundle_hash[:32]}…`")
-            st.write(f"✅ Kafka: `evidence.bundled` × 2 published")
+            st.write("✅ Kafka: `evidence.bundled` × 2 published")
             pipeline["bundle_id"] = str(bundle_row.bundle_id)
             s5.update(label="🔍 Phase 3 Evidence ✅ — Invoice image + rate sheet attached", state="complete")
         except Exception as e:
@@ -1137,11 +1137,11 @@ elif page == "upload":
                 currency=currency,
             )
             st.write(f"✅ SC-001 confidence score: **{finding.confidence:.0%}**")
-            st.write(f"✅ Rule trace: fuel_charge (1.00 × 0.5) + accessorial (0.92 × 0.5) = **0.96**")
+            st.write("✅ Rule trace: fuel_charge (1.00 × 0.5) + accessorial (0.92 × 0.5) = **0.96**")
             st.write(f"✅ Proposed action: **{finding.proposed_action}**  |  Recovery: **{currency} {finding.amount:,.0f}**")
             st.write(f"✅ finding_id:  `{finding.finding_id}`")
             st.write(f"✅ proposal_id: `{finding.proposal_id}`")
-            st.write(f"✅ Kafka: `finding.created` published")
+            st.write("✅ Kafka: `finding.created` published")
             pipeline["proposal_id"] = str(finding.proposal_id)
             pipeline["rec_amount"]  = rec_amount
             s6.update(label=f"🧠 Phase 3 Reasoning ✅ — Confidence {finding.confidence:.0%}, Recovery {currency} {rec_amount:,.0f}", state="complete")
@@ -1160,7 +1160,7 @@ elif page == "upload":
             st.write(f"✅ Approval task created — task_id: `{str(task.task_id)[:24]}…`")
             st.write(f"✅ Proposer: **{analyst}** — cannot self-approve (SoD enforced)")
             st.write(f"✅ Waiting for manager **{manager}** to approve in Case Journey → Step 5")
-            st.write(f"✅ Kafka: `case.updated` published")
+            st.write("✅ Kafka: `case.updated` published")
             s7.update(label=f"✅ Phase 3 Governance ✅ — Task pending {manager}'s approval", state="complete")
         except Exception as e:
             st.error(f"Governance task failed: {e}"); s7.update(label="✅ Governance ❌", state="error"); st.stop()
@@ -1343,7 +1343,7 @@ elif page == "journey":
 
             if existing:
                 c1, c2 = st.columns(2)
-                c1.metric(f"Items uploaded", len(existing))
+                c1.metric("Items uploaded", len(existing))
                 c2.metric("Merkle Root", bundle.get("bundle_hash", "—")[:20] + "…" if bundle else "—")
                 st.dataframe(_fix(existing), use_container_width=True)
                 st.code(f"Merkle Root: {bundle.get('bundle_hash','—')}" if bundle else "", language=None)
@@ -1812,7 +1812,7 @@ elif page == "oidc":
             if len(parts) == 3:
                 parts[1] = parts[1][:-4] + "XXXX"
                 try:    verifier.verify(".".join(parts)); st.error("Accepted — BUG!")
-                except: st.error("Tampered token correctly REJECTED ✅")
+                except Exception: st.error("Tampered token correctly REJECTED ✅")
 
 elif page == "opa":
     st.title("🛡️ OPA Policies — Phase 1")
@@ -1844,7 +1844,7 @@ elif page == "opa":
         try:
             real_opa.evaluate("zoiko/freight_dispute", {"action": "EXECUTE_RECOVERY"})
             st.success("OPA responded (running locally)")
-        except OPAUnavailableError as e:
+        except OPAUnavailableError:
             st.error("OPA unreachable → **503 Service Unavailable** — request BLOCKED. Fail-Closed works ✅")
 
 elif page == "kafka":

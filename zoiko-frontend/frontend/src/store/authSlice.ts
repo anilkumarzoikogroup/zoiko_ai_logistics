@@ -8,40 +8,14 @@ interface AuthState {
   sub:      string | null;
 }
 
-// Decode a base64url string (JWT format) safely — handles missing padding and URL-safe chars
-function _decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const part = token.split(".")[1];
-    if (!part) return null;
-    // base64url → base64: replace URL-safe chars + add missing padding
-    const b64 = part.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = b64 + "=".repeat((4 - b64.length % 4) % 4);
-    return JSON.parse(atob(padded));
-  } catch {
-    return null;
-  }
-}
-
-// Hydrate from localStorage — validate the token is not obviously expired
+// Hydrate non-sensitive fields from localStorage.
+// The JWT is stored only in an HttpOnly cookie — JS cannot read it.
+// On page reload token is null; API calls succeed via cookie automatically.
+// If the cookie is expired, the first protected API call returns 401 and the
+// interceptor in client.ts dispatches logout() → clears localStorage → /login.
 function _loadStoredAuth(): AuthState {
-  const token = localStorage.getItem("zoiko_jwt");
-  if (token) {
-    const payload = _decodeJwtPayload(token);
-    if (!payload) {
-      // Malformed token — clear stored auth
-      ["zoiko_jwt","zoiko_tenant","zoiko_role","zoiko_user","zoiko_sub"]
-        .forEach(k => localStorage.removeItem(k));
-      return { token: null, tenantId: null, role: null, user: null, sub: null };
-    }
-    if (payload.exp && typeof payload.exp === "number" && payload.exp * 1000 < Date.now()) {
-      // Token expired — clear stored auth
-      ["zoiko_jwt","zoiko_tenant","zoiko_role","zoiko_user","zoiko_sub"]
-        .forEach(k => localStorage.removeItem(k));
-      return { token: null, tenantId: null, role: null, user: null, sub: null };
-    }
-  }
   return {
-    token,
+    token:    null,  // never persisted to localStorage — lives in HttpOnly cookie
     tenantId: localStorage.getItem("zoiko_tenant"),
     role:     localStorage.getItem("zoiko_role"),
     user:     localStorage.getItem("zoiko_user"),
@@ -64,8 +38,8 @@ const authSlice = createSlice({
       state.role     = role;
       state.user     = user;
       state.sub      = sub;
-      // Persist to localStorage for page reloads
-      localStorage.setItem("zoiko_jwt",    token);
+      // JWT goes only into HttpOnly cookie (set by backend) — never touch localStorage for it.
+      // Non-sensitive display fields are persisted for page-reload hydration.
       localStorage.setItem("zoiko_tenant", tenantId);
       localStorage.setItem("zoiko_role",   role);
       localStorage.setItem("zoiko_user",   user);
@@ -77,15 +51,16 @@ const authSlice = createSlice({
       state.role     = null;
       state.user     = null;
       state.sub      = null;
-      localStorage.removeItem("zoiko_jwt");
+      // Cookie is cleared by calling POST /auth/signout (backend deletes it).
+      // Clear the non-sensitive display fields from localStorage.
       localStorage.removeItem("zoiko_tenant");
       localStorage.removeItem("zoiko_role");
       localStorage.removeItem("zoiko_user");
       localStorage.removeItem("zoiko_sub");
     },
     refreshToken(state, action: PayloadAction<string>) {
+      // Token is refreshed via cookie by the backend — just update in-memory state.
       state.token = action.payload;
-      localStorage.setItem("zoiko_jwt", action.payload);
     },
   },
 });

@@ -1,0 +1,33 @@
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+# Directories excluded from root-level lint
+extend-exclude = [
+    ".venv",
+    "node_modules",
+    "zoiko-frontend",
+    ".git",
+    "__pycache__",
+    "*.egg-info",
+    # phase-0 has its own pyproject.toml with ruff config and a standalone CI job
+    "phase-0",
+]
+
+[tool.ruff.lint]
+# Ruff default rule set (E4*, E7*, E9*, F*) made explicit
+select = ["E4", "E7", "E9", "F"]
+
+extend-ignore = [
+    # ── Intentional patterns in this codebase ─────────────────────────────────
+    "E401",   # multiple imports on one line — used in bootstrap/conftest files
+    "E402",   # module-level import not at top — intentional sys.path manipulation
+    "E701",   # multiple statements on one line (colon) — used in conftest setup
+    "E702",   # multiple statements on one line (semicolon) — used in conftest setup
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test and conftest files have broader intentional patterns
+"**/conftest.py" = ["F401", "E401", "E402"]
+"**/paths.py"    = ["E401", "E402"]
+"**/tests/*.py"  = ["F401", "F841"]

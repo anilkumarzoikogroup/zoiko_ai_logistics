@@ -36,7 +36,6 @@ from zoiko_common.crypto.jcs import canonicalize
 
 from services.governance_svc.models import (
     ApprovalTaskResult,
-    ApprovalThreshold,
     GovernanceDecisionResult,
 )
 

@@ -103,7 +103,7 @@ try:
     print(f"  Merkle Root  : {acr_result.merkle_root[:32]}...")
     print(f"  Artifacts    : {acr_result.artifact_count}")
     print(f"  Locked       : {acr_result.is_locked}")
-    print(f"  Case state   : CLOSED")
+    print("  Case state   : CLOSED")
 except ValueError as e:
     print(f"  ACR skipped  : {e}")
 

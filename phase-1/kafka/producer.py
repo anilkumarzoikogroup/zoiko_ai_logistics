@@ -4,7 +4,7 @@ Zoiko Kafka producer abstraction.
 Wraps kafka-python (or mock) with:
 - Mandatory tenant_id in every message header
 - Mandatory idempotency_key in every message header
-- JSON serialization with JCS canonicalization
+- JSON serialization (sort_keys=True for determinism; not strict RFC 8785 JCS)
 - Outbox pattern: messages are persisted to DB outbox before Kafka publish
 
 31 registered topics (zoiko. prefix, spec-aligned):
@@ -26,7 +26,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
-# All 17 registered Kafka topics (zoiko. namespace prefix, spec §9.1)
+# Operational topic registry — must stay in sync with PRODUCER_TOPICS in
+# zoiko_common/kafka/schemas.py (the outbox relay validates against that copy).
 REGISTERED_TOPICS = {
     "zoiko.source.record.received",    "zoiko.source.record.validated",   "zoiko.canonical.invoice.created",
     "zoiko.case.opened",               "zoiko.case.updated",              "zoiko.case.closed",
@@ -34,22 +35,13 @@ REGISTERED_TOPICS = {
     "zoiko.governance.decision.issued","zoiko.governance.token.issued",   "zoiko.governance.token.consumed",
     "zoiko.execution.dispatched",      "zoiko.execution.completed",
     "zoiko.reconciliation.updated",    "zoiko.acr.generated",             "zoiko.audit.artifact.written",
-    # FR-024 — security event stream
     "zoiko.security.event-detected.v1",
-    # Retry topics — transient failures are re-queued here for backoff/retry
-    "zoiko.evidence.bundled.retry",
-    "zoiko.finding.generated.retry",
-    "zoiko.governance.decision.issued.retry",
-    "zoiko.governance.token.issued.retry",
-    "zoiko.execution.dispatched.retry",
-    "zoiko.reconciliation.updated.retry",
-    # DLQ topics — exhausted retries land here for manual review / alerting
-    "zoiko.evidence.bundled.dlq",
-    "zoiko.finding.generated.dlq",
-    "zoiko.governance.decision.issued.dlq",
-    "zoiko.governance.token.issued.dlq",
-    "zoiko.execution.dispatched.dlq",
-    "zoiko.reconciliation.updated.dlq",
+    "zoiko.evidence.bundled.retry",           "zoiko.finding.generated.retry",
+    "zoiko.governance.decision.issued.retry", "zoiko.governance.token.issued.retry",
+    "zoiko.execution.dispatched.retry",       "zoiko.reconciliation.updated.retry",
+    "zoiko.evidence.bundled.dlq",             "zoiko.finding.generated.dlq",
+    "zoiko.governance.decision.issued.dlq",   "zoiko.governance.token.issued.dlq",
+    "zoiko.execution.dispatched.dlq",         "zoiko.reconciliation.updated.dlq",
 }
 
 
@@ -119,6 +111,7 @@ class ZoikoProducer:
         )
 
     def publish_batch(self, messages: list[KafkaMessage]) -> None:
+        """Publish all messages. Raises on first failure — earlier messages are already sent."""
         for msg in messages:
             self.publish(msg)
 

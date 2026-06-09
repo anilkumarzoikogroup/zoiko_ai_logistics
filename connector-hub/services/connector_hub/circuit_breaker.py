@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import time
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Any
 
 
@@ -56,7 +56,7 @@ class CircuitBreaker:
 
         try:
             result = fn()
-        except Exception as exc:
+        except Exception:
             self._record_failure()
             raise
         else:

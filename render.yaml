@@ -6,7 +6,7 @@ services:
     dockerContext: .
     plan: free
     healthCheckPath: /health
-    autoDeploy: true
+    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
 
     envVars:
       # ── Database (Neon cloud) ─────────────────────────────────────────────
@@ -27,9 +27,9 @@ services:
       - key: ZOIKO_FF_SC_001_ENABLED
         value: "*"
 
-      # ── CORS — add your Vercel URL here (comma-separated) ─────────────────
+      # ── CORS — allow your live Vercel frontend and local dev ─────────────
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
 
       # ── AI (Groq) ─────────────────────────────────────────────────────────
       - key: GROQ_API_KEY

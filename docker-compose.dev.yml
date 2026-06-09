@@ -24,7 +24,7 @@ services:
   # ── Infrastructure ────────────────────────────────────────────────────────
 
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB:       zoiko
       POSTGRES_USER:     ${POSTGRES_USER:-postgres}
@@ -79,14 +79,14 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka:29092"]
       interval: 10s
       timeout: 10s
       retries: 10
     networks: [zoiko-net]
 
   opa:
-    image: openpolicyagent/opa:latest
+    image: openpolicyagent/opa:0.68.0
     command:
       - run
       - --server

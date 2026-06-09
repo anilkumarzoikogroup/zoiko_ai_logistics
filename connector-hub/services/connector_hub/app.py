@@ -16,8 +16,6 @@ All claim routes require:
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
-from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -27,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from services.connector_hub.handler  import ConnectorHubHandler, _breakers
-from services.connector_hub.models   import ClaimRequest, CertifyRequest
+from services.connector_hub.models   import ClaimRequest
 from services.connector_hub.registry import get_registry
 
 DB_URL = os.getenv("DB_URL")

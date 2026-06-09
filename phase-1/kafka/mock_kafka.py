@@ -6,8 +6,9 @@ Supports multiple topics, consumer groups, and per-group offset tracking.
 """
 from __future__ import annotations
 
+import threading
 from collections import defaultdict
-from typing import Dict, List, Any
+from typing import Dict, List
 
 
 class MockKafkaBroker:
@@ -20,48 +21,56 @@ class MockKafkaBroker:
     """
 
     def __init__(self):
+        self._lock = threading.Lock()
         # topic → list of raw message dicts
         self._topics:  Dict[str, List[dict]] = defaultdict(list)
         # group_id → topic → offset
         self._offsets: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
 
     def send(self, topic: str, key: bytes, value: bytes, headers: list = None) -> None:
-        self._topics[topic].append({
-            "key":     key,
-            "value":   value,
-            "headers": headers or [],
-        })
+        with self._lock:
+            self._topics[topic].append({
+                "key":     key,
+                "value":   value,
+                "headers": headers or [],
+            })
 
     def subscribe(self, topics: list[str], group_id: str = "default") -> None:
-        for t in topics:
-            if t not in self._offsets[group_id]:
-                self._offsets[group_id][t] = 0
+        with self._lock:
+            for t in topics:
+                if t not in self._offsets[group_id]:
+                    self._offsets[group_id][t] = 0
 
     def poll(self, timeout_ms: int = 1000, group_id: str = "default") -> Dict[str, List[dict]]:
         """
         Return all unread messages for this consumer group.
         Advances offsets after returning.
         """
-        result = {}
-        for topic, messages in self._topics.items():
-            offset = self._offsets[group_id][topic]
-            unread = messages[offset:]
-            if unread:
-                result[topic] = unread
-                self._offsets[group_id][topic] = len(messages)
+        with self._lock:
+            result = {}
+            for topic, messages in self._topics.items():
+                offset = self._offsets[group_id][topic]
+                unread = messages[offset:]
+                if unread:
+                    result[topic] = list(unread)  # snapshot to avoid holding lock during dispatch
+                    self._offsets[group_id][topic] = len(messages)
         return result
 
     def messages_for(self, topic: str) -> List[dict]:
         """Return all messages ever sent to a topic (for assertions in tests)."""
-        return list(self._topics[topic])
+        with self._lock:
+            return list(self._topics[topic])
 
     def message_count(self, topic: str) -> int:
-        return len(self._topics[topic])
+        with self._lock:
+            return len(self._topics[topic])
 
     def reset(self) -> None:
         """Clear all messages and offsets (useful between tests)."""
-        self._topics.clear()
-        self._offsets.clear()
+        with self._lock:
+            self._topics.clear()
+            self._offsets.clear()
 
     def topic_names(self) -> List[str]:
-        return list(self._topics.keys())
+        with self._lock:
+            return list(self._topics.keys())
