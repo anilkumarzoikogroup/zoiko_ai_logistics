@@ -419,6 +419,18 @@ export default function Login() {
                         {loading ? "Sending OTP…" : <><Mail size={15}/> Send OTP</>}
                       </button>
                     </form>
+
+                    {/* Divider */}
+                    <div style={{display:"flex",alignItems:"center",gap:"12px",margin:"12px 0 10px"}}>
+                      <div style={{flex:1,height:"1px",background:"linear-gradient(to right,transparent,#E2E8F0)"}}/>
+                      <span style={{fontSize:"11px",fontWeight:600,color:"#CBD5E1",whiteSpace:"nowrap"}}>or sign up with</span>
+                      <div style={{flex:1,height:"1px",background:"linear-gradient(to left,transparent,#E2E8F0)"}}/>
+                    </div>
+                    <button type="button" onClick={handleGoogle}
+                            style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:"10px",borderRadius:"12px",padding:"12px",fontSize:"14px",fontWeight:600,color:"#334155",background:"white",border:"1.5px solid #E2E8F0",cursor:"pointer",boxShadow:"0 2px 8px rgba(0,0,0,0.05)",transition:"all .2s"}}>
+                      <GoogleIcon/>
+                      Sign up with Google
+                    </button>
                   </div>
                 )}
 
