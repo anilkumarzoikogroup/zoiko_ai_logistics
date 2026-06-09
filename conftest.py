@@ -31,8 +31,6 @@ _ORDERED_PATHS = [
     os.path.join(_ROOT, "phase-2"),
     os.path.join(_ROOT, "phase-3"),
     os.path.join(_ROOT, "phase-4"),
-    os.path.join(_ROOT, "connector-hub"),
-    os.path.join(_ROOT, "stub-service"),
 ]
 
 # Module prefixes that are phase-specific and must be evicted after collection

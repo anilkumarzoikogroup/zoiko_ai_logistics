@@ -29,9 +29,11 @@ export ZOIKO_DEV_SECRET=zoiko-dev-secret-for-testing-only
 export ZOIKO_ISSUER=https://auth.zoikotech.com
 
 .PHONY: all setup venv install-python install-node test test-phase-0 test-phase-1 \
-        test-phase-2 test-phase-3 test-phase-4 test-connector-hub test-stub-service \
-        backend frontend db-migrate db-seed smoke-test tenant-fuzzer \
+        test-phase-2 test-phase-3 test-phase-4 \
+        test-fast test-cov \
+        backend frontend db-migrate db-seed db-rollback smoke-test tenant-fuzzer \
         demo-freight-overcharge demo-phase-2 demo-phase-3 demo-phase-4 \
+        lint format type-check check \
         verify-acr clean help
 
 all: help
@@ -54,7 +56,6 @@ install-node:
 
 test:
 	@$(PY) -m pytest phase-0/packages/zoiko-common/tests phase-1 phase-2 phase-3 phase-4 \
-	    connector-hub/tests stub-service/tests \
 	    -q --tb=short
 
 test-phase-0:
@@ -72,11 +73,13 @@ test-phase-3:
 test-phase-4:
 	@$(PY) -m pytest phase-4 -q --tb=short
 
-test-connector-hub:
-	@$(PY) -m pytest connector-hub/tests -q --tb=short
+test-fast:
+	@$(PY) -m pytest phase-2 phase-3 -q --tb=short -x -m "not integration"
 
-test-stub-service:
-	@$(PY) -m pytest stub-service/tests -q --tb=short
+test-cov:
+	@$(PY) -m pytest phase-0/packages/zoiko-common/tests phase-2 phase-3 phase-4 \
+	    --cov=phase-2/services --cov=phase-3/services --cov=phase-4/services \
+	    --cov-report=term-missing --cov-report=html:htmlcov -q --tb=short
 
 # ── Demos ─────────────────────────────────────────────────────────────────────
 
@@ -108,18 +111,13 @@ frontend:
 dashboard:
 	@$(PY) -m streamlit run dashboard.py
 
-connector-hub:
-	@cd connector-hub && ../$(PY) -m uvicorn services.connector_hub.app:app \
-	    --reload --host 0.0.0.0 --port 8010
-
-stub-service:
-	@cd stub-service && ../$(PY) -m uvicorn services.stub_svc.app:app \
-	    --reload --host 0.0.0.0 --port 8013
-
 # ── Database ──────────────────────────────────────────────────────────────────
 
 db-migrate:
 	@cd phase-0/db && ../../$(PY) -m alembic upgrade head
+
+db-rollback:
+	@cd phase-0/db && ../../$(PY) -m alembic downgrade -1
 
 db-seed:
 	@$(PY) phase-0/scripts/seed_dummy_data.py
@@ -136,6 +134,20 @@ ACR_FILE ?= acr.json
 verify-acr:
 	@bash verify.sh $(ACR_FILE)
 
+# ── Code quality ──────────────────────────────────────────────────────────────
+
+lint:
+	@$(PY) -m ruff check phase-0 phase-2 phase-3 phase-4 --select E,W,F,I --ignore E501
+
+format:
+	@$(PY) -m black phase-0 phase-2 phase-3 phase-4 --line-length 100
+
+type-check:
+	@$(PY) -m mypy phase-2/services/api_gateway --ignore-missing-imports --no-strict-optional
+
+check: lint type-check
+	@echo "All checks passed."
+
 clean:
 	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null; true
 	@find . -name "*.pyc" -delete 2>/dev/null; true
@@ -144,13 +156,21 @@ help:
 	@echo ""
 	@echo "Zoiko AI Logistics — Available targets:"
 	@echo ""
-	@echo "  make setup                  Install all dependencies"
-	@echo "  make demo-freight-overcharge Run the full SC-001 pipeline"
-	@echo "  make test                   Run all tests (all phases)"
-	@echo "  make test-phase-2           Phase 2 tests only"
-	@echo "  make backend                Start Phase 2 API (port 8000)"
-	@echo "  make frontend               Start React frontend (port 5173)"
-	@echo "  make db-migrate             Apply all DB migrations"
-	@echo "  make smoke-test             Run smoke tests"
-	@echo "  make verify-acr ACR_FILE=x  Verify an ACR bundle offline"
+	@echo "  make setup                   Install all dependencies"
+	@echo "  make demo-freight-overcharge  Run the full SC-001 pipeline"
+	@echo "  make test                    Run all tests (all phases)"
+	@echo "  make test-phase-2            Phase 2 tests only"
+	@echo "  make test-fast               Fast unit tests (phase-2 + phase-3, no integration)"
+	@echo "  make test-cov                Tests with HTML coverage report"
+	@echo "  make backend                 Start Phase 2 API (port 8000)"
+	@echo "  make frontend                Start React frontend (port 5173)"
+	@echo "  make db-migrate              Apply all Alembic migrations"
+	@echo "  make db-rollback             Roll back one Alembic migration"
+	@echo "  make db-seed                 Seed dummy data"
+	@echo "  make smoke-test              Run smoke tests"
+	@echo "  make lint                    Run ruff linter"
+	@echo "  make format                  Run black formatter"
+	@echo "  make type-check              Run mypy on phase-2 gateway"
+	@echo "  make check                   Run lint + type-check"
+	@echo "  make verify-acr ACR_FILE=x   Verify an ACR bundle offline"
 	@echo ""

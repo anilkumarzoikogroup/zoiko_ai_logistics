@@ -111,12 +111,15 @@ class KafkaEventEnvelope:
     payload:        Dict[str, Any]
 
     event_id:       str = field(default_factory=lambda: str(uuid.uuid4()))
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     occurred_at:    str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     producer:       str = "spiffe://zoiko.internal/service/unknown"
     traceparent:    Optional[str] = None
     correlation_id: Optional[str] = None
     causation_id:   Optional[str] = None
+    # Actor that triggered the event (USER | SERVICE | SYSTEM)
+    actor_type:     Optional[str] = None
+    actor_id:       Optional[str] = None
     payload_hash:   str = field(init=False)
     signature:      Optional[str] = None
 
@@ -131,6 +134,8 @@ class KafkaEventEnvelope:
     def to_bytes(self) -> bytes:
         """Serialise envelope to UTF-8 bytes (JCS-sorted keys for determinism)."""
         doc = {
+            "actor_id":        self.actor_id,
+            "actor_type":      self.actor_type,
             "aggregate_id":    self.aggregate_id,
             "aggregate_type":  self.aggregate_type,
             "causation_id":    self.causation_id,
@@ -159,6 +164,10 @@ class KafkaEventEnvelope:
             headers.append(("correlation_id", self.correlation_id.encode()))
         if self.traceparent:
             headers.append(("traceparent", self.traceparent.encode()))
+        if self.actor_type:
+            headers.append(("actor_type", self.actor_type.encode()))
+        if self.actor_id:
+            headers.append(("actor_id", self.actor_id.encode()))
         return headers
 
     @classmethod
@@ -174,11 +183,13 @@ class KafkaEventEnvelope:
             aggregate_id   = doc["aggregate_id"],
             payload        = doc["payload"],
             event_id       = doc.get("event_id", str(uuid.uuid4())),
-            schema_version = doc.get("schema_version", "1.0"),
+            schema_version = doc.get("schema_version", "1.1"),
             occurred_at    = doc.get("occurred_at", datetime.now(timezone.utc).isoformat()),
             producer       = doc.get("producer", "spiffe://zoiko.internal/service/unknown"),
             traceparent    = doc.get("traceparent"),
             correlation_id = doc.get("correlation_id"),
             causation_id   = doc.get("causation_id"),
+            actor_type     = doc.get("actor_type"),
+            actor_id       = doc.get("actor_id"),
             signature      = doc.get("signature"),
         )

@@ -12,8 +12,6 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost}"
 P2_URL="${P2_URL:-${BASE_URL}:8000}"
 P4_URL="${P4_URL:-${BASE_URL}:8001}"
-HUB_URL="${HUB_URL:-${BASE_URL}:8010}"
-STUB_URL="${STUB_URL:-${BASE_URL}:8013}"
 
 PASS=0
 FAIL=0
@@ -36,21 +34,10 @@ check() {
 echo "==> Zoiko smoke test — $(date)"
 echo ""
 
-check "Phase 2 health"       "$P2_URL/health"          '"status":"ok"'
-check "Phase 2 version"      "$P2_URL/health"          '"version":"2.0.0"'
-check "Phase 4 health"       "$P4_URL/health"          '"status":"ok"'
-check "Connector Hub health" "$HUB_URL/health"         '"service":"connector-hub"'
-check "Stub Service health"  "$STUB_URL/health"        '"service":"stub-service"'
-
-# Check BlueDart connector is ACTIVE
-CB=$(curl -sf --max-time 5 "$HUB_URL/v1/connectors/BlueDart/status" 2>/dev/null || true)
-if echo "$CB" | grep -q '"ACTIVE"'; then
-    echo "[PASS] BlueDart connector ACTIVE"
-    PASS=$((PASS+1))
-else
-    echo "[FAIL] BlueDart connector status: $CB"
-    FAIL=$((FAIL+1))
-fi
+check "Phase 2 health"   "$P2_URL/health" '"status":"ok"'
+check "Phase 2 version"  "$P2_URL/health" '"version":"2.0.0"'
+check "Phase 2 ready"    "$P2_URL/ready"  '"status":"ready"'
+check "Phase 4 health"   "$P4_URL/health" '"status":"ok"'
 
 echo ""
 echo "==> Results: ${PASS} passed, ${FAIL} failed"

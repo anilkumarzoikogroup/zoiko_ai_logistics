@@ -156,8 +156,9 @@ export default function CaseDetail() {
       setDisputeLetter(data.dispute_letter || "");
       if (data.carrier_email) setSendEmail(data.carrier_email);
       toast.success("Letter generated", `Dispute letter for ${data.carrier} ready`);
-    } catch {
-      toast.error("Generation failed", "Set GROQ_API_KEY in .env to enable AI dispute letters");
+    } catch (err: unknown) {
+      const detail = (err as any)?.response?.data?.detail;
+      toast.error("Generation failed", detail || "Could not generate dispute letter — check the backend terminal for details.");
     } finally {
       setLetterLoading(false);
     }

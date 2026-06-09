@@ -1,5 +1,15 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+
+
+# ── Error response ────────────────────────────────────────────────────────────
+
+class ErrorResponse(BaseModel):
+    code:               str
+    message:            str
+    correlation_id:     str
+    recoverability_hint: str = ""
+    details:            Optional[Dict[str, Any]] = None
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────

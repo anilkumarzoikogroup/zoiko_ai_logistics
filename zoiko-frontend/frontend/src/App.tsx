@@ -50,6 +50,12 @@ import WorkspaceRequests   from "./features/admin/WorkspaceRequests";
 // features/stubs
 import StubViewer from "./features/stubs/StubViewer";
 
+// new domain pages
+import ConnectorsPage    from "./features/connectors/ConnectorsPage";
+import ReportsPage       from "./features/reports/ReportsPage";
+import EvidencePage      from "./features/evidence/EvidencePage";
+import DecisionProposals from "./features/reasoning/DecisionProposals";
+
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const role = useAppSelector(state => state.auth.role);
   return role ? <>{children}</> : <Navigate to="/login" replace />;
@@ -160,6 +166,16 @@ export default function App() {
             <WorkspaceRequests />
           </RequireRole>
         } />
+
+        {/* Connectors */}
+        <Route path="/connectors" element={<ConnectorsPage />} />
+
+        {/* Reports */}
+        <Route path="/reports" element={<ReportsPage />} />
+
+        {/* Evidence & Reasoning (case sub-pages) */}
+        <Route path="/cases/:id/evidence"  element={<EvidencePage />} />
+        <Route path="/cases/:id/reasoning" element={<DecisionProposals />} />
 
         {/* Dev/test stubs — admin only */}
         <Route path="/stubs"     element={

@@ -42,6 +42,7 @@ from services.api_gateway.models import (
     UsersListResponse, UserItem,
     TenantCreateRequest,
     ExecuteRequest,
+    ErrorResponse,
 )
 from shared.db import q, q1
 from zoiko_common.crypto.jcs import canonicalize as _jcs
@@ -253,6 +254,17 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+# X-Correlation-ID — generate/propagate on every request
+class CorrelationIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: _Request, call_next):
+        correlation_id = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+        request.state.correlation_id = correlation_id
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = correlation_id
+        return response
+
+app.add_middleware(CorrelationIDMiddleware)
+
 # OTel distributed tracing (FR-022)
 try:
     from zoiko_common.observability.tracing import setup_tracing
@@ -268,7 +280,57 @@ _sec = SecurityEventPublisher(broker=_BROKER)
 # All UI/internal routes are registered on v1_router; the router is included
 # TWICE: once with /v1 prefix (spec §9.2) and once without (backward compat).
 from fastapi import APIRouter as _AR
+from fastapi.exceptions import RequestValidationError
 v1_router = _AR()
+
+
+# ── Global exception handlers ─────────────────────────────────────────────────
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: _Request, exc: RequestValidationError):
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+    return _JSONResponse(
+        status_code=422,
+        content=ErrorResponse(
+            code="VALIDATION_ERROR",
+            message="Request validation failed",
+            correlation_id=correlation_id,
+            recoverability_hint="Fix the request body according to the schema and retry.",
+            details={"errors": exc.errors()},
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request: _Request, exc: HTTPException):
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+    return _JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(
+            code=f"HTTP_{exc.status_code}",
+            message=str(exc.detail),
+            correlation_id=correlation_id,
+            recoverability_hint="See the message field for details.",
+        ).model_dump(),
+    )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: _Request, exc: Exception):
+    import logging
+    correlation_id = getattr(request.state, "correlation_id", str(uuid.uuid4()))
+    logging.getLogger("zoiko.api").exception(
+        "Unhandled exception [%s] %s %s", correlation_id, request.method, request.url
+    )
+    return _JSONResponse(
+        status_code=500,
+        content=ErrorResponse(
+            code="INTERNAL_ERROR",
+            message="An unexpected error occurred",
+            correlation_id=correlation_id,
+            recoverability_hint="Retry with exponential back-off. Contact support if the problem persists.",
+        ).model_dump(),
+    )
 
 
 # ── Singleton handlers ────────────────────────────────────────────────────────
@@ -1677,6 +1739,38 @@ def health():
         "version": "2.0.0",
         "checks":  checks,
     }
+
+
+@app.get("/ready", tags=["ops"])
+@app.get("/v1/ready", tags=["ops"], include_in_schema=False)
+def ready():
+    """Readiness probe — returns 200 only when DB and critical services are reachable."""
+    failures: list[str] = []
+
+    # DB
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(DB_URL)
+        conn.cursor().execute("SELECT 1")
+        conn.close()
+    except Exception as exc:
+        failures.append(f"database: {str(exc)[:80]}")
+
+    # Redis (optional — missing Redis is non-fatal for readiness)
+    try:
+        import redis as _redis
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        r = _redis.from_url(redis_url, socket_connect_timeout=1)
+        r.ping()
+    except Exception:
+        pass  # Redis is optional — Phase 4 degrades gracefully without it
+
+    if failures:
+        return _JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "failures": failures},
+        )
+    return {"status": "ready", "service": "api-gateway"}
 
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
@@ -4630,3 +4724,20 @@ try:
 except Exception as _p4_err:
     import logging as _log
     _log.getLogger("zoiko.phase4").warning("Phase-4 routes not loaded: %s", _p4_err)
+
+
+# ── Domain extension routers ──────────────────────────────────────────────────
+try:
+    from services.api_gateway.routers import (
+        identity, connectors, canonical, evidence, approval, reasoning, policy, evaluation, reports
+    )
+    for _domain_router in (
+        identity.router, connectors.router, canonical.router,
+        evidence.router, approval.router, reasoning.router,
+        policy.router, evaluation.router, reports.router,
+    ):
+        app.include_router(_domain_router, prefix="/v1")
+        app.include_router(_domain_router)   # backward-compat bare path
+except Exception as _domain_err:
+    import logging as _log
+    _log.getLogger("zoiko.domain").warning("Domain routers not fully loaded: %s", _domain_err)

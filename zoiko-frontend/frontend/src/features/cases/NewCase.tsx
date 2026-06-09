@@ -170,8 +170,9 @@ export default function NewCase() {
           const detail = err.response.data?.detail || "Submission failed. Try again.";
           toast.error("Submission failed", typeof detail === "string" ? detail : JSON.stringify(detail));
         }
+      } else if (err instanceof Error) {
+        toast.error("Submission failed", err.message || "Pipeline error. Check the backend terminal for details.");
       } else {
-        // Non-Axios errors: typically a JSON parse failure when proxy returns HTML on backend crash
         toast.error("Backend unreachable", "Lost connection to the server mid-request. Restart the backend on port 8000 and try again.");
       }
     },
@@ -536,6 +537,8 @@ export default function NewCase() {
               ? "Session expired — please log in again."
               : axios.isAxiosError(m.error) && m.error.response
               ? `Submission failed — ${(m.error.response.data as any)?.detail || "check the backend terminal for details."}`
+              : m.error instanceof Error
+              ? `Submission failed — ${m.error.message}`
               : "Backend unreachable — restart the backend on port 8000 and try again."}
           </p>
         )}
