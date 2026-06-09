@@ -43,58 +43,64 @@ In dev/tests each phase runs in the same Python process using MockKafkaBroker.
 
 ```
 zoiko-logistics/
-├── dashboard.py                     ← Streamlit, all phases
+├── dashboard.py                     ← Streamlit, all services
 ├── requirements.txt                 ← Single combined requirements file
-├── docker-compose.dev.yml           ← Full local stack (postgres, redis, kafka, opa, services)
+├── docker-compose.yml               ← Full local stack (postgres, redis, kafka, opa, services)
 ├── launch.bat                       ← One-click: DB check → backend → frontend → browser
 ├── setup.bat                        ← One-time setup (venv + pip + npm install)
 ├── EXECUTION_GUIDE.md               ← Step-by-step run commands
-├── .github/workflows/ci.yml         ← 8-gate CI: JCS → crypto → KMS → P1 → P2 → P3 → P4 → frontend
+├── alembic.ini                      ← Points to backend/core/db/migrations
 │
-├── opa/policies/zoiko/freight/      ← allow.rego — RBAC + tenant isolation policy
-│
-├── phase-0/packages/zoiko-common/zoiko_common/
-│   ├── crypto/jcs.py                ← RFC 8785 JCS canonicalization (CI hard block)
-│   ├── crypto/merkle.py             ← Merkle tree (domain-tagged)
-│   ├── crypto/signing.py            ← Ed25519 wrapper
-│   ├── kafka/__init__.py            ← Re-exports TOPICS, KafkaEventEnvelope, OutboxRelay
-│   ├── kafka/schemas.py             ← KafkaEventEnvelope (17-topic registry + envelope format)
-│   ├── kafka/outbox_relay.py        ← Polls outbox table → publishes to Kafka
-│   ├── errors/exceptions.py         ← ZoikoError hierarchy (GateFailureError, SoDViolationError…)
-│   └── observability/logging.py     ← JSON structured logging with tenant/trace context
-├── phase-0/db/migrations/           ← Alembic: 25 tables
-├── phase-0/scripts/                 ← seed_dummy_data.py, demo_sc001.py, tenant_fuzzer.py
-│
-├── phase-1/packages/zoiko-kms/      ← zoiko_kms: hierarchy.py, local_backend.py
-├── phase-1/middleware/oidc/         ← token_verifier.py, claims.py
-├── phase-1/middleware/opa/          ← client.py (fail-closed), MockOPAClient
-├── phase-1/kafka/                   ← producer.py (zoiko.* topics), consumer.py, mock_kafka.py
-│
-├── phase-2/services/api_gateway/    ← app.py (24 routes + /v1/ prefix + ACR route), auth.py, models.py
-├── phase-2/services/ingestion_svc/  ← handler.py (5-step write pattern)
-├── phase-2/services/validation_svc/ ← handler.py (contract rate engine)
-├── phase-2/services/canonical_truth/← handler.py (authoritative row)
-├── phase-2/services/case_orchestration/ ← handler.py (FSM)
-├── phase-2/shared/db.py             ← DB helpers (q, q1)
-├── phase-2/Dockerfile               ← Multi-stage, non-root, port 8000
-├── phase-2/demo_phase2.py           ← Full Phase 2 end-to-end demo
-│
-├── phase-3/services/api_gateway/    ← app.py (7 routes + /v1/ prefix), auth.py, models.py
-├── phase-3/services/evidence_svc/   ← handler.py (Merkle bundle)
-├── phase-3/services/reasoning_svc/  ← handler.py (SC-001 confidence 0.96)
-├── phase-3/services/governance_svc/ ← handler.py (SoD + case FSM)
-├── phase-3/services/token_svc/      ← handler.py (tenant-bound token, 15-min TTL)
-├── phase-3/shared/redis_token.py    ← Redis CONSUMED lock (also used by Phase 4)
-├── phase-3/Dockerfile               ← Multi-stage, non-root, port 8002
-├── phase-3/demo_phase3.py           ← Full Phase 3 end-to-end demo
-│
-├── phase-4/services/execution_gateway/ ← handler.py (8-gate check), models.py
-├── phase-4/services/reconciliation_svc/ ← handler.py (settlement match)
-├── phase-4/services/audit_acr_svc/  ← handler.py (8-artifact Merkle ACR)
-├── phase-4/services/api_gateway/    ← app.py (execute, reconcile, ACR — port 8001)
-├── phase-4/tests/                   ← test_execution_gateway.py, test_acr.py
-├── phase-4/Dockerfile               ← Multi-stage, non-root, port 8001
-├── phase-4/demo_phase4.py           ← Full Phase 4 end-to-end demo
+├── backend/
+│   ├── core/                        ← Shared crypto, DB migrations, common library
+│   │   ├── packages/zoiko-common/zoiko_common/
+│   │   │   ├── crypto/jcs.py        ← RFC 8785 JCS canonicalization (CI hard block)
+│   │   │   ├── crypto/merkle.py     ← Merkle tree (domain-tagged)
+│   │   │   ├── crypto/signing.py    ← Ed25519 wrapper
+│   │   │   ├── kafka/schemas.py     ← KafkaEventEnvelope (17-topic registry + envelope format)
+│   │   │   ├── errors/exceptions.py ← ZoikoError hierarchy (GateFailureError, SoDViolationError…)
+│   │   │   └── observability/logging.py ← JSON structured logging with tenant/trace context
+│   │   ├── db/migrations/           ← Alembic: 19 migration versions
+│   │   └── scripts/                 ← seed_dummy_data.py, demo_sc001.py, tenant_fuzzer.py
+│   │
+│   ├── platform/                    ← Identity (KMS, OIDC), policy (OPA), events (Kafka)
+│   │   ├── packages/zoiko-kms/      ← zoiko_kms: hierarchy.py, local_backend.py
+│   │   ├── middleware/oidc/         ← token_verifier.py, claims.py
+│   │   ├── middleware/opa/          ← client.py (fail-closed), MockOPAClient
+│   │   └── kafka/                   ← producer.py (zoiko.* topics), consumer.py, mock_kafka.py
+│   │
+│   ├── gateway/                     ← API gateway — ingestion, validation, case FSM (port 8000)
+│   │   ├── services/api_gateway/    ← app.py (283 routes + /v1/ prefix), auth.py, models.py
+│   │   │   ├── config.py            ← pydantic-settings BaseSettings
+│   │   │   ├── constants.py         ← CaseStatus, GovernanceDecisionType, ChannelType enums
+│   │   │   └── routers/             ← identity, connectors, canonical, evidence, approval,
+│   │   │                              reasoning, policy, evaluation, reports
+│   │   ├── services/ingestion_svc/  ← handler.py (5-step write pattern)
+│   │   ├── services/validation_svc/ ← handler.py (contract rate engine)
+│   │   ├── services/canonical_truth/← handler.py (authoritative row)
+│   │   ├── services/case_orchestration/ ← handler.py (FSM)
+│   │   ├── shared/db.py             ← DB helpers (q, q1)
+│   │   ├── paths.py                 ← sys.path bootstrap (import first)
+│   │   └── Dockerfile               ← Multi-stage, non-root, port 8000
+│   │
+│   ├── governance/                  ← Evidence, reasoning, tokens, SoD (port 8002)
+│   │   ├── services/evidence_svc/   ← handler.py (Merkle bundle)
+│   │   ├── services/reasoning_svc/  ← handler.py (SC-001 confidence 0.96)
+│   │   ├── services/governance_svc/ ← handler.py (SoD + case FSM)
+│   │   ├── services/token_svc/      ← handler.py (tenant-bound token, 15-min TTL)
+│   │   ├── shared/redis_token.py    ← Redis CONSUMED lock (also used by execution)
+│   │   ├── paths.py                 ← sys.path bootstrap (import first)
+│   │   └── Dockerfile               ← Multi-stage, non-root, port 8002
+│   │
+│   ├── execution/                   ← 8-gate execution, reconciliation, ACR (port 8001)
+│   │   ├── services/execution_gateway/ ← handler.py (8-gate check), models.py
+│   │   ├── services/reconciliation_svc/ ← handler.py (settlement match)
+│   │   ├── services/audit_acr_svc/  ← handler.py (8-artifact Merkle ACR)
+│   │   ├── paths.py                 ← sys.path bootstrap (import first)
+│   │   └── Dockerfile               ← Multi-stage, non-root, port 8001
+│   │
+│   └── api/                         ← Frontend-facing reverse proxy (port 8080, optional)
+│       └── app.py                   ← Routes /v1/* to gateway/governance/execution
 │
 └── zoiko-frontend/frontend/
     ├── src/api/client.ts            ← Axios instance · /v1/ API base · auth + idempotency headers
@@ -130,7 +136,7 @@ Then restart `npm run dev`.
 
 ---
 
-## Backend Environment Variables (Phase 2)
+## Backend Environment Variables (gateway)
 
 ```
 DB_URL=postgresql://postgres:1234@localhost/zoiko
@@ -173,7 +179,7 @@ DB_URL = postgresql://postgres:1234@localhost/zoiko
 
 Set via: `$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"`
 
-The `shared/db.py` in both phase-2 and phase-3 defaults to this URL if `DB_URL` env var is unset.
+The `shared/db.py` in both `backend/gateway` and `backend/governance` defaults to this URL if `DB_URL` env var is unset.
 
 ---
 
@@ -186,8 +192,8 @@ The `shared/db.py` in both phase-2 and phase-3 defaults to this URL if `DB_URL` 
 
 ### Backend only
 ```powershell
-cd phase-2
-..\..\.venv\Scripts\activate
+cd backend\gateway
+..\..\venv\Scripts\activate
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:ZOIKO_DEV_MODE = "true"
 $env:PYTHONIOENCODING = "utf-8"
@@ -202,20 +208,20 @@ npm run dev
 # http://localhost:5173
 ```
 
-### Tests (each phase independently)
+### Tests (each service independently)
 ```powershell
-cd phase-0; py -m pytest packages/zoiko-common/tests -q --tb=short; cd ..
-cd phase-1; py -m pytest tests/ packages/zoiko-kms/tests/ -q --tb=short; cd ..
-cd phase-2; py -m pytest -q --tb=short; cd ..
-cd phase-3; py -m pytest -q --tb=short; cd ..
+cd backend\core; py -m pytest packages/zoiko-common/tests -q --tb=short; cd ..\..
+cd backend\platform; py -m pytest tests/ packages/zoiko-kms/tests/ -q --tb=short; cd ..\..
+cd backend\gateway; py -m pytest -q --tb=short; cd ..\..
+cd backend\governance; py -m pytest -q --tb=short; cd ..\..
 ```
 
 ### Full pipeline demo
 ```powershell
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:PYTHONIOENCODING = "utf-8"
-cd phase-2; py demo_phase2.py; cd ..   # produces a case in PENDING_APPROVAL
-cd phase-3; py demo_phase3.py; cd ..   # consumes that case, produces ACTIVE token
+cd backend\gateway; py demo_phase2.py; cd ..\..   # produces a case in PENDING_APPROVAL
+cd backend\governance; py demo_phase3.py; cd ..\.. # consumes that case, produces ACTIVE token
 ```
 
 ### Streamlit dashboard
@@ -294,7 +300,7 @@ Keys sorted by Unicode code point, no whitespace, UTF-8 bytes.
 
 ### Signing
 `sign(tenant_slug, hash_bytes)` → `(signature_bytes, kid)`.
-Defined in `phase-3/shared/signer.py` and `phase-2/shared/signer.py`.
+Defined in `backend/governance/shared/signer.py` and `backend/gateway/shared/signer.py`.
 
 ---
 
@@ -368,9 +374,9 @@ audit_worm_index
 
 | Mistake | Correct behaviour |
 |---------|------------------|
-| Using wrong Kafka topic name | Use only names from REGISTERED_TOPICS in phase-1/kafka/producer.py |
+| Using wrong Kafka topic name | Use only names from REGISTERED_TOPICS in backend/platform/kafka/producer.py |
 | Passing topic string as broker argument | `EvidenceHandler(DB_URL, broker_object, slug)` — broker is the MockKafkaBroker instance |
-| Forgetting `paths.py` import in phase-3 modules | Always `import paths` as the first import |
+| Forgetting `paths.py` import in governance modules | Always `import paths` as the first import |
 | Changing SC001_CONFIDENCE | This value is deterministic — never change it |
 | Using `psycopg2.extras.register_uuid()` late | Call it before any psycopg2 connection that handles UUIDs |
 | UPDATE/DELETE on append-only tables | Only INSERT is permitted |
@@ -380,7 +386,7 @@ audit_worm_index
 
 ---
 
-## OPA Wiring (Phase 2 & 3)
+## OPA Wiring (gateway & governance)
 
 Both gateways call OPA after JWT verification. Behaviour by env:
 

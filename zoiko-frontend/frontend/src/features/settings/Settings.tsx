@@ -352,7 +352,7 @@ function ContractsTab() {
             <div className="py-10 text-center text-muted-foreground space-y-2">
               <AlertTriangle className="h-8 w-8 mx-auto text-amber-400" />
               <p className="font-medium text-amber-700">No contract rates found</p>
-              <p className="text-xs">Without rates, all invoices return WARN instead of FAIL. Click "Add Rate" to seed them,<br />or run <code className="bg-secondary px-1 rounded">python seed_contract_rates.py</code> in phase-2/.</p>
+              <p className="text-xs">Without rates, all invoices return WARN instead of FAIL. Click "Add Rate" to seed them,<br />or run <code className="bg-secondary px-1 rounded">python seed_contract_rates.py</code> in backend/gateway/.</p>
             </div>
           ) : (
             <table className="w-full text-sm">

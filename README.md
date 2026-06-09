@@ -53,8 +53,8 @@ When a carrier overcharges a shipper, this system detects it, gets two humans to
 ### Manual start (if launch.bat windows are already open)
 ```powershell
 # Terminal 1 — Backend
-cd phase-2
-..\..\.venv\Scripts\activate
+cd backend\gateway
+..\..\venv\Scripts\activate
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:ZOIKO_DEV_MODE = "true"
 $env:PYTHONIOENCODING = "utf-8"
@@ -83,24 +83,24 @@ streamlit run dashboard.py
 # Opens at http://localhost:8501
 ```
 
-### Run individual phase demos
+### Run individual service demos
 ```powershell
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:PYTHONIOENCODING = "utf-8"
 
-# Phase 2: invoice → ingestion → validation → canonical → case PENDING_APPROVAL
-cd phase-2; py demo_phase2.py; cd ..
+# Gateway: invoice → ingestion → validation → canonical → case PENDING_APPROVAL
+cd backend\gateway; py demo_phase2.py; cd ..\..
 
-# Phase 3: evidence → reasoning → governance → token ACTIVE
-cd phase-3; py demo_phase3.py; cd ..
+# Governance: evidence → reasoning → governance → token ACTIVE
+cd backend\governance; py demo_phase3.py; cd ..\..
 ```
 
 ### Run full test suite
 ```powershell
-cd phase-0; py -m pytest packages/zoiko-common/tests -q --tb=short; cd ..
-cd phase-1; py -m pytest tests/ packages/zoiko-kms/tests/ -q --tb=short; cd ..
-cd phase-2; py -m pytest -q --tb=short; cd ..
-cd phase-3; py -m pytest -q --tb=short; cd ..
+cd backend\core; py -m pytest packages/zoiko-common/tests -q --tb=short; cd ..\..
+cd backend\platform; py -m pytest tests/ packages/zoiko-kms/tests/ -q --tb=short; cd ..\..
+cd backend\gateway; py -m pytest -q --tb=short; cd ..\..
+cd backend\governance; py -m pytest -q --tb=short; cd ..\..
 ```
 
 ---
@@ -283,48 +283,50 @@ This is **deterministic** — any reasoning service anywhere must produce exactl
 
 ```
 zoiko-logistics/
-├── dashboard.py                   ← Streamlit dashboard (all phases)
+├── dashboard.py                   ← Streamlit dashboard (all services)
 ├── requirements.txt               ← All Python dependencies (single file)
 ├── launch.bat                     ← One-click start: PostgreSQL check → backend → frontend
 ├── setup.bat                      ← One-time setup (venv + pip + npm install)
-├── EXECUTION_GUIDE.md             ← Step-by-step commands per phase
+├── EXECUTION_GUIDE.md             ← Step-by-step commands per service
 ├── CLAUDE.md                      ← AI assistant context and conventions
+├── alembic.ini                    ← Points to backend/core/db/migrations
 │
-├── phase-0/                       ← Crypto + DB schema + seed data
-│   ├── packages/zoiko-common/     ← JCS, Merkle, Ed25519, Kafka
-│   ├── db/migrations/             ← Alembic: all 25 tables
-│   └── scripts/                   ← seed_dummy_data.py, demo_sc001.py
-│
-├── phase-1/                       ← Security substrate
-│   ├── packages/zoiko-kms/        ← 3-tier key hierarchy, local Ed25519
-│   ├── middleware/oidc/            ← JWT validation, tenant binding
-│   ├── middleware/opa/             ← Fail-closed OPA client
-│   ├── kafka/                     ← ZoikoProducer, ZoikoConsumer, MockKafkaBroker
-│   └── opa/policies/              ← freight_dispute.rego, tenant_isolation.rego
-│
-├── phase-2/                       ← Service pipeline (port 8000)
-│   └── services/
-│       ├── api_gateway/           ← FastAPI, 24 routes, JWT + OPA auth
-│       ├── ingestion_svc/         ← 5-step write pattern
-│       ├── validation_svc/        ← Contract rate engine, overcharge detection
-│       ├── canonical_truth/       ← Authoritative canonical_invoice row
-│       └── case_orchestration/    ← Case FSM, APPEND-ONLY case_events
-│
-├── phase-3/                       ← Evidence · Reasoning · Governance · Token
-│   └── services/
-│       ├── api_gateway/           ← FastAPI, 7 routes, OPA wired, DEV_MODE
-│       ├── evidence_svc/          ← Domain-tagged hash, Merkle root bundle
-│       ├── reasoning_svc/         ← SC-001 confidence 0.96 (deterministic)
-│       ├── governance_svc/        ← SoD enforcement, case FSM APPROVED
-│       └── token_svc/             ← tenant_binding, signed token, 15-min TTL
-│
-├── phase-4/                       ← (next) 8-gate execution + reconciliation + ACR
+├── backend/
+│   ├── core/                      ← Crypto + DB schema + seed data
+│   │   ├── packages/zoiko-common/ ← JCS, Merkle, Ed25519, Kafka
+│   │   ├── db/migrations/         ← Alembic: 19 migration versions
+│   │   └── scripts/               ← seed_dummy_data.py, demo_sc001.py
+│   │
+│   ├── platform/                  ← Security substrate
+│   │   ├── packages/zoiko-kms/    ← 3-tier key hierarchy, local Ed25519
+│   │   ├── middleware/oidc/        ← JWT validation, tenant binding
+│   │   ├── middleware/opa/         ← Fail-closed OPA client
+│   │   ├── kafka/                 ← ZoikoProducer, ZoikoConsumer, MockKafkaBroker
+│   │   └── opa/policies/          ← freight_dispute.rego, tenant_isolation.rego
+│   │
+│   ├── gateway/                   ← Service pipeline (port 8000)
+│   │   └── services/
+│   │       ├── api_gateway/       ← FastAPI, 283 routes, JWT + OPA auth
+│   │       ├── ingestion_svc/     ← 5-step write pattern
+│   │       ├── validation_svc/    ← Contract rate engine, overcharge detection
+│   │       ├── canonical_truth/   ← Authoritative canonical_invoice row
+│   │       └── case_orchestration/ ← Case FSM, APPEND-ONLY case_events
+│   │
+│   ├── governance/                ← Evidence · Reasoning · Governance · Token (port 8002)
+│   │   └── services/
+│   │       ├── evidence_svc/      ← Domain-tagged hash, Merkle root bundle
+│   │       ├── reasoning_svc/     ← SC-001 confidence 0.96 (deterministic)
+│   │       ├── governance_svc/    ← SoD enforcement, case FSM APPROVED
+│   │       └── token_svc/         ← tenant_binding, signed token, 15-min TTL
+│   │
+│   ├── execution/                 ← 8-gate execution + reconciliation + ACR (port 8001)
+│   │
+│   └── api/                       ← Frontend-facing reverse proxy (optional, port 8080)
 │
 └── zoiko-frontend/frontend/       ← React + TypeScript frontend
     ├── src/features/              ← dashboard, cases, governance, analytics, audit
     ├── src/api/zoiko.ts           ← API service layer (mock/live switch)
     ├── src/api/client.ts          ← Axios instance, auth headers, idempotency key
-    ├── src/types/index.ts         ← TypeScript types matching backend schema
     ├── vite.config.ts             ← Dev proxy: /api → localhost:8000
     └── .env.local                 ← VITE_USE_MOCK=false · VITE_API_BASE=/api
 ```
