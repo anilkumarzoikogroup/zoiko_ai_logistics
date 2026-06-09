@@ -31,7 +31,7 @@ export ZOIKO_ISSUER=https://auth.zoikotech.com
 .PHONY: all setup venv install-python install-node test test-phase-0 test-phase-1 \
         test-phase-2 test-phase-3 test-phase-4 \
         test-fast test-cov \
-        backend frontend db-migrate db-seed db-rollback smoke-test tenant-fuzzer \
+        backend frontend db-migrate db-seed db-rollback smoke-test \
         demo-freight-overcharge demo-phase-2 demo-phase-3 demo-phase-4 \
         lint format type-check check \
         verify-acr clean help
@@ -102,7 +102,7 @@ demo-freight-overcharge:
 	@$(MAKE) demo-phase-2
 	@$(MAKE) demo-phase-3
 	@$(MAKE) demo-phase-4
-	@echo "==> SC-001 complete. Check Streamlit dashboard: make dashboard"
+	@echo "==> SC-001 complete."
 
 # ── Services ──────────────────────────────────────────────────────────────────
 
@@ -113,8 +113,6 @@ backend:
 frontend:
 	@cd zoiko-frontend/frontend && $(NPM) run dev
 
-dashboard:
-	@$(PY) -m streamlit run dashboard.py
 
 # ── Database ──────────────────────────────────────────────────────────────────
 

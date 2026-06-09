@@ -76,13 +76,6 @@ VITE_DEV_TENANT=11111111-1111-1111-1111-111111111111
 ```
 All API calls go through the Vite proxy (`/api` → `localhost:8000`). No CORS issues.
 
-### Streamlit dashboard (Phase 0–3 deep-dive)
-```powershell
-$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
-streamlit run dashboard.py
-# Opens at http://localhost:8501
-```
-
 ### Run individual service demos
 ```powershell
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
@@ -154,7 +147,6 @@ Phases are designed to be **both** — independently testable AND pipeline-conne
 | CI/CD | `pytest` per phase — no DB needed for unit tests |
 | Full SC-001 demo | Run Phase 2 demo → Phase 3 demo in sequence |
 | React UI | `launch.bat` — live backend, real DB data |
-| Streamlit dashboard | All phases shown in one Streamlit app |
 | Production | Separate containers communicating via Kafka events |
 
 Phases share **only the PostgreSQL database** — they do not make live API calls to each other.
@@ -283,7 +275,6 @@ This is **deterministic** — any reasoning service anywhere must produce exactl
 
 ```
 zoiko-logistics/
-├── dashboard.py                   ← Streamlit dashboard (all services)
 ├── requirements.txt               ← All Python dependencies (single file)
 ├── launch.bat                     ← One-click start: PostgreSQL check → backend → frontend
 ├── setup.bat                      ← One-time setup (venv + pip + npm install)

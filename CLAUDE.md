@@ -43,7 +43,6 @@ In dev/tests each phase runs in the same Python process using MockKafkaBroker.
 
 ```
 zoiko-logistics/
-├── dashboard.py                     ← Streamlit, all services
 ├── requirements.txt                 ← Single combined requirements file
 ├── docker-compose.yml               ← Full local stack (postgres, redis, kafka, opa, services)
 ├── launch.bat                       ← One-click: DB check → backend → frontend → browser
@@ -222,12 +221,6 @@ $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:PYTHONIOENCODING = "utf-8"
 cd backend\gateway; py demo_phase2.py; cd ..\..   # produces a case in PENDING_APPROVAL
 cd backend\governance; py demo_phase3.py; cd ..\.. # consumes that case, produces ACTIVE token
-```
-
-### Streamlit dashboard
-```powershell
-$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
-streamlit run dashboard.py
 ```
 
 ### Check live API

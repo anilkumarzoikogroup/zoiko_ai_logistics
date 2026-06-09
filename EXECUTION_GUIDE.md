@@ -10,7 +10,6 @@ DB password default: `1234`
 
 | Service | Driver File | Command |
 |---------|------------|---------|
-| **Streamlit dashboard** | `dashboard.py` (root) | `streamlit run dashboard.py` |
 | **Core CLI demo** | `backend/core/scripts/demo_sc001.py` | `py backend/core/scripts/demo_sc001.py` |
 | **Platform tests** | `backend/platform/tests/` | `py -m pytest tests/ packages/zoiko-kms/tests/` |
 | **Gateway demo** | `backend/gateway/demo_phase2.py` | `py demo_phase2.py` |
@@ -87,14 +86,6 @@ cd ..\..
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:PYTHONIOENCODING = "utf-8"
 py backend/core/scripts/demo_sc001.py
-```
-
-### Launch Streamlit dashboard
-
-```powershell
-$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
-streamlit run dashboard.py
-# Opens at http://localhost:8501
 ```
 
 ---
