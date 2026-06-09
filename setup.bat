@@ -33,8 +33,8 @@ echo  Installing (requires internet)...
 if errorlevel 1 (
     echo  WARNING: pip had errors ^(no internet?^). Using existing packages.
 )
-.venv\Scripts\pip install -e phase-0\packages\zoiko-common -q 2>nul
-.venv\Scripts\pip install -e phase-1\packages\zoiko-kms -q 2>nul
+.venv\Scripts\pip install -e backend\core\packages\zoiko-common -q 2>nul
+.venv\Scripts\pip install -e backend\platform\packages\zoiko-kms -q 2>nul
 echo  Done.
 goto :step3
 

@@ -54,6 +54,6 @@ def test_tenant(db_url):
 @pytest.fixture(scope="session")
 def broker():
     import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "phase-1"))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "platform"))
     from kafka.mock_kafka import MockKafkaBroker
     return MockKafkaBroker()

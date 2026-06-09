@@ -83,9 +83,9 @@ def parse_invoice_ocr(texts):
     }
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_ROOT, "phase-0", "packages", "zoiko-common"))
+sys.path.insert(0, os.path.join(_ROOT, "backend", "core", "packages", "zoiko-common"))
 
-_p1 = os.path.join(_ROOT, "phase-1")
+_p1 = os.path.join(_ROOT, "backend", "platform")
 sys.path.insert(0, _p1)
 sys.path.insert(0, os.path.join(_p1, "packages", "zoiko-kms"))
 try:
@@ -100,7 +100,7 @@ try:
 except ImportError as e:
     P1_AVAILABLE = False; _p1_err_msg = str(e)
 
-_p2 = os.path.join(_ROOT, "phase-2")
+_p2 = os.path.join(_ROOT, "backend", "gateway")
 sys.path.insert(0, _p2)
 try:
     import psycopg2.extras as _pge; _pge.register_uuid()
@@ -113,7 +113,7 @@ try:
 except ImportError as e:
     P2_AVAILABLE = False; _p2_err_msg = str(e)
 
-_p3 = os.path.join(_ROOT, "phase-3")
+_p3 = os.path.join(_ROOT, "backend", "governance")
 sys.path.insert(0, _p3)
 try:
     from services.evidence_svc.handler   import EvidenceHandler

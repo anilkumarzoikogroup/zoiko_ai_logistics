@@ -60,7 +60,7 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # ── Phase 2 — API Gateway (port 8000) ───────────────────────────────────────
+  # ── Gateway — API Gateway (port 8000) ───────────────────────────────────────
   phase2:
     build:
       context: .
@@ -68,7 +68,7 @@ services:
     command: >
       python -m uvicorn services.api_gateway.app:app
       --workers 4 --host 0.0.0.0 --port 8000
-    working_dir: /app/phase-2
+    working_dir: /app/backend/gateway
     ports:
       - "8000:8000"
     environment:
@@ -95,7 +95,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Phase 3 — Evidence / Reasoning / Governance (port 8002) ────────────────
+  # ── Governance — Evidence / Reasoning / Governance (port 8002) ─────────────
   phase3:
     build:
       context: .
@@ -103,7 +103,7 @@ services:
     command: >
       python -m uvicorn services.api_gateway.app:app
       --workers 4 --host 0.0.0.0 --port 8002
-    working_dir: /app/phase-3
+    working_dir: /app/backend/governance
     ports:
       - "8002:8002"
     environment:
@@ -118,7 +118,7 @@ services:
       phase2:
         condition: service_healthy
 
-  # ── Phase 4 — Execution Gateway (port 8001) ─────────────────────────────────
+  # ── Execution — Execution Gateway (port 8001) ───────────────────────────────
   phase4:
     build:
       context: .
@@ -126,7 +126,7 @@ services:
     command: >
       python -m uvicorn services.api_gateway.app:app
       --workers 4 --host 0.0.0.0 --port 8001
-    working_dir: /app/phase-4
+    working_dir: /app/backend/execution
     ports:
       - "8001:8001"
     environment:

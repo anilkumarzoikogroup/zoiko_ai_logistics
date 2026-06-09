@@ -20,7 +20,7 @@ PY         := $(VENV)/Scripts/python
 PIP        := $(VENV)/Scripts/pip
 NPM        := npm
 DB_URL     ?= postgresql://postgres:1234@localhost/zoiko
-PYTHONPATH ?= phase-0/packages/zoiko-common:phase-1:phase-1/packages/zoiko-kms:phase-2:phase-3:phase-4
+PYTHONPATH ?= backend/core/packages/zoiko-common:backend/platform:backend/platform/packages/zoiko-kms:backend/gateway:backend/governance:backend/execution
 
 export DB_URL
 export PYTHONIOENCODING=utf-8
@@ -48,6 +48,8 @@ venv:
 
 install-python: venv
 	@$(PIP) install -r requirements.txt
+	@$(PIP) install -e backend/core/packages/zoiko-common -q 2>/dev/null; true
+	@$(PIP) install -e backend/platform/packages/zoiko-kms -q 2>/dev/null; true
 
 install-node:
 	@cd zoiko-frontend/frontend && $(NPM) install
@@ -55,42 +57,45 @@ install-node:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 test:
-	@$(PY) -m pytest phase-0/packages/zoiko-common/tests phase-1 phase-2 phase-3 phase-4 \
+	@$(PY) -m pytest backend/core/packages/zoiko-common/tests backend/platform \
+	    backend/gateway backend/governance backend/execution \
 	    -q --tb=short
 
 test-phase-0:
-	@$(PY) -m pytest phase-0/packages/zoiko-common/tests -q --tb=short
+	@$(PY) -m pytest backend/core/packages/zoiko-common/tests -q --tb=short
 
 test-phase-1:
-	@cd phase-1 && ../$(PY) -m pytest tests/ packages/zoiko-kms/tests/ -q --tb=short
+	@cd backend/platform && ../../$(PY) -m pytest tests/ packages/zoiko-kms/tests/ -q --tb=short
 
 test-phase-2:
-	@$(PY) -m pytest phase-2 -q --tb=short
+	@$(PY) -m pytest backend/gateway -q --tb=short
 
 test-phase-3:
-	@$(PY) -m pytest phase-3 -q --tb=short
+	@$(PY) -m pytest backend/governance -q --tb=short
 
 test-phase-4:
-	@$(PY) -m pytest phase-4 -q --tb=short
+	@$(PY) -m pytest backend/execution -q --tb=short
 
 test-fast:
-	@$(PY) -m pytest phase-2 phase-3 -q --tb=short -x -m "not integration"
+	@$(PY) -m pytest backend/gateway backend/governance -q --tb=short -x -m "not integration"
 
 test-cov:
-	@$(PY) -m pytest phase-0/packages/zoiko-common/tests phase-2 phase-3 phase-4 \
-	    --cov=phase-2/services --cov=phase-3/services --cov=phase-4/services \
+	@$(PY) -m pytest backend/core/packages/zoiko-common/tests backend/gateway \
+	    backend/governance backend/execution \
+	    --cov=backend/gateway/services --cov=backend/governance/services \
+	    --cov=backend/execution/services \
 	    --cov-report=term-missing --cov-report=html:htmlcov -q --tb=short
 
 # ── Demos ─────────────────────────────────────────────────────────────────────
 
 demo-phase-2:
-	@cd phase-2 && ../$(PY) demo_phase2.py
+	@cd backend/gateway && ../../$(PY) demo_phase2.py
 
 demo-phase-3:
-	@cd phase-3 && ../$(PY) demo_phase3.py
+	@cd backend/governance && ../../$(PY) demo_phase3.py
 
 demo-phase-4:
-	@cd phase-4 && ../$(PY) demo_phase4.py
+	@cd backend/execution && ../../$(PY) demo_phase4.py
 
 demo-freight-overcharge:
 	@echo "==> Running SC-001: BlueDart bills Amazon India — overcharge detection pipeline"
@@ -102,7 +107,7 @@ demo-freight-overcharge:
 # ── Services ──────────────────────────────────────────────────────────────────
 
 backend:
-	@cd phase-2 && ../$(PY) -m uvicorn services.api_gateway.app:app \
+	@cd backend/gateway && ../../$(PY) -m uvicorn services.api_gateway.app:app \
 	    --reload --host 0.0.0.0 --port 8000
 
 frontend:
@@ -114,13 +119,13 @@ dashboard:
 # ── Database ──────────────────────────────────────────────────────────────────
 
 db-migrate:
-	@cd phase-0/db && ../../$(PY) -m alembic upgrade head
+	@cd backend/core/db && ../../../$(PY) -m alembic upgrade head
 
 db-rollback:
-	@cd phase-0/db && ../../$(PY) -m alembic downgrade -1
+	@cd backend/core/db && ../../../$(PY) -m alembic downgrade -1
 
 db-seed:
-	@$(PY) phase-0/scripts/seed_dummy_data.py
+	@$(PY) backend/core/scripts/seed_dummy_data.py
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -137,13 +142,16 @@ verify-acr:
 # ── Code quality ──────────────────────────────────────────────────────────────
 
 lint:
-	@$(PY) -m ruff check phase-0 phase-2 phase-3 phase-4 --select E,W,F,I --ignore E501
+	@$(PY) -m ruff check backend/core backend/gateway backend/governance backend/execution \
+	    --select E,W,F,I --ignore E501
 
 format:
-	@$(PY) -m black phase-0 phase-2 phase-3 phase-4 --line-length 100
+	@$(PY) -m black backend/core backend/gateway backend/governance backend/execution \
+	    --line-length 100
 
 type-check:
-	@$(PY) -m mypy phase-2/services/api_gateway --ignore-missing-imports --no-strict-optional
+	@$(PY) -m mypy backend/gateway/services/api_gateway \
+	    --ignore-missing-imports --no-strict-optional
 
 check: lint type-check
 	@echo "All checks passed."

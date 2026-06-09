@@ -4305,15 +4305,15 @@ try:
         _os3.path.abspath(__file__)
     ))))
 
-    # Extend services namespace to expose phase-3 service modules
+    # Extend services namespace to expose governance service modules
     import services as _svc3_pkg
-    _p3_svc = _os3.path.join(_PROJ3, "phase-3", "services")
+    _p3_svc = _os3.path.join(_PROJ3, "governance", "services")
     if _p3_svc not in list(_svc3_pkg.__path__):
         _svc3_pkg.__path__.append(_p3_svc)
 
-    # Extend shared namespace to expose phase-3 redis_token + signer
+    # Extend shared namespace to expose governance redis_token + signer
     import shared as _shared3_pkg
-    _p3_sh = _os3.path.join(_PROJ3, "phase-3", "shared")
+    _p3_sh = _os3.path.join(_PROJ3, "governance", "shared")
     if _p3_sh not in list(_shared3_pkg.__path__):
         _shared3_pkg.__path__.append(_p3_sh)
 
@@ -4485,16 +4485,16 @@ try:
         _os.path.abspath(__file__)
     ))))
 
-    # Extend the already-cached `services` namespace package to expose phase-4 modules.
-    # We do NOT add phase-3/services (it has api_gateway which would shadow phase-2's).
+    # Extend the already-cached `services` namespace package to expose execution modules.
+    # We do NOT add governance/services (it has api_gateway which would shadow gateway's).
     import services as _svc_pkg
-    _p4_svc = _os.path.join(_PROJ, "phase-4", "services")
+    _p4_svc = _os.path.join(_PROJ, "execution", "services")
     if _p4_svc not in list(_svc_pkg.__path__):
         _svc_pkg.__path__.append(_p4_svc)
 
-    # Extend shared namespace for phase-4 signer (phase-3/shared added by phase-3 block)
+    # Extend shared namespace for execution signer (governance/shared added by governance block)
     import shared as _shared_pkg
-    _p4_sh = _os.path.join(_PROJ, "phase-4", "shared")
+    _p4_sh = _os.path.join(_PROJ, "execution", "shared")
     if _p4_sh not in list(_shared_pkg.__path__):
         _shared_pkg.__path__.append(_p4_sh)
 

@@ -16,8 +16,9 @@ We also evict any cached 'services.*' modules so they get re-imported with the
 correct path order during test execution.
 
 Correct order for import resolution:
-  phase-0/zoiko-common, phase-1, phase-1/kms, phase-2, phase-3, phase-4
-so that phase-2's 'services' package is found before phase-3's.
+  backend/core/zoiko-common, backend/platform, backend/platform/kms,
+  backend/gateway, backend/governance, backend/execution
+so that gateway's 'services' package is found before governance's.
 """
 import sys
 import os
@@ -25,12 +26,12 @@ import os
 _ROOT = os.path.dirname(os.path.abspath(__file__))
 
 _ORDERED_PATHS = [
-    os.path.join(_ROOT, "phase-0", "packages", "zoiko-common"),
-    os.path.join(_ROOT, "phase-1"),
-    os.path.join(_ROOT, "phase-1", "packages", "zoiko-kms"),
-    os.path.join(_ROOT, "phase-2"),
-    os.path.join(_ROOT, "phase-3"),
-    os.path.join(_ROOT, "phase-4"),
+    os.path.join(_ROOT, "backend", "core", "packages", "zoiko-common"),
+    os.path.join(_ROOT, "backend", "platform"),
+    os.path.join(_ROOT, "backend", "platform", "packages", "zoiko-kms"),
+    os.path.join(_ROOT, "backend", "gateway"),
+    os.path.join(_ROOT, "backend", "governance"),
+    os.path.join(_ROOT, "backend", "execution"),
 ]
 
 # Module prefixes that are phase-specific and must be evicted after collection

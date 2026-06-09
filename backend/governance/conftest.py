@@ -64,7 +64,7 @@ def test_case(db_url, test_tenant):
     if not row:
         # No usable case — create one via Phase 2 pipeline
         import sys, os, uuid as _uuid
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "phase-2"))
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "gateway"))
         from services.ingestion_svc.handler   import IngestionHandler
         from services.ingestion_svc.models    import InvoiceInput
         from services.canonical_truth.handler import CanonicalHandler
