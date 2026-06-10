@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
@@ -22,7 +23,7 @@ export default function EvidencePage() {
 
   const { data, isLoading } = useQuery<EvidenceResponse>({
     queryKey: ["case-evidence", caseId],
-    queryFn: async () => { const { data } = await api.get(`/v1/cases/${caseId}/evidence`); return data; },
+    queryFn: async () => { const { data } = await api.get(`/cases/${caseId}/evidence`); return data; },
     enabled: !!caseId,
   });
 
@@ -30,7 +31,7 @@ export default function EvidencePage() {
 
   const { data: bundleDetail } = useQuery<EvidenceBundle>({
     queryKey: ["bundle", selectedBundle],
-    queryFn: async () => { const { data } = await api.get(`/v1/evidence/bundles/${selectedBundle}`); return data; },
+    queryFn: async () => { const { data } = await api.get(`/evidence/bundles/${selectedBundle}`); return data; },
     enabled: !!selectedBundle,
   });
 
@@ -113,6 +114,3 @@ export default function EvidencePage() {
     </div>
   );
 }
-
-// useState import fix
-import { useState } from "react";

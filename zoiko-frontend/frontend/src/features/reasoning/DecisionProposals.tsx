@@ -32,13 +32,13 @@ export default function DecisionProposals() {
 
   const { data: reasoning, isLoading: rLoad } = useQuery<ReasoningData>({
     queryKey: ["case-reasoning", caseId],
-    queryFn: async () => { const { data } = await api.get(`/v1/cases/${caseId}/reasoning`); return data; },
+    queryFn: async () => { const { data } = await api.get(`/cases/${caseId}/reasoning`); return data; },
     enabled: !!caseId,
   });
 
   const { data: proposals, isLoading: pLoad } = useQuery<ProposalsData>({
     queryKey: ["case-proposals", caseId],
-    queryFn: async () => { const { data } = await api.get(`/v1/cases/${caseId}/decision-proposals`); return data; },
+    queryFn: async () => { const { data } = await api.get(`/cases/${caseId}/decision-proposals`); return data; },
     enabled: !!caseId,
   });
 
