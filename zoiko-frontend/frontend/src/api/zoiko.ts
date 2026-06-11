@@ -22,7 +22,7 @@ export interface LoginResponse {
 
 export interface RegisterRequest {
   email:     string;
-  password:  string;
+  password?: string;
   full_name: string;
   role:      "analyst" | "manager" | "admin";
 }
@@ -277,6 +277,13 @@ export const zoikoApi = {
     if (USE_MOCK) { await delay(800); return new Blob(["mock acr zip"], { type: "application/zip" }); }
     const response = await api.get(`/cases/${caseId}/acr/download`, { responseType: "blob" });
     return response.data as Blob;
+  },
+
+  // ---------- Dispute Letter ----------
+  async sendDisputeLetter(caseId: string, payload: { to_email: string; cc_emails: string[]; subject: string; body_text: string }): Promise<{ sent: boolean; to: string; cc: string[] }> {
+    if (USE_MOCK) { await delay(1000); return { sent: true, to: payload.to_email, cc: payload.cc_emails }; }
+    const { data } = await api.post(`/cases/${caseId}/dispute-letter/send`, payload);
+    return data;
   },
 
   // ---------- Contract rates ----------

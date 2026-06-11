@@ -116,6 +116,7 @@ export default function CaseDetail() {
   const [disputeLetter, setDisputeLetter]   = useState<string>("");
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
+  const [sendCc,        setSendCc]          = useState("");
   const [showSendForm,  setShowSendForm]    = useState(false);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
@@ -157,21 +158,30 @@ export default function CaseDetail() {
       if (data.carrier_email) setSendEmail(data.carrier_email);
       toast.success("Letter generated", `Dispute letter for ${data.carrier} ready`);
     } catch {
-      toast.error("Generation failed", "Set GROQ_API_KEY in .env to enable AI dispute letters");
+      toast.error("Generation failed", "Check backend — template generation requires Phase 2 API running on port 8000");
     } finally {
       setLetterLoading(false);
     }
   }
 
-  function handleSendLetter() {
-    if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
+  async function handleSendLetter() {
+    if (!sendEmail.trim()) { toast.error("Email required", "Enter BlueDart's email address"); return; }
     const lines = disputeLetter.split("\n");
     const subjectLine = lines.find(l => l.startsWith("Subject:")) || "Freight Overcharge Dispute";
     const subject = subjectLine.replace(/^Subject:\s*/i, "").trim();
     const body = disputeLetter.replace(/^Subject:.*\n\n?/, "").trim();
-    const url = `mailto:${encodeURIComponent(sendEmail.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = url;
-    toast.success("Email client opened", `Draft ready for ${sendEmail.trim()}`);
+    const ccList = sendCc.split(",").map(e => e.trim()).filter(e => e.includes("@"));
+    try {
+      await zoikoApi.sendDisputeLetter(id, {
+        to_email: sendEmail.trim(),
+        cc_emails: ccList,
+        subject, body_text: body,
+      });
+      toast.success("Dispute letter sent", `Email sent to ${sendEmail.trim()}${ccList.length ? ` CC: ${ccList.join(", ")}` : ""}`);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail || e?.message || "Unknown error";
+      toast.error("Send failed", detail);
+    }
   }
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -684,25 +694,38 @@ export default function CaseDetail() {
 
               {showSendForm && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
-                  <p className="text-xs font-bold text-slate-700">Send dispute letter directly to carrier</p>
-                  <div className="flex gap-2">
-                    <input
-                      type="email"
-                      placeholder="carrier-accounts@delhivery.com"
-                      value={sendEmail}
-                      onChange={e => setSendEmail(e.target.value)}
-                      className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
+                  <p className="text-xs font-bold text-slate-700">Send dispute letter to carrier</p>
+                  <div className="space-y-2">
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-500 mb-1 block">To — Carrier (BlueDart)</label>
+                      <input
+                        type="email"
+                        placeholder="carrier-accounts@bluedart.com"
+                        value={sendEmail}
+                        onChange={e => setSendEmail(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-slate-500 mb-1 block">CC — Amazon analyst / manager (optional)</label>
+                      <input
+                        type="text"
+                        placeholder="analyst@amazon.in, manager@amazon.in"
+                        value={sendCc}
+                        onChange={e => setSendCc(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
                     <button
                       onClick={handleSendLetter}
                       disabled={!sendEmail.trim()}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
+                      className="w-full py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors"
                     >
-                      Open Email Client
+                      Send Email
                     </button>
                   </div>
-                  <p className="text-[10px] text-slate-500">
-                    💡 Opens your default email app (Outlook, Gmail, etc.) with the letter pre-filled. Zoiko never stores or sends your emails.
+                  <p className="text-[10px] text-slate-400">
+                    Sent via Gmail SMTP. Zoiko never stores your emails.
                   </p>
                 </div>
               )}

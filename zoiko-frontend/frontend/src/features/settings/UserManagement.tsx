@@ -19,7 +19,7 @@ export default function UserManagement() {
   const role  = useAppSelector(s => s.auth.role);
 
   const [showForm, setShowForm]   = useState(false);
-  const [form, setForm]           = useState<RegisterRequest>({ email: "", password: "", full_name: "", role: "analyst" });
+  const [form, setForm]           = useState<RegisterRequest>({ email: "", full_name: "", role: "analyst" });
   const [formErr, setFormErr]     = useState("");
 
   // Change-password state (own account)
@@ -39,8 +39,8 @@ export default function UserManagement() {
     mutationFn: (req: RegisterRequest) => zoikoApi.registerUser(req),
     onSuccess: (u) => {
       qc.invalidateQueries({ queryKey: ["users"] });
-      toast.success("User created", `${u.full_name} (${u.role}) can now log in.`);
-      setForm({ email: "", password: "", full_name: "", role: "analyst" });
+      toast.success("User created", `${u.full_name} (${u.role}) — they'll get an email to set their password.`);
+      setForm({ email: "", full_name: "", role: "analyst" });
       setShowForm(false);
       setFormErr("");
     },
@@ -121,16 +121,7 @@ export default function UserManagement() {
                 className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-600">Password</label>
-              <input
-                type="password"
-                placeholder="Min 8 characters"
-                value={form.password}
-                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+
             <div className="space-y-1">
               <label className="text-xs font-medium text-slate-600">Role</label>
               <select
@@ -149,11 +140,11 @@ export default function UserManagement() {
           )}
 
           <button
-            disabled={createM.isPending || !form.email || !form.password || !form.full_name}
+            disabled={createM.isPending || !form.email || !form.full_name}
             onClick={() => createM.mutate(form)}
             className={cn(
               "w-full flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-colors",
-              !createM.isPending && form.email && form.password && form.full_name
+              !createM.isPending && form.email && form.full_name
                 ? "bg-blue-600 hover:bg-blue-700 text-white"
                 : "bg-slate-200 text-slate-400 cursor-not-allowed"
             )}

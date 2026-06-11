@@ -18,7 +18,7 @@ class LoginResponse(BaseModel):
 
 class RegisterRequest(BaseModel):
     email:     str
-    password:  str
+    password:  str = ""   # blank = user must use forgot-password to set it
     full_name: str
     role:      str    # analyst | manager | admin
 

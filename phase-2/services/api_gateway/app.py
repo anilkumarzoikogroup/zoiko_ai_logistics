@@ -18,7 +18,11 @@ import os
 from dotenv import load_dotenv
 import paths  # noqa: F401 — must be first
 
-load_dotenv()
+_dotenv_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", ".env")
+if os.path.isfile(_dotenv_path):
+    load_dotenv(_dotenv_path)
+else:
+    load_dotenv()
 
 from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -143,6 +147,15 @@ def _init_db():
             )
         """),
         "ALTER TABLE password_reset_otp ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0",
+        # Missing columns in canonical_invoices (submit pipeline needs them)
+        "ALTER TABLE canonical_invoices ADD COLUMN IF NOT EXISTS invoice_date TEXT",
+        "ALTER TABLE canonical_invoices ADD COLUMN IF NOT EXISTS transport_mode TEXT",
+        "ALTER TABLE canonical_invoices ADD COLUMN IF NOT EXISTS charge_lines JSONB",
+        # Missing columns in canonical_shipments
+        "ALTER TABLE canonical_shipments ADD COLUMN IF NOT EXISTS mode TEXT",
+        "ALTER TABLE canonical_shipments ADD COLUMN IF NOT EXISTS equipment_type TEXT",
+        # Allow NULL password_hash (admin-created users set pw via forgot-password)
+        "ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL",
     ]
     try:
         conn = _pg.connect(DB_URL)
@@ -341,6 +354,8 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
     """Admin-only: create a new analyst or manager for the same tenant."""
     import bcrypt as _bcrypt
     import psycopg2 as _pg
+    import smtplib
+    from email.mime.text import MIMEText
     if "admin" not in claims.roles:
         raise HTTPException(status_code=403, detail="Only admins can register new users")
     if body.role not in ("analyst", "manager", "admin"):
@@ -351,9 +366,10 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
     if existing:
         raise HTTPException(status_code=409, detail=f"Email '{email}' is already registered")
 
-    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode()
+    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode() if body.password else None
     user_id = uuid.uuid4()
     now     = datetime.now(timezone.utc)
+    need_welcome = body.password == ""
 
     conn = _pg.connect(DB_URL)
     try:
@@ -366,6 +382,32 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
         conn.commit()
     finally:
         conn.close()
+
+    if need_welcome:
+        try:
+            _smtp_user = os.getenv("EMAIL_NAME", "")
+            _smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+            if _smtp_user and _smtp_pass:
+                _host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+                _port = int(os.getenv("SMTP_PORT", "587"))
+                _msg = MIMEText(
+                    f"Hello {body.full_name.strip()},\n\n"
+                    f"You have been added as a {body.role} for ZoikoAI.\n\n"
+                    f"Please set your password by visiting the following link:\n"
+                    f"{os.getenv('APP_URL', 'http://localhost:5173')}/forgot-password\n\n"
+                    f"Use the 'Forgot Password' option and enter your email ({email}) to receive an OTP.\n\n"
+                    f"Best regards,\nZoikoAI Admin Team",
+                    "plain", "utf-8",
+                )
+                _msg["Subject"] = "ZoikoAI — You've been added as a team member"
+                _msg["From"] = _smtp_user
+                _msg["To"] = email
+                with smtplib.SMTP(_host, _port, timeout=15) as s:
+                    s.starttls()
+                    s.login(_smtp_user, _smtp_pass)
+                    s.sendmail(_smtp_user, [email], _msg.as_string())
+        except Exception:
+            pass  # welcome email is best-effort
 
     return RegisterResponse(
         user_id    = str(user_id),
@@ -599,6 +641,11 @@ def forgot_password(body: dict):
     _time.sleep(_rand.uniform(0.15, 0.25))
 
     if user:
+        user_full = q1("SELECT full_name, role, password_hash FROM users WHERE email = %s", (email,))
+        user_name = (user_full.get("full_name") or email) if user_full else email
+        user_role = (user_full.get("role") or "User") if user_full else "User"
+        has_pw    = bool(user_full and user_full.get("password_hash"))
+
         otp = f"{_sec.randbelow(900000) + 100000}"
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
@@ -623,16 +670,29 @@ def forgot_password(body: dict):
         if smtp_user and smtp_pass:
             import logging as _log
             try:
-                email_body = (
-                    f"Welcome to ZoikoAI,\n\n"
-                    f"We understand you forgot your password. No worries — here's your One-Time Password (OTP) to set a new one:\n\n"
-                    f"Your OTP: {otp}\n\n"
-                    f"This code is valid for 10 minutes. Please use it before it expires.\n\n"
-                    f"If you didn't request this, you can safely ignore this email.\n\n"
-                    f"Best regards,\nZoikoAI Logistics Team"
-                )
+                if has_pw:
+                    email_body = (
+                        f"Hello {user_name},\n\n"
+                        f"We received a request to reset your ZoikoAI password. "
+                        f"Use the OTP below to set a new one:\n\n"
+                        f"Your OTP: {otp}\n\n"
+                        f"This code is valid for 10 minutes.\n\n"
+                        f"If you didn't request this, please ignore this email.\n\n"
+                        f"Best regards,\nZoikoAI Logistics Team"
+                    )
+                    subject = "ZoikoAI — Password Reset OTP"
+                else:
+                    email_body = (
+                        f"Welcome to ZoikoAI, {user_name}!\n\n"
+                        f"Your admin has added you as a {user_role}. "
+                        f"Please create your password using the OTP below:\n\n"
+                        f"Your OTP: {otp}\n\n"
+                        f"This code is valid for 10 minutes.\n\n"
+                        f"Best regards,\nZoikoAI Team"
+                    )
+                    subject = "ZoikoAI — Welcome! Set your password"
                 msg = MIMEText(email_body, "plain", "utf-8")
-                msg["Subject"] = "ZoikoAI — Password Reset OTP"
+                msg["Subject"] = subject
                 msg["From"] = smtp_user
                 msg["To"] = email
                 with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
@@ -1455,7 +1515,7 @@ def get_profile(claims: ZoikoClaims = Depends(get_claims_by_cookie)):
     """Return profile for the authenticated user.
     Uses cookie-based auth — no X-Tenant-ID required, enabling session restoration."""
     row = q1(
-        "SELECT full_name, email, role, title, is_active, created_at FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        "SELECT full_name, email, role, is_active, created_at FROM users WHERE email = %s AND tenant_id = %s::uuid",
         (claims.sub, claims.tenant_id),
     )
     if not row:
@@ -1464,7 +1524,7 @@ def get_profile(claims: ZoikoClaims = Depends(get_claims_by_cookie)):
         "full_name":  row["full_name"],
         "email":      row["email"],
         "role":       row["role"],
-        "title":      row["title"] or "",
+        "title":      "",
         "is_active":  row["is_active"],
         "created_at": row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"]),
         "tenant_id":  str(claims.tenant_id),
@@ -3462,18 +3522,21 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     company_name = (tenant_row.get("display_name") or "Your Company") if tenant_row else "Your Company"
 
     user_row = q1(
-        "SELECT full_name, title, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        "SELECT full_name, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
         (claims.sub, claims.tenant_id),
     )
     sender_name    = (user_row.get("full_name") or claims.sub) if user_row else claims.sub
-    sender_title   = (user_row.get("title") or "Logistics Manager").strip() if user_row else "Logistics Manager"
+    sender_title   = "Logistics Manager"
     sender_email   = (user_row.get("email") or claims.sub) if user_row else claims.sub
 
-    carrier_row = q1(
-        "SELECT email FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
-        (claims.tenant_id, carrier),
-    )
-    carrier_email = (carrier_row.get("email") or "").strip() if carrier_row else ""
+    try:
+        carrier_row = q1(
+            "SELECT email FROM carriers WHERE tenant_id = %s::uuid AND LOWER(name) = LOWER(%s)",
+            (claims.tenant_id, carrier),
+        )
+        carrier_email = (carrier_row.get("email") or "").strip() if carrier_row else ""
+    except Exception:
+        carrier_email = ""
 
     from datetime import date as _date
     today = _date.today().strftime("%d %B %Y")
@@ -3519,7 +3582,7 @@ Sincerely,
     }
 
 
-# ── Send dispute letter via email ─────────────────────────────────────────────
+# -- Send dispute letter via email (Gmail SMTP) ---------------------------------
 
 @v1_router.post("/cases/{case_id}/dispute-letter/send", tags=["ui"])
 def send_dispute_letter_email(
@@ -3527,11 +3590,73 @@ def send_dispute_letter_email(
     body: dict,
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """Return the recipient email so frontend can open email client."""
-    recipient = body.get("recipient_email", "").strip()
-    if not recipient:
-        raise HTTPException(status_code=422, detail="recipient_email is required")
-    return {"sent": True, "to": recipient}
+    """Send the dispute letter via Gmail SMTP with To, CC, and Reply-To."""
+    import smtplib, logging as _log
+    from email.mime.text import MIMEText
+
+    to_email = (body.get("to_email") or "").strip()
+    cc_emails = body.get("cc_emails") or []
+    if isinstance(cc_emails, str):
+        cc_emails = [e.strip() for e in cc_emails.split(",") if e.strip()]
+    subject = (body.get("subject") or "Freight Overcharge Dispute").strip()
+    body_text = (body.get("body_text") or "").strip()
+
+    if not to_email or "@" not in to_email:
+        raise HTTPException(status_code=422, detail="Valid carrier email required (to_email)")
+    if not body_text:
+        raise HTTPException(status_code=422, detail="body_text is required")
+    if not subject:
+        subject = "Freight Overcharge Dispute"
+
+    sender_email = claims.sub
+    sender_name = claims.sub
+    user_row = q1(
+        "SELECT full_name, email FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        (claims.sub, claims.tenant_id),
+    )
+    if user_row:
+        sender_name = (user_row.get("full_name") or claims.sub).strip()
+        sender_email = (user_row.get("email") or claims.sub).strip()
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("EMAIL_NAME", "")
+    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+    if not smtp_user or not smtp_pass:
+        _log.getLogger("zoiko.email").error("SMTP credentials not configured for dispute letter send")
+        raise HTTPException(status_code=500, detail="Email service not configured")
+
+    try:
+        msg = MIMEText(body_text, "plain", "utf-8")
+        msg["Subject"] = subject
+        msg["From"] = smtp_user
+        msg["To"] = to_email
+        msg["Reply-To"] = sender_email
+        if cc_emails:
+            msg["Cc"] = ", ".join(cc_emails)
+
+        all_recipients = [to_email]
+        if cc_emails:
+            all_recipients.extend(cc_emails)
+
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+            s.starttls()
+            s.login(smtp_user, smtp_pass)
+            s.sendmail(smtp_user, all_recipients, msg.as_string())
+
+        _log.getLogger("zoiko.email").info(
+            "Dispute letter sent for case %s to=%s cc=%s sender=%s",
+            case_id, to_email, cc_emails, sender_email,
+        )
+        return {"sent": True, "to": to_email, "cc": cc_emails}
+    except Exception as _exc:
+        _log.getLogger("zoiko.email").error(
+            "Dispute letter send failed for case %s: %s", case_id, _exc,
+        )
+        raise HTTPException(status_code=500, detail="Failed to send dispute letter")
+
+
 
 
 # ── Full pipeline: Phase 2 + Phase 3 inline ────────────────────────────────────
