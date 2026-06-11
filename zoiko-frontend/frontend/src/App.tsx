@@ -23,6 +23,7 @@ import CaseDetail     from "./features/cases/CaseDetail";
 import ExecuteRecovery from "./features/cases/ExecuteRecovery";
 import PaymentControl from "./features/cases/PaymentControl";
 import CarriersPage   from "./features/carriers/CarriersPage";
+import ConnectorsPage from "./features/connectors/ConnectorsPage";
 import RateControl    from "./features/cases/RateControl";
 
 // features/governance
@@ -49,24 +50,6 @@ import WorkspaceRequests   from "./features/admin/WorkspaceRequests";
 
 // features/stubs
 import StubViewer from "./features/stubs/StubViewer";
-
-// new domain pages
-import ConnectorsPage    from "./features/connectors/ConnectorsPage";
-import ReportsPage       from "./features/reports/ReportsPage";
-import EvidencePage      from "./features/evidence/EvidencePage";
-import DecisionProposals from "./features/reasoning/DecisionProposals";
-import DisputesPage      from "./features/cases/DisputesPage";
-
-function StubPage({ title, sub }: { title: string; sub?: string }) {
-  return (
-    <div className="flex items-center justify-center min-h-[60vh]">
-      <div className="text-center">
-        <h1 className="text-[24px] font-extrabold text-[#1e293b]">{title}</h1>
-        <p className="text-slate-400 mt-2 text-[13px]">{sub ?? "This section is coming soon."}</p>
-      </div>
-    </div>
-  );
-}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const role = useAppSelector(state => state.auth.role);
@@ -115,7 +98,7 @@ export default function App() {
       <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
         {/* Dashboard */}
         <Route path="/"                  element={<Home />} />
-        <Route path="/analytics"         element={<ReportsPage />} />
+        <Route path="/analytics"         element={<Analytics />} />
         <Route path="/performance"       element={<Performance />} />
 
         {/* Audit */}
@@ -125,6 +108,7 @@ export default function App() {
         <Route path="/payment-control"   element={<PaymentControl />} />
         <Route path="/rate-control"      element={<RateControl />} />
         <Route path="/carriers"          element={<CarriersPage />} />
+        <Route path="/connectors"        element={<ConnectorsPage />} />
 
         {/* Cases */}
         <Route path="/cases"     element={<Cases />} />
@@ -178,21 +162,6 @@ export default function App() {
             <WorkspaceRequests />
           </RequireRole>
         } />
-
-        {/* Connectors */}
-        <Route path="/connectors" element={<ConnectorsPage />} />
-
-        {/* Reports / Analytics */}
-        <Route path="/reports"    element={<ReportsPage />} />
-
-        {/* New nav pages */}
-        <Route path="/disputes"  element={<DisputesPage />} />
-        <Route path="/billing"   element={<StubPage title="Billing" sub="Manage your subscription and invoices." />} />
-        <Route path="/referrals" element={<StubPage title="Referrals" sub="Invite team members and earn rewards." />} />
-
-        {/* Evidence & Reasoning (case sub-pages) */}
-        <Route path="/cases/:id/evidence"  element={<EvidencePage />} />
-        <Route path="/cases/:id/reasoning" element={<DecisionProposals />} />
 
         {/* Dev/test stubs — admin only */}
         <Route path="/stubs"     element={

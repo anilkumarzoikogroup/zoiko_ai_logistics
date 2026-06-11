@@ -1,12 +1,23 @@
 """
-Validation Service — reads contract_rates from DB, compares against the ingested invoice,
-detects overcharges, inserts validation_results, publishes zoiko.source.record.validated to Kafka.
+Validation Service — Tier-0 spec §12.
 
-Contract rate lookup order (spec §8.1):
-  1. By lane_hash = SHA-256("zoiko/v1/lane:" + origin + "|" + dest) — exact lane match
-  2. By carrier_id — carrier-level flat rate (backward compat)
+Validation pipeline:
+  1. Load ACTIVE versioned rule set for source_type        (§12.5)
+  2. Structural validation — is the record well-formed?    (§12.2)
+  3. Semantic validation — do values make sense?           (§12.3)
+  4. Cross-record validation — does it agree with DB state?(§12.4)
+  5. Contract rate check (original overcharge detection)
+  6. Produce validation_result with rule_set_id + version  (§12.5)
+  7. Advance source_record validation_status               (§21)
+  8. Quarantine or reject on failure; update source record  (§13)
+
+Every validation_result records the rule_set_id and rule_set_version so
+that validation can be replayed later with the archived rule set.
 """
-import json, hashlib, uuid
+import hashlib
+import json
+import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone, date
 
 import paths  # noqa: F401
@@ -16,6 +27,11 @@ import shared.db  # noqa: F401 — registers UUID adapter
 
 from shared.signer import sign
 from services.validation_svc.models import ValidationResult, RateViolation
+
+VALID_CURRENCIES = {
+    "USD", "EUR", "GBP", "INR", "JPY", "CNY", "AUD", "CAD",
+    "SGD", "AED", "MYR", "THB", "IDR", "VND", "PHP",
+}
 
 
 class ValidationHandler:
@@ -31,40 +47,59 @@ class ValidationHandler:
         invoice_number: str,
         carrier_id: str,
         total_amount: float,
-        currency: str = "USD",
+        currency: str = "INR",
     ) -> ValidationResult:
         tenant_id        = str(tenant_id)
         source_record_id = uuid.UUID(str(source_record_id))
         today            = date.today()
 
-        # Compute lane_hash for spec-aligned lane-level lookup (§8.1)
-        lane_hash = "sha256:" + hashlib.sha256(
-            ("zoiko/v1/lane:" + carrier_id + "|" + currency).encode()
-        ).hexdigest()
-
         conn = psycopg2.connect(self.db_url)
         conn.autocommit = True
         cur  = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-        # Priority 1: lane-level match (spec §8.1)
+        # ── 1. Load active rule set ────────────────────────────────────────
+        rule_set_id, rule_set_version, rules = _load_active_rule_set(cur, "INVOICE")
+
+        # ── 2. Structural validation ───────────────────────────────────────
+        structural_violations = _structural_validate(
+            invoice_number=invoice_number,
+            carrier_id=carrier_id,
+            total_amount=total_amount,
+            currency=currency,
+        )
+
+        # ── 3. Semantic validation ─────────────────────────────────────────
+        semantic_violations = _semantic_validate(
+            currency=currency,
+            total_amount=total_amount,
+            carrier_id=carrier_id,
+        )
+
+        # ── 4. Cross-record validation ─────────────────────────────────────
+        cross_violations = _cross_record_validate(cur, tenant_id, invoice_number, carrier_id, currency)
+
+        # ── 5. Contract rate check (original overcharge detection) ─────────
+        lane_hash = "sha256:" + hashlib.sha256(
+            ("zoiko/v1/lane:" + carrier_id + "|" + currency).encode()
+        ).hexdigest()
+
         cur.execute("""
             SELECT rate_type, COALESCE(base_rate, rate_value) AS rate_value, currency
             FROM   contract_rates
-            WHERE  tenant_id    = %s
-              AND  lane_hash    = %s
+            WHERE  tenant_id = %s
+              AND  lane_hash = %s
               AND  COALESCE(effective_from, effective_on) <= %s
               AND  (COALESCE(effective_to, expires_on) IS NULL
                     OR COALESCE(effective_to, expires_on) >= %s)
         """, (tenant_id, lane_hash, today, today))
         rates = cur.fetchall()
 
-        # Priority 2: carrier-level fallback (backward compat)
         if not rates:
             cur.execute("""
                 SELECT rate_type, rate_value, currency
                 FROM   contract_rates
-                WHERE  tenant_id   = %s
-                  AND  carrier_id  = %s
+                WHERE  tenant_id  = %s
+                  AND  carrier_id = %s
                   AND  effective_on <= %s
                   AND  (expires_on IS NULL OR expires_on >= %s)
             """, (tenant_id, carrier_id, today, today))
@@ -72,12 +107,13 @@ class ValidationHandler:
 
         conn.close()
 
-        violations: list[RateViolation] = []
-        expected_total = 0.0
+        rate_violations: list[RateViolation] = []
+        expected_total  = 0.0
+        status          = "PASS"
 
         if not rates:
-            violations.append(RateViolation(
-                rule="NO_CONTRACT_RATE",
+            rate_violations.append(RateViolation(
+                rule="R003_NO_CONTRACT_RATE",
                 carrier_id=carrier_id,
                 rate_type="*",
                 expected=0.0,
@@ -87,12 +123,12 @@ class ValidationHandler:
             status = "WARN"
         else:
             expected_total = sum(float(r["rate_value"]) for r in rates)
-            if total_amount > expected_total + 0.005:          # 0.5-cent tolerance
+            if total_amount > expected_total + 0.005:
                 delta = round(float(total_amount) - expected_total, 4)
                 for r in rates:
                     if float(total_amount) > float(r["rate_value"]) + 0.005:
-                        violations.append(RateViolation(
-                            rule="CARRIER_RATE_EXCEEDED",
+                        rate_violations.append(RateViolation(
+                            rule="R001_CARRIER_RATE_EXCEEDED",
                             carrier_id=carrier_id,
                             rate_type=r["rate_type"],
                             expected=float(r["rate_value"]),
@@ -101,17 +137,26 @@ class ValidationHandler:
                         ))
                         break
                 status = "FAIL"
-            else:
-                status = "PASS"
 
         overcharge = max(0.0, round(float(total_amount) - expected_total, 4)) if rates else float(total_amount)
 
-        # Build result blob for signing
+        # Collect all violations
+        all_violations = structural_violations + semantic_violations + cross_violations + rate_violations
+
+        # Structural failures → REJECTED; semantic/cross failures → status FAIL (quarantinable)
+        if structural_violations:
+            final_status = "FAIL"  # Hard structural failure
+        else:
+            final_status = status if not (semantic_violations or cross_violations) else "FAIL"
+
+        # ── 6. Sign the result ─────────────────────────────────────────────
         result_blob = json.dumps({
             "source_record_id": str(source_record_id),
-            "status":           status,
+            "status":           final_status,
             "total_amount":     float(total_amount),
             "expected_total":   expected_total,
+            "rule_set_id":      rule_set_id,
+            "rule_set_version": rule_set_version,
         }, sort_keys=True).encode()
         result_hash = hashlib.sha256(b"zoiko.validation.result.v1:" + result_blob).digest()
         signature, kid = sign(self.tenant_slug, result_hash)
@@ -119,7 +164,7 @@ class ValidationHandler:
         violations_json = json.dumps([
             {"rule": v.rule, "carrier_id": v.carrier_id, "rate_type": v.rate_type,
              "expected": v.expected, "actual": v.actual, "delta": v.delta}
-            for v in violations
+            for v in all_violations
         ])
 
         val_id = uuid.uuid4()
@@ -128,41 +173,181 @@ class ValidationHandler:
         conn = psycopg2.connect(self.db_url)
         try:
             cur = conn.cursor()
+
             cur.execute("""
                 INSERT INTO validation_results
                     (id, tenant_id, source_record_id, status, rule_violations,
-                     signature, kid, validated_at)
-                VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                     signature, kid, validated_at,
+                     rule_set_id, rule_set_version, validation_service_version)
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             """, (
                 val_id, tenant_id, source_record_id,
-                status, violations_json,
+                final_status, violations_json,
                 signature, kid, now,
+                rule_set_id, rule_set_version, "2.0.0",
             ))
+
+            # Determine new validation_status for the source record
+            if structural_violations:
+                new_vstatus = "REJECTED"
+                new_rstatus = "REJECTED"
+            elif final_status == "FAIL" and (semantic_violations or cross_violations):
+                new_vstatus = "QUARANTINED"
+                new_rstatus = "QUARANTINED"
+            else:
+                new_vstatus = "VALIDATED"
+                new_rstatus = "VALIDATED"
+
+            # Update source_record validation_status + validation_result_id
+            cur.execute("""
+                UPDATE source_records
+                SET validation_status = %s,
+                    validation_result_id = %s,
+                    record_status = %s
+                WHERE id = %s AND tenant_id = %s
+            """, (new_vstatus, val_id, new_rstatus, source_record_id, tenant_id))
+
+            # Write FSM transition to source_record_states
+            cur.execute("""
+                INSERT INTO source_record_states
+                    (id, tenant_id, source_record_id, from_status, to_status, actor, detail, occurred_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                uuid.uuid4(), tenant_id, source_record_id,
+                "PENDING_VALIDATION", new_rstatus,
+                "spiffe://zoiko/system/validation",
+                json.dumps({"rule_set_id": rule_set_id, "rule_set_version": rule_set_version,
+                            "violations": len(all_violations)}),
+                now,
+            ))
+
+            # If quarantined, write to quarantine_items
+            if new_vstatus == "QUARANTINED":
+                cur.execute("""
+                    INSERT INTO quarantine_items
+                        (id, tenant_id, source_record_id, reason, quarantined_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    uuid.uuid4(), tenant_id, source_record_id,
+                    "; ".join(v.rule for v in (semantic_violations + cross_violations)),
+                    now,
+                ))
+
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
-        # Publish invoice.validated
-        from kafka.producer import ZoikoProducer, KafkaMessage
-        ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic     = "zoiko.source.record.validated",
-            key       = str(source_record_id),
-            payload   = {
-                "invoice_number":    invoice_number,
-                "status":            status,
-                "overcharge_amount": overcharge,
-                "currency":          currency,
-                "violations":        len(violations),
-            },
-            tenant_id = tenant_id,
-        ))
+        # Publish validation event
+        try:
+            from kafka.producer import ZoikoProducer, KafkaMessage
+            ZoikoProducer(self.broker).publish(KafkaMessage(
+                topic     = "zoiko.source.record.validated",
+                key       = str(source_record_id),
+                payload   = {
+                    "invoice_number":    invoice_number,
+                    "status":            final_status,
+                    "overcharge_amount": overcharge,
+                    "currency":          currency,
+                    "violations":        len(all_violations),
+                    "rule_set_id":       rule_set_id,
+                    "rule_set_version":  rule_set_version,
+                },
+                tenant_id = tenant_id,
+            ))
+        except Exception:
+            pass
 
         return ValidationResult(
-            validation_id    = val_id,
-            source_record_id = source_record_id,
-            tenant_id        = tenant_id,
-            status           = status,
-            rule_violations  = violations,
-            overcharge_amount= overcharge,
-            currency         = currency,
+            validation_id     = val_id,
+            source_record_id  = source_record_id,
+            tenant_id         = tenant_id,
+            status            = final_status,
+            rule_violations   = all_violations,
+            overcharge_amount = overcharge,
+            currency          = currency,
         )
+
+
+# ── Rule set loader ────────────────────────────────────────────────────────────
+
+def _load_active_rule_set(cur, source_type: str) -> tuple[str, str, list]:
+    """Load the ACTIVE rule set for this source_type. Returns (id, version, rules)."""
+    cur.execute("""
+        SELECT rule_set_id, version, rules
+        FROM validation_rule_sets
+        WHERE source_type = %s AND status = 'ACTIVE'
+        ORDER BY activated_at DESC
+        LIMIT 1
+    """, (source_type,))
+    row = cur.fetchone()
+    if row:
+        rules = row["rules"] if isinstance(row["rules"], list) else []
+        return row["rule_set_id"], row["version"], rules
+    # Fallback when no rule set exists (e.g., on a fresh DB before migration 0020 seed)
+    return "carrier_invoice_validation", "v1.0.0", []
+
+
+# ── Structural validation (§12.2) ─────────────────────────────────────────────
+
+def _structural_validate(invoice_number, carrier_id, total_amount, currency) -> list[RateViolation]:
+    violations = []
+    if not invoice_number or not invoice_number.strip():
+        violations.append(RateViolation(
+            rule="STRUCT_MISSING_INVOICE_NUMBER", carrier_id=carrier_id,
+            rate_type="", expected=0, actual=0, delta=0,
+        ))
+    if not carrier_id or not carrier_id.strip():
+        violations.append(RateViolation(
+            rule="STRUCT_MISSING_CARRIER_ID", carrier_id="",
+            rate_type="", expected=0, actual=0, delta=0,
+        ))
+    if total_amount is None:
+        violations.append(RateViolation(
+            rule="STRUCT_MISSING_AMOUNT", carrier_id=carrier_id,
+            rate_type="", expected=0, actual=0, delta=0,
+        ))
+    if not currency or not currency.strip():
+        violations.append(RateViolation(
+            rule="STRUCT_MISSING_CURRENCY", carrier_id=carrier_id,
+            rate_type="", expected=0, actual=0, delta=0,
+        ))
+    return violations
+
+
+# ── Semantic validation (§12.3) ───────────────────────────────────────────────
+
+def _semantic_validate(currency, total_amount, carrier_id) -> list[RateViolation]:
+    violations = []
+    if currency and currency.upper() not in VALID_CURRENCIES:
+        violations.append(RateViolation(
+            rule="R002_INVALID_CURRENCY", carrier_id=carrier_id,
+            rate_type="", expected=0, actual=0, delta=0,
+        ))
+    if total_amount is not None and float(total_amount) < 0:
+        violations.append(RateViolation(
+            rule="R004_NEGATIVE_AMOUNT", carrier_id=carrier_id,
+            rate_type="", expected=0, actual=float(total_amount), delta=float(total_amount),
+        ))
+    return violations
+
+
+# ── Cross-record validation (§12.4) ───────────────────────────────────────────
+
+def _cross_record_validate(cur, tenant_id, invoice_number, carrier_id, currency) -> list[RateViolation]:
+    violations = []
+    # Check for duplicate canonical invoice (already finalised)
+    cur.execute("""
+        SELECT id FROM canonical_invoices
+        WHERE tenant_id = %s AND invoice_number = %s
+        LIMIT 1
+    """, (tenant_id, invoice_number))
+    if cur.fetchone():
+        violations.append(RateViolation(
+            rule="CROSS_DUPLICATE_CANONICAL_INVOICE", carrier_id=carrier_id,
+            rate_type="", expected=0, actual=0, delta=0,
+        ))
+    return violations

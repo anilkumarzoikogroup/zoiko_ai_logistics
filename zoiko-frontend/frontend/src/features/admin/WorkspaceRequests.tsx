@@ -35,13 +35,13 @@ export default function WorkspaceRequests() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["workspace-requests"],
-    queryFn:  () => api.get("/admin/workspace-requests").then(r => r.data),
+    queryFn:  () => api.get("/v1/admin/workspace-requests").then(r => r.data),
     enabled:  role === "admin",
   });
 
   const approveMut = useMutation({
     mutationFn: ({ id, pw }: { id: string; pw: string }) =>
-      api.post(`/admin/workspace-requests/${id}/approve`, { password: pw }),
+      api.post(`/v1/admin/workspace-requests/${id}/approve`, { password: pw }),
     onSuccess: (_, { id }) => {
       qc.invalidateQueries({ queryKey: ["workspace-requests"] });
       toast.success("Approved", "Tenant and admin user created. Welcome email sent.");
@@ -54,7 +54,7 @@ export default function WorkspaceRequests() {
   });
 
   const rejectMut = useMutation({
-    mutationFn: (id: string) => api.post(`/admin/workspace-requests/${id}/reject`),
+    mutationFn: (id: string) => api.post(`/v1/admin/workspace-requests/${id}/reject`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workspace-requests"] });
       toast.success("Rejected", "Request has been rejected.");

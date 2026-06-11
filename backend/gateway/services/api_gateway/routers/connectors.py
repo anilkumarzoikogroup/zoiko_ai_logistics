@@ -65,16 +65,20 @@ def get_connector(connector_id: str, claims=Depends(get_claims)):
         raise HTTPException(status_code=404, detail="Connector not found")
     return _fmt_connector(row)
 
+class ConnectorStateIn(BaseModel):
+    operational_state:  Optional[str] = None
+    certification_state: Optional[str] = None
+
 @router.patch("/connectors/{connector_id}/state")
-def update_connector_state(connector_id: str, body: dict, claims=Depends(get_claims)):
-    new_cert = body.get("certification_state")
-    new_ops  = body.get("operational_state")
-    if not new_cert and not new_ops:
+def update_connector_state(connector_id: str, body: ConnectorStateIn, claims=Depends(get_claims)):
+    if not body.certification_state and not body.operational_state:
         raise HTTPException(status_code=400, detail="Provide certification_state or operational_state")
-    if new_cert:
-        q1("UPDATE connectors SET certification_state=%s, updated_at=NOW() WHERE id=%s::uuid AND tenant_id=%s::uuid", (new_cert, connector_id, claims.tenant_id))
-    if new_ops:
-        q1("UPDATE connectors SET operational_state=%s, updated_at=NOW() WHERE id=%s::uuid AND tenant_id=%s::uuid", (new_ops, connector_id, claims.tenant_id))
+    if body.certification_state:
+        q1("UPDATE connectors SET certification_state=%s, updated_at=NOW() WHERE id=%s::uuid AND tenant_id=%s::uuid",
+           (body.certification_state, connector_id, claims.tenant_id))
+    if body.operational_state:
+        q1("UPDATE connectors SET operational_state=%s, updated_at=NOW() WHERE id=%s::uuid AND tenant_id=%s::uuid",
+           (body.operational_state, connector_id, claims.tenant_id))
     return {"message": "Connector state updated"}
 
 @router.delete("/connectors/{connector_id}", status_code=200)

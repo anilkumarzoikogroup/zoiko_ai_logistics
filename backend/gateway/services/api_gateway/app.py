@@ -20,7 +20,7 @@ import paths  # noqa: F401 — must be first
 
 load_dotenv()
 
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse as _JSONResponse
 
@@ -855,6 +855,158 @@ def workspace_access_request(body: dict):
         conn.close()
 
     return {"message": "Access request submitted. A Zoiko representative will follow up within one business day."}
+
+
+# ── Admin: manage workspace access requests ───────────────────────────────────
+
+@app.get("/admin/workspace-requests", tags=["admin"])
+@app.get("/v1/admin/workspace-requests", tags=["admin"], include_in_schema=False)
+def list_workspace_requests(status: str = None, claims: ZoikoClaims = Depends(get_claims)):
+    """List workspace access requests (admin only)."""
+    import psycopg2 as _pg
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        if status:
+            cur.execute("""
+                SELECT id, full_name, work_email, company_name, company_website, country,
+                       role, use_case, team_size, heard_from, status, created_at
+                FROM workspace_access_requests WHERE status = %s ORDER BY created_at DESC
+            """, (status,))
+        else:
+            cur.execute("""
+                SELECT id, full_name, work_email, company_name, company_website, country,
+                       role, use_case, team_size, heard_from, status, created_at
+                FROM workspace_access_requests ORDER BY created_at DESC
+            """)
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    keys = ["id","full_name","work_email","company_name","company_website","country",
+            "role","use_case","team_size","heard_from","status","created_at"]
+    requests_list = []
+    for row in rows:
+        d = dict(zip(keys, row))
+        d["id"]         = str(d["id"])
+        d["created_at"] = d["created_at"].isoformat() if d["created_at"] else None
+        requests_list.append(d)
+
+    return {"requests": requests_list, "total": len(requests_list)}
+
+
+@app.post("/admin/workspace-requests/{req_id}/approve", tags=["admin"], status_code=201)
+@app.post("/v1/admin/workspace-requests/{req_id}/approve", tags=["admin"], include_in_schema=False, status_code=201)
+def approve_workspace_request(req_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    """
+    Approve a workspace request — creates a new tenant and admin user.
+    Body: { "password": "temp-password" }
+    """
+    import psycopg2 as _pg
+    import bcrypt as _bcrypt
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    password = body.get("password", "")
+    if not password or len(password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        # Load the request
+        cur.execute("""
+            SELECT id, full_name, work_email, company_name, status
+            FROM workspace_access_requests WHERE id = %s::uuid
+        """, (req_id,))
+        req = cur.fetchone()
+        if not req:
+            raise HTTPException(status_code=404, detail="Workspace request not found")
+        if req[4] not in ("PENDING", "CONTACTED", "QUALIFIED"):
+            raise HTTPException(status_code=409, detail=f"Request already {req[4]}")
+
+        full_name    = req[1]
+        work_email   = req[2]
+        company_name = req[3]
+
+        # Check if email already registered
+        cur.execute("SELECT id FROM users WHERE email = %s", (work_email,))
+        if cur.fetchone():
+            raise HTTPException(status_code=409, detail="Email already registered as a user")
+
+        # Create tenant slug from company name
+        slug = _re.sub(r"[^a-z0-9]+", "-", company_name.lower()).strip("-")[:40]
+        cur.execute("SELECT COUNT(*) FROM tenants WHERE slug LIKE %s", (f"{slug}%",))
+        count = cur.fetchone()[0]
+        if count > 0:
+            slug = f"{slug}-{count + 1}"
+
+        now       = datetime.now(timezone.utc)
+        tenant_id = uuid.uuid4()
+        user_id   = uuid.uuid4()
+        pw_hash   = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+
+        cur.execute(
+            "INSERT INTO tenants (id, display_name, slug, status, created_at, updated_at) "
+            "VALUES (%s, %s, %s, 'ACTIVE', %s, %s)",
+            (tenant_id, company_name, slug, now, now),
+        )
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, 'admin', %s)",
+            (user_id, tenant_id, work_email, pw_hash, full_name, now),
+        )
+        # Update request status
+        cur.execute(
+            "UPDATE workspace_access_requests SET status = 'QUALIFIED', crm_ref = %s WHERE id = %s::uuid",
+            (str(tenant_id), req_id),
+        )
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        conn.close()
+
+    return {
+        "message":    f"Workspace approved. Tenant '{company_name}' created.",
+        "tenant_id":  str(tenant_id),
+        "user_id":    str(user_id),
+        "email":      work_email,
+        "tenant_slug": slug,
+    }
+
+
+@app.post("/admin/workspace-requests/{req_id}/reject", tags=["admin"], status_code=200)
+@app.post("/v1/admin/workspace-requests/{req_id}/reject", tags=["admin"], include_in_schema=False, status_code=200)
+def reject_workspace_request(req_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """Reject a workspace access request (admin only)."""
+    import psycopg2 as _pg
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, status FROM workspace_access_requests WHERE id = %s::uuid", (req_id,))
+        req = cur.fetchone()
+        if not req:
+            raise HTTPException(status_code=404, detail="Workspace request not found")
+        cur.execute(
+            "UPDATE workspace_access_requests SET status = 'REJECTED' WHERE id = %s::uuid",
+            (req_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"message": "Request rejected"}
 
 
 # ── Invite — send + accept ────────────────────────────────────────────────────
@@ -2960,7 +3112,9 @@ async def parse_invoice_file(
                     if isinstance(cl, dict) and float(cl.get("amount", 0) or 0) > 0
                 ]
             ai_amount = float(parsed.get("total_amount", 0) or 0)
-            currency  = str(parsed.get("currency", "INR")).strip().upper() or "INR"
+            _cur_raw  = str(parsed.get("currency", "INR")).strip()
+            _sym_map  = {"₹": "INR", "$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
+            currency  = _sym_map.get(_cur_raw, _cur_raw.upper()) or "INR"
             origin    = _normalize_city(str(parsed.get("origin", "")).strip())
             dest      = _normalize_city(str(parsed.get("destination", "")).strip())
             if origin == dest:
@@ -3249,6 +3403,8 @@ def _run_full_pipeline(
     carrier: str, origin: str, dest: str,
     amount: float, currency: str,
     invoice_number: str | None = None,
+    channel: str = "file_upload",
+    channel_metadata: dict = None,
 ) -> dict:
     """Run full Phase 2+3 pipeline inline. Returns dict with case_id, state, diff."""
     from kafka.mock_kafka import MockKafkaBroker as _MB
@@ -3262,7 +3418,12 @@ def _run_full_pipeline(
     inv = InvoiceInput(carrier_id=carrier, invoice_number=inv_no,
                        total_amount=float(amount), currency=currency,
                        route_origin=origin, route_destination=dest, weight_lbs=0.0)
-    ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(tenant_id, inv, idem)
+    ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(
+        tenant_id, inv, idem,
+        channel=channel,
+        channel_metadata=channel_metadata or {},
+        received_by_user=actor_sub,
+    )
     val_r  = ValidationHandler(DB_URL, broker, slug).validate(
                  tenant_id, ing_r.source_record_id, inv_no, carrier, float(amount), currency)
     can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
@@ -3308,15 +3469,39 @@ async def batch_submit_invoices(
             detail=f"Batch limit is {MAX_BATCH} files. You sent {len(files)}.",
         )
 
+    from services.ingestion_svc.file_adapter import build_file_channel_metadata
+
     results = []
     for f in files:
-        item = {"filename": f.filename, "status": "pending", "case_id": None, "error": None}
+        item = {"filename": f.filename, "status": "pending", "case_id": None, "error": None,
+                "mime_detected": None, "malware_outcome": None}
         try:
             # Step 1 — parse the file with size guard
             _max_bytes = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
             content = await f.read()
             if len(content) > _max_bytes:
                 raise ValueError(f"File {f.filename} too large ({len(content)//1024}KB > {_max_bytes//1024//1024}MB limit)")
+
+            # Step 1b — MIME detection, malware scan, macro check (§7.5)
+            declared_mime = f.content_type or ""
+            ch_meta, mime_result, scan_result = build_file_channel_metadata(
+                content           = content,
+                filename          = f.filename or "",
+                declared_mime     = declared_mime,
+                user_id           = str(claims.sub),
+                declared_schema   = "freight-invoice-batch-v1",
+            )
+            item["mime_detected"]    = mime_result.detected_mime
+            item["malware_outcome"]  = scan_result.outcome
+
+            if mime_result.rejected:
+                raise ValueError(f"Rejected: {mime_result.rejection_reason}")
+            if scan_result.outcome == "POSITIVE":
+                raise ValueError(f"File rejected: malware detected ({scan_result.detail})")
+            if ch_meta.macro_detected:
+                policy = os.getenv("MACRO_POLICY", "reject")
+                if policy == "reject":
+                    raise ValueError("File rejected: macro detected in spreadsheet")
             text = ""
             try:
                 import pdfplumber, io
@@ -3909,6 +4094,7 @@ def get_submit_status(job_id: str, claims: ZoikoClaims = Depends(get_claims)):
 
 @v1_router.post("/cases/submit", tags=["ui"], status_code=201)
 def ui_submit_case(
+    request: Request,
     body: SubmitCaseRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     claims: ZoikoClaims = Depends(get_claims),
@@ -3932,6 +4118,13 @@ def ui_submit_case(
 
     broker = _BROKER
 
+    # Capture channel metadata for REST push (§9 — channel provenance)
+    from services.api_gateway.routers.ingestion import _capture_rest_push_metadata
+    ch_metadata = _capture_rest_push_metadata(request, idempotency_key)
+
+    # Determine channel: UI form submit → ui_entry; API client → rest_api_push
+    channel = "ui_entry" if request.headers.get("X-UI-Submit") else "rest_api_push"
+
     # ── Phase 2 pipeline ──────────────────────────────────────────────────────
     inv = InvoiceInput(
         carrier_id=body.carrier, invoice_number=inv_no,
@@ -3941,7 +4134,13 @@ def ui_submit_case(
         equipment_type=body.equipment_type, charge_lines=body.charge_lines,
         shipper_reference=body.shipper_reference,
     )
-    ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(str(claims.tenant_id), inv, idempotency_key)
+    ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_invoice(
+        str(claims.tenant_id), inv, idempotency_key,
+        channel=channel,
+        channel_metadata=ch_metadata,
+        received_by_user=str(claims.sub) if claims.sub else None,
+        correlation_id=request.headers.get("X-Correlation-ID"),
+    )
     val_r  = ValidationHandler(DB_URL, broker, slug).validate(
                  str(claims.tenant_id), ing_r.source_record_id, inv_no,
                  body.carrier, float(body.amount), body.currency)
@@ -4729,12 +4928,13 @@ except Exception as _p4_err:
 # ── Domain extension routers ──────────────────────────────────────────────────
 try:
     from services.api_gateway.routers import (
-        identity, connectors, canonical, evidence, approval, reasoning, policy, evaluation, reports
+        identity, connectors, canonical, evidence, approval, reasoning, policy, evaluation, reports, ingestion, webhooks
     )
     for _domain_router in (
         identity.router, connectors.router, canonical.router,
         evidence.router, approval.router, reasoning.router,
         policy.router, evaluation.router, reports.router,
+        ingestion.router, webhooks.router,
     ):
         app.include_router(_domain_router, prefix="/v1")
         app.include_router(_domain_router)   # backward-compat bare path

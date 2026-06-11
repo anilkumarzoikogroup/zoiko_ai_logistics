@@ -1,68 +1,99 @@
 """
-Clears all demo/seed data from the database.
-Keeps: real tenant (zoiko-demo), users, contract_rates structure.
+Clears all demo/seed data from the database (Neon-compatible — no superuser needed).
+Keeps: tenants that have users, users, alembic_version.
 Removes: all cases, invoices, source records, evidence, findings, tokens — everything.
 
-Run: python clear_demo_data.py
+Run:
+  $env:DB_URL = "postgresql://..."
+  python clear_demo_data.py
 """
 import psycopg2, os
 from dotenv import load_dotenv
 
 load_dotenv()
-conn = psycopg2.connect(os.environ["DB_URL"])
+DB_URL = os.environ.get("DB_URL")
+if not DB_URL:
+    raise SystemExit("DB_URL env var not set.")
+
+conn = psycopg2.connect(DB_URL)
+conn.autocommit = False
 cur  = conn.cursor()
 
-print("Clearing demo data...")
+print("Clearing all demo/seed data...\n")
 
-# Disable FK checks so we can delete in any order
-cur.execute("SET session_replication_role = 'replica'")
+# Delete in strict child-before-parent order to satisfy FK constraints.
+# Each DELETE is wrapped individually so a missing table doesn't abort the batch.
 
-TABLES = [
+ORDERED = [
+    # ── deepest leaves first ──────────────────────────────────────────────────
     "audit_worm_index",
     "action_certification_records",
     "reconciliations",
     "execution_envelopes",
+    "variance_records",
     "governance_tokens",
     "approval_requests",
     "approval_tasks",
     "governance_decisions",
     "decision_proposals",
-    "findings",
     "reasoning_traces",
     "action_intents",
+    "findings",
     "evidence_items",
     "evidence_bundles",
     "case_events",
-    "cases",
     "validation_results",
+    "cases",
+    # ── ingestion / canonical ─────────────────────────────────────────────────
     "lineage_records",
     "canonical_shipments",
     "canonical_invoices",
+    "batch_records",
+    "batch_artifacts",
+    "ambiguity_queue",
+    "dedup_index",
     "source_records",
+    # ── config / misc ─────────────────────────────────────────────────────────
+    "validation_rule_sets",
+    "connector_responses",
     "contract_rates",
     "outbox",
     "certification_runs",
     "tenant_keys",
+    "kafka_events",
 ]
 
-for table in TABLES:
+total = 0
+for table in ORDERED:
     try:
         cur.execute(f"DELETE FROM {table}")
-        print(f"  Cleared: {table:35s} ({cur.rowcount} rows)")
-    except Exception as e:
-        print(f"  SKIP:    {table:35s} (not found or error — {e})")
+        n = cur.rowcount
+        total += n
+        tag = "cleared" if n > 0 else "empty  "
+        print(f"  {tag}  {table:<40s}  {n:>6} rows")
+        conn.commit()
+    except psycopg2.errors.UndefinedTable:
         conn.rollback()
-        cur.execute("SET session_replication_role = 'replica'")
+        print(f"  skip     {table:<40s}  (table not found)")
+    except Exception as e:
+        conn.rollback()
+        print(f"  ERROR    {table:<40s}  {e}")
 
-# Remove dummy tenants (keep only the one with users)
-cur.execute("DELETE FROM tenants WHERE id NOT IN (SELECT DISTINCT tenant_id FROM users)")
-print(f"  Removed dummy tenants:                    ({cur.rowcount} rows)")
+# Remove dummy tenants (those with no users) ─ these are demo-run artifacts
+try:
+    cur.execute("""
+        DELETE FROM tenants
+        WHERE id NOT IN (
+            SELECT DISTINCT tenant_id FROM users WHERE tenant_id IS NOT NULL
+        )
+    """)
+    n = cur.rowcount
+    conn.commit()
+    print(f"\n  removed  {'dummy tenants':<40s}  {n:>6} rows")
+except Exception as e:
+    conn.rollback()
+    print(f"\n  skip     dummy tenant cleanup: {e}")
 
-# Re-enable FK checks
-cur.execute("SET session_replication_role = 'origin'")
-
-conn.commit()
 conn.close()
-
-print("\nDone. Database is clean.")
-print("Login at http://localhost:5173 and submit a real invoice to start.")
+print(f"\nDone — {total} data rows removed.")
+print("Database is clean. Submit a real invoice at http://localhost:5173 to start.")

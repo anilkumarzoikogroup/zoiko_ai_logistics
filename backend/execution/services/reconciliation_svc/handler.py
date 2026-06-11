@@ -73,6 +73,13 @@ class ReconciliationHandler:
         else:
             status = "DISCREPANCY"
 
+        # Clarification 05 §14 — reconciliation_type + expected/observed amounts
+        reconciliation_type = {
+            "MATCHED":     "MATCHED",
+            "PARTIAL":     "PARTIAL_MATCH",
+            "DISCREPANCY": "MISMATCH",
+        }[status]
+
         rec_id     = uuid.uuid4()
         outcome_id = uuid.uuid4()
 
@@ -91,13 +98,15 @@ class ReconciliationHandler:
             cur.execute("""
                 INSERT INTO reconciliations
                     (id, tenant_id, case_id, envelope_id,
-                     delta_amount, currency, recon_hash, reconciled_at)
-                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s)
+                     delta_amount, currency, recon_hash, reconciled_at,
+                     reconciliation_type, expected_amount, observed_amount)
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 rec_id, tenant_id,
                 uuid.UUID(case_id) if case_id else uuid.UUID(envelope_id),
                 uuid.UUID(envelope_id),
                 delta, currency, recon_hash, now,
+                reconciliation_type, expected, actual,
             ))
 
             # Write outcomes row

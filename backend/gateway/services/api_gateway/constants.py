@@ -15,6 +15,53 @@ class CaseStatus(str, Enum):
     CLOSED             = "CLOSED"
     ABORTED            = "ABORTED"
 
+    # Clarification 05 — case candidate + extended lifecycle states
+    CANDIDATE                  = "CANDIDATE"
+    UNDER_REVIEW               = "UNDER_REVIEW"
+    ACTION_PLAN_READY          = "ACTION_PLAN_READY"
+    READY_FOR_AUTHORIZATION    = "READY_FOR_AUTHORIZATION"
+    AUTHORIZED                 = "AUTHORIZED"
+    EXECUTING                  = "EXECUTING"
+    AWAITING_EXTERNAL_RESPONSE = "AWAITING_EXTERNAL_RESPONSE"
+    RECONCILING                = "RECONCILING"
+
+    # Clarification 05 — closure sub-states
+    CLOSED_RECOVERED     = "CLOSED_RECOVERED"
+    CLOSED_NO_ACTION     = "CLOSED_NO_ACTION"
+    CLOSED_REJECTED      = "CLOSED_REJECTED"
+    CLOSED_WITHDRAWN     = "CLOSED_WITHDRAWN"
+    CLOSED_UNRECOVERABLE = "CLOSED_UNRECOVERABLE"
+    CLOSED_DUPLICATE     = "CLOSED_DUPLICATE"
+
+    # Clarification 05 — exception states
+    ESCALATED  = "ESCALATED"
+    QUARANTINED = "QUARANTINED"
+
+
+class ClosureReason(str, Enum):
+    RECOVERED_FULL      = "RECOVERED_FULL"
+    RECOVERED_PARTIAL   = "RECOVERED_PARTIAL"
+    NO_ACTION_REQUIRED  = "NO_ACTION_REQUIRED"
+    FINDING_INVALID     = "FINDING_INVALID"
+    DUPLICATE_CASE      = "DUPLICATE_CASE"
+    UNRECOVERABLE       = "UNRECOVERABLE"
+    WITHDRAWN           = "WITHDRAWN"
+    EXTERNAL_REJECTED   = "EXTERNAL_REJECTED"
+    POLICY_CLOSED       = "POLICY_CLOSED"
+
+
+# Closure reasons that require a matching reconciliation record before ACR generation
+CLOSURE_REASONS_REQUIRING_RECONCILIATION: frozenset[str] = frozenset({
+    ClosureReason.RECOVERED_FULL,
+    ClosureReason.RECOVERED_PARTIAL,
+})
+
+# Closure reasons valid as terminal states (used by closure validation)
+TERMINAL_CLOSURE_STATES: frozenset[str] = frozenset({
+    "CLOSED", "CLOSED_RECOVERED", "CLOSED_NO_ACTION", "CLOSED_REJECTED",
+    "CLOSED_WITHDRAWN", "CLOSED_UNRECOVERABLE", "CLOSED_DUPLICATE", "ABORTED",
+})
+
 
 class ActionStatus(str, Enum):
     PENDING   = "PENDING"

@@ -114,24 +114,72 @@ class CanonicalHandler:
                 now,
             ))
 
+            # ── Write lineage record with full transform contract (§14) ──────
+            # Compute input hash (source record canonical bytes) and output hash
+            input_hash  = hashlib.sha256(b"zoiko.ingestion.invoice.v1:" + canonical_bytes).hexdigest()
+            output_hash = canonical_hash.hex()
+
+            reference_data_snapshot = json.dumps({
+                "carrier_invoice_normalizer": "v1.0.0",
+                "currency_table":             "iso-4217-v2026.01",
+                "transform_applied_at":       now.isoformat(),
+            })
+
+            canonical_records_json = json.dumps([
+                {"type": "invoice",  "id": str(inv_id),   "payload_hash": "sha256:" + output_hash},
+                {"type": "shipment", "id": str(ship_id),  "payload_hash": "sha256:" + output_hash},
+            ])
+
+            cur.execute("""
+                INSERT INTO lineage_records
+                    (id, tenant_id, entity_type, entity_id, parent_id,
+                     event_type, payload_hash, recorded_at,
+                     transform_id, transform_version,
+                     transform_input_hash, transform_output_hash,
+                     reference_data_snapshot, transformed_at, transformed_by,
+                     canonical_records, lineage_domain_tag)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                uuid.uuid4(), tenant_id, "CANONICAL_INVOICE", inv_id, source_record_id,
+                "CANONICALIZED", canonical_hash, now,
+                "carrier-invoice-normalizer", "v1.0.0",
+                input_hash, output_hash,
+                reference_data_snapshot, now, "spiffe://zoiko/system/canonical-truth",
+                canonical_records_json, "zoiko/v1/lineage-record",
+            ))
+
+            # Advance source record FSM: PENDING_VALIDATION/VALIDATED → CANONICALIZING → PROCESSED
+            cur.execute("""
+                UPDATE source_records
+                SET record_status = 'PROCESSED', lineage_id = %s
+                WHERE id = %s AND tenant_id = %s
+            """, (uuid.uuid4(), source_record_id, tenant_id))
+
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
         # Publish invoice.canonical
-        from kafka.producer import ZoikoProducer, KafkaMessage
-        ZoikoProducer(self.broker).publish(KafkaMessage(
-            topic     = "zoiko.canonical.invoice.created",
-            key       = str(inv_id),
-            payload   = {
-                "canonical_invoice_id": str(inv_id),
-                "invoice_number":       invoice_number,
-                "carrier_id":           carrier_id,
-                "total_amount":         float(total_amount),
-                "canonical_hash":       canonical_hash.hex(),
-            },
-            tenant_id = tenant_id,
-        ))
+        try:
+            from kafka.producer import ZoikoProducer, KafkaMessage
+            ZoikoProducer(self.broker).publish(KafkaMessage(
+                topic     = "zoiko.canonical.invoice.created",
+                key       = str(inv_id),
+                payload   = {
+                    "canonical_invoice_id": str(inv_id),
+                    "invoice_number":       invoice_number,
+                    "carrier_id":           carrier_id,
+                    "total_amount":         float(total_amount),
+                    "canonical_hash":       canonical_hash.hex(),
+                    "transform_version":    "v1.0.0",
+                },
+                tenant_id = tenant_id,
+            ))
+        except Exception:
+            pass
 
         return CanonicalResult(
             canonical_invoice_id  = inv_id,

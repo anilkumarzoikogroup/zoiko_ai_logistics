@@ -22,14 +22,26 @@ class ConflictError(Exception):
 
 
 VALID_TRANSITIONS = {
-    "NEW":               {"EVIDENCE_PENDING",  "ABORTED"},
+    "NEW":               {"EVIDENCE_PENDING",  "ABORTED", "CLOSED_DUPLICATE"},
     "EVIDENCE_PENDING":  {"FINDING_GENERATED", "ABORTED"},
-    "FINDING_GENERATED": {"APPROVAL_PENDING",  "ABORTED"},
-    "APPROVAL_PENDING":  {"EXECUTION_READY",   "ABORTED"},
-    "EXECUTION_READY":   {"DISPATCHED",        "ABORTED"},
-    "DISPATCHED":        {"OUTCOME_RECORDED"},
-    "OUTCOME_RECORDED":  {"CLOSED"},
+    "FINDING_GENERATED": {"APPROVAL_PENDING",  "ABORTED", "UNDER_REVIEW", "ACTION_PLAN_READY"},
+    "APPROVAL_PENDING":  {"EXECUTION_READY",   "ABORTED", "READY_FOR_AUTHORIZATION"},
+    "EXECUTION_READY":   {"DISPATCHED",        "ABORTED", "EXECUTING"},
+    "DISPATCHED":        {"OUTCOME_RECORDED",  "AWAITING_EXTERNAL_RESPONSE"},
+    "OUTCOME_RECORDED":  {"CLOSED",            "RECONCILING"},
+
+    # Clarification 05 — case-candidate review and action-plan/authorization chain
+    "UNDER_REVIEW":               {"ACTION_PLAN_READY", "CLOSED_REJECTED", "CLOSED_NO_ACTION"},
+    "ACTION_PLAN_READY":          {"READY_FOR_AUTHORIZATION", "CLOSED_NO_ACTION"},
+    "READY_FOR_AUTHORIZATION":    {"AUTHORIZED", "ABORTED"},
+    "AUTHORIZED":                 {"EXECUTING", "ABORTED"},
+    "EXECUTING":                  {"AWAITING_EXTERNAL_RESPONSE", "DISPATCHED", "ABORTED"},
+    "AWAITING_EXTERNAL_RESPONSE": {"RECONCILING"},
+    "RECONCILING":                {"CLOSED_RECOVERED", "CLOSED_UNRECOVERABLE"},
 }
+
+# ESCALATED / QUARANTINED are reachable from any non-terminal state (Clarification 05 §8)
+ESCALATION_STATES = {"ESCALATED", "QUARANTINED"}
 
 
 class CaseHandler:
@@ -144,6 +156,13 @@ class CaseHandler:
 
             current = row["state"]
             allowed = VALID_TRANSITIONS.get(current, set())
+
+            # Clarification 05 §8 — ESCALATED/QUARANTINED reachable from any
+            # non-terminal state (terminal = CLOSED* or ABORTED)
+            is_terminal = current == "ABORTED" or current.startswith("CLOSED")
+            if new_state in ESCALATION_STATES and not is_terminal:
+                allowed = allowed | ESCALATION_STATES
+
             if new_state not in allowed:
                 # T-014: invalid FSM transition → emit security event then 422
                 try:

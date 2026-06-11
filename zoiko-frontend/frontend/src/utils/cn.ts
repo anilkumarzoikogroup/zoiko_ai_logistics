@@ -5,21 +5,12 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-const SYMBOL_TO_ISO: Record<string, string> = {
-  "₹": "INR", "$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY", "₩": "KRW",
-};
-
 export function formatCurrency(amount: number, currency: string = "INR"): string {
-  const code = SYMBOL_TO_ISO[currency] ?? (currency?.length === 3 ? currency : "INR");
-  try {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: code,
-      maximumFractionDigits: 0,
-    }).format(amount);
-  } catch {
-    return `${code} ${amount.toLocaleString("en-IN")}`;
-  }
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(amount);
 }
 
 const IST = "Asia/Kolkata";

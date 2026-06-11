@@ -66,6 +66,9 @@ class ACRResult:
     is_locked:    bool
     issued_at:    datetime
     verify_bundle: dict   # JSON-serialisable verify package
+    closure_reason:  str = ""
+    recovered_amount: float = 0.0
+    currency:        str = "USD"
 
 
 class AuditACRHandler:
@@ -120,9 +123,57 @@ class AuditACRHandler:
         now    = datetime.now(timezone.utc)
         acr_id = uuid.uuid4()
 
+        # Clarification 05 §16 — derive closure_reason + recovered_amount from
+        # the most recent reconciliation (if any) for this case.
+        recon = _db.q1(
+            db_url=self._db_url,
+            sql="""
+                SELECT reconciliation_type, observed_amount, expected_amount, currency
+                FROM reconciliations
+                WHERE case_id=%s::uuid AND tenant_id=%s::uuid
+                ORDER BY reconciled_at DESC LIMIT 1
+            """,
+            params=(case_id, tenant_id),
+        )
+        if recon and recon.get("reconciliation_type") == "MATCHED":
+            closure_reason   = "RECOVERED_FULL"
+            recovered_amount = float(recon["observed_amount"] or 0)
+            currency         = recon.get("currency") or "USD"
+            new_state        = "CLOSED_RECOVERED"
+        elif recon and recon.get("reconciliation_type") == "PARTIAL_MATCH":
+            closure_reason   = "RECOVERED_PARTIAL"
+            recovered_amount = float(recon["observed_amount"] or 0)
+            currency         = recon.get("currency") or "USD"
+            new_state        = "CLOSED_RECOVERED"
+        elif recon and recon.get("reconciliation_type") == "MISMATCH":
+            closure_reason   = "UNRECOVERABLE"
+            recovered_amount = float(recon["observed_amount"] or 0)
+            currency         = recon.get("currency") or "USD"
+            new_state        = "CLOSED_UNRECOVERABLE"
+        else:
+            closure_reason   = "NO_ACTION_REQUIRED"
+            recovered_amount = 0.0
+            currency         = "USD"
+            new_state        = "CLOSED_NO_ACTION"
+
+        # Clarification 05 §16 — supersession: link to any prior ACR for this case
+        prior_acr = _db.q1(
+            db_url=self._db_url,
+            sql="""
+                SELECT id FROM action_certification_records
+                WHERE case_id=%s::uuid AND tenant_id=%s::uuid
+                ORDER BY certified_at DESC LIMIT 1
+            """,
+            params=(case_id, tenant_id),
+        )
+        supersedes_acr_id = prior_acr["id"] if prior_acr else None
+
         verify_bundle = self._build_verify_bundle(
             acr_id, case_id, tenant_id, merkle_root, artifacts, acr_sig, acr_kid, now
         )
+        verify_bundle["closure_reason"]   = closure_reason
+        verify_bundle["recovered_amount"] = recovered_amount
+        verify_bundle["currency"]         = currency
 
         with _db.get_conn(self._db_url) as conn:
           try:
@@ -132,13 +183,23 @@ class AuditACRHandler:
             cur.execute("""
                 INSERT INTO action_certification_records
                     (id, tenant_id, case_id, merkle_root, artifact_hashes, signature,
-                     kid, acr_version, certified_at)
-                VALUES (%s, %s::uuid, %s::uuid, %s, %s::jsonb, %s, %s, %s, %s)
+                     kid, acr_version, certified_at,
+                     closure_reason, recovered_amount, currency, supersedes_acr_id)
+                VALUES (%s, %s::uuid, %s::uuid, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 acr_id, tenant_id, uuid.UUID(case_id),
                 merkle_root, json.dumps(verify_bundle), acr_sig, acr_kid,
                 "1.0", now,
+                closure_reason, recovered_amount, currency, supersedes_acr_id,
             ))
+
+            # Link prior ACR (if any) to the one that supersedes it
+            if supersedes_acr_id:
+                cur.execute("""
+                    UPDATE action_certification_records
+                    SET superseded_by_acr_id=%s
+                    WHERE id=%s AND tenant_id=%s::uuid
+                """, (acr_id, supersedes_acr_id, tenant_id))
 
             # Write audit_worm_index row (APPEND-ONLY)
             cur.execute("""
