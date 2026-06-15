@@ -45,6 +45,17 @@ def upgrade() -> None:
     op.execute("ALTER TABLE dedup_index ADD COLUMN IF NOT EXISTS source_type_version TEXT NOT NULL DEFAULT 'v1'")
     op.execute("ALTER TABLE dedup_index ADD COLUMN IF NOT EXISTS decided_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
 
+    # Drop stale duplicate rows (accumulated before this constraint existed)
+    # so the unique constraint below can be created. Keep the most recent
+    # row per (tenant_id, deduplication_key).
+    op.execute("""
+        DELETE FROM dedup_index a
+        USING dedup_index b
+        WHERE a.tenant_id = b.tenant_id
+          AND a.deduplication_key = b.deduplication_key
+          AND (a.decided_at, a.id) < (b.decided_at, b.id)
+    """)
+
     op.execute("""
         DO $$
         BEGIN
