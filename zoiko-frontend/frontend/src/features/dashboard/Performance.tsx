@@ -141,7 +141,7 @@ export default function Performance() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="month" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 10 }} width={60}
-                    tickFormatter={(v: number) => `₹${(v / 100000).toFixed(0)}L`} />
+                    tickFormatter={(v: number) => `$${(v / 100000).toFixed(0)}L`} />
                   <Tooltip
                     formatter={(v: number, name: string) => [
                       formatCurrency(v),

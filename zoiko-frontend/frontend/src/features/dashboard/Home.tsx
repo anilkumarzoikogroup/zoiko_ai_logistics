@@ -368,7 +368,7 @@ export default function Home() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false}
-                       tickFormatter={(v: number) => `₹${(v/1000).toFixed(0)}k`} />
+                       tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
                 <Tooltip
                   formatter={(v: number, n: string) => [formatCurrency(v), n === "billed" ? "Overcharged" : "Recovered"]}
                   contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }}

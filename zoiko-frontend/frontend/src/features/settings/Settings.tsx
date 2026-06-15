@@ -285,8 +285,8 @@ function ContractsTab() {
         <AlertTriangle className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p className="font-semibold">How contract rates work</p>
-          <p>Example: BlueDart rate = <strong>₹8,000</strong>. BlueDart bills <strong>₹12,500</strong>.</p>
-          <p>Validation engine: <code className="bg-blue-100 px-1 rounded">12,500 &gt; 8,000 → FAIL → overcharge = ₹4,500 → case opened</code></p>
+          <p>Example: BlueDart rate = <strong>$8,000</strong>. BlueDart bills <strong>$12,500</strong>.</p>
+          <p>Validation engine: <code className="bg-blue-100 px-1 rounded">12,500 &gt; 8,000 → FAIL → overcharge = $4,500 → case opened</code></p>
           <p>If no rate exists for a carrier → status = WARN, case opened with full amount as overcharge.</p>
         </div>
       </div>

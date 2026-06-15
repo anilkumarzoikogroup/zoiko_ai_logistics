@@ -3006,7 +3006,7 @@ async def parse_invoice_file(
         # Tier 3 — currency-symbol / currency-code; take max (last resort)
         if not amount:
             for pat in [
-                r"[₹$€£]\s*([\d,]+(?:\.\d{1,2})?)",
+                r"[$€£]\s*([\d,]+(?:\.\d{1,2})?)",
                 r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD|EUR|GBP|AED|SGD)",
             ]:
                 candidates = [v for v in (_parse_num(m.group(1)) for m in _re2.finditer(pat, text, _re2.IGNORECASE)) if v]
@@ -3334,7 +3334,7 @@ async def batch_submit_invoices(
                         break
             if amount == 0.0:
                 import re as _re2
-                for pat in [r"[₹$]\s*([\d,]+(?:\.\d{1,2})?)", r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD)"]:
+                for pat in [r"[$]\s*([\d,]+(?:\.\d{1,2})?)", r"([\d,]+(?:\.\d{2}))\s*(?:INR|USD)"]:
                     m = _re2.search(pat, text, _re2.IGNORECASE)
                     if m:
                         try:

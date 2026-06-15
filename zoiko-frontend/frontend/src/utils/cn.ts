@@ -5,12 +5,9 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(amount: number, currency: string = "INR"): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0,
-  }).format(amount);
+export function formatCurrency(amount: number, _currency: string = "USD"): string {
+  const nf = new Intl.NumberFormat("en-IN", { style: "decimal", maximumFractionDigits: 0 });
+  return `$${nf.format(amount)}`;
 }
 
 const IST = "Asia/Kolkata";

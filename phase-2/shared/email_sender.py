@@ -147,7 +147,7 @@ def send_dispute_letter(
 ) -> None:
     """Send the AI-generated dispute letter to the carrier's email."""
     subject = f"Freight Overcharge Dispute — Case {case_id[:8].upper()} | {carrier}"
-    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    sym = "$" if currency in ("INR", "USD") else currency + " "
 
     html = f"""
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#1e293b">

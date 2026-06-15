@@ -210,8 +210,8 @@ export default function RateControl() {
           <p className="font-bold">How overcharge detection works</p>
           <p>The system <strong>sums all rate rows for a carrier</strong> to get the total contracted amount, then compares against the billed amount.</p>
           <p className="font-mono bg-blue-100 rounded px-2 py-1 text-blue-900 mt-1">
-            fuel_charge (₹6,000) + accessorial (₹2,000) = contracted total (₹8,000)
-            <br />BlueDart bills ₹12,500 → overcharge = ₹4,500
+            fuel_charge ($6,000) + accessorial ($2,000) = contracted total ($8,000)
+            <br />BlueDart bills $12,500 → overcharge = $4,500
           </p>
           <p>You need at least <strong>one rate row per carrier</strong>. Add more rows for each charge type in the contract.</p>
         </div>

@@ -80,9 +80,9 @@ def seed():
 
     conn.close()
     print(f"\nDone — {inserted} rates inserted, {skipped} already existed.")
-    print("\nNow when you submit a BlueDart invoice for ₹12,500:")
-    print("  Contract rate = ₹8,000")
-    print("  Overcharge    = ₹4,500  ← FAIL detected automatically")
+    print("\nNow when you submit a BlueDart invoice for $12,500:")
+    print("  Contract rate = $8,000")
+    print("  Overcharge    = $4,500  ← FAIL detected automatically")
 
 if __name__ == "__main__":
     seed()

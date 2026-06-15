@@ -160,7 +160,7 @@ export default function AuditConditions() {
                         {cs.overchargeRate}%
                       </td>
                       <td className="px-4 py-3 text-right font-bold text-sm border-b text-red-700">
-                        {cs.diff > 0 ? `₹${cs.diffLakhs}L` : "—"}
+                        {cs.diff > 0 ? `$${cs.diffLakhs}L` : "—"}
                       </td>
                     </tr>
                   ))}
@@ -183,8 +183,8 @@ export default function AuditConditions() {
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                   <XAxis dataKey="carrier" tick={{ fontSize: 11 }} />
                   <YAxis tick={{ fontSize: 10 }} width={55}
-                    tickFormatter={(v: number) => v >= 100000 ? `₹${(v/100000).toFixed(1)}L` : `₹${(v/1000).toFixed(0)}k`} />
-                  <Tooltip formatter={(v: number) => [`₹${v.toLocaleString()}`, "Overcharge"]} />
+                    tickFormatter={(v: number) => v >= 100000 ? `$${(v/100000).toFixed(1)}L` : `$${(v/1000).toFixed(0)}k`} />
+                  <Tooltip formatter={(v: number) => [`$${v.toLocaleString()}`, "Overcharge"]} />
                   <Bar dataKey="diff" radius={[4,4,0,0]}>
                     {carrierStats.filter(c => c.diff > 0).map((_, i) => (
                       <Cell key={i} fill={COLORS[i % COLORS.length]} />
@@ -212,7 +212,7 @@ export default function AuditConditions() {
               },
               {
                 label: "Total Overcharges",
-                value: `₹${(totalDiff/100000).toFixed(2)}L`,
+                value: `$${(totalDiff/100000).toFixed(2)}L`,
                 sub: `${caseList.filter(c=>(c.diff??0)>0).length} cases`,
                 color: "border-l-amber-500",
               },

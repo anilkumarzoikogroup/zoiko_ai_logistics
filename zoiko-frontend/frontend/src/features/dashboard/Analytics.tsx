@@ -178,7 +178,7 @@ export default function Analytics() {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="day" tick={{ fontSize: 10 }} />
               <YAxis yAxisId="left"  tick={{ fontSize: 10 }} width={50}
-                tickFormatter={(v: number) => `₹${(v / 1000).toFixed(0)}k`} />
+                tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
               <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 10 }} width={30} />
               <Tooltip
                 formatter={(value: number, name: string) =>
@@ -190,7 +190,7 @@ export default function Analytics() {
             </BarChart>
           </ResponsiveContainer>
           <div className="flex items-center gap-4 justify-center mt-2 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded bg-emerald-500" /> Amount Recovered (₹)</span>
+            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded bg-emerald-500" /> Amount Recovered ($)</span>
             <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded bg-blue-600 opacity-70" /> Cases Opened</span>
           </div>
         </CardContent>

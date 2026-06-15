@@ -97,7 +97,7 @@ export default function CryptoAudit() {
       const stateColor  = STATUS_COLOR[state] ?? "#64748b";
       const stateLabel  = state.replace(/_/g," ");
       const cur         = String(c.currency ?? "INR");
-      const sym         = cur === "INR" ? "₹" : (cur === "USD" ? "$" : cur+" ");
+      const sym         = cur === "INR" ? "$" : (cur === "USD" ? "$" : cur+" ");
       return `
       <tr>
         <td style="font-family:monospace;font-size:10px">${String(c.id ?? "").slice(0,8)}…</td>
@@ -119,7 +119,7 @@ export default function CryptoAudit() {
           <tr>
             <td>${carrier}</td>
             <td style="text-align:center">${v.count}</td>
-            <td style="text-align:right;color:#dc2626">₹${Number(v.overcharge).toLocaleString("en-IN")}</td>
+            <td style="text-align:right;color:#dc2626">$${Number(v.overcharge).toLocaleString("en-IN")}</td>
           </tr>`).join("")
       : "";
 
@@ -168,9 +168,9 @@ export default function CryptoAudit() {
         return `
       <div class="summary" style="grid-template-columns:repeat(5,1fr)">
         <div class="kpi"><div class="kpi-label">Total Cases</div><div class="kpi-value">${summary.total_cases ?? 0}</div></div>
-        <div class="kpi"><div class="kpi-label">Total Invoiced</div><div class="kpi-value" style="font-size:14px">₹${totalAmt.toLocaleString("en-IN")}</div></div>
-        <div class="kpi"><div class="kpi-label">Total Overcharge</div><div class="kpi-value" style="font-size:14px;color:#dc2626">₹${overAmt.toLocaleString("en-IN")}</div></div>
-        <div class="kpi"><div class="kpi-label">Total Recovered</div><div class="kpi-value" style="font-size:14px;color:#059669">₹${Number(summary.total_recovered ?? 0).toLocaleString("en-IN")}</div></div>
+        <div class="kpi"><div class="kpi-label">Total Invoiced</div><div class="kpi-value" style="font-size:14px">$${totalAmt.toLocaleString("en-IN")}</div></div>
+        <div class="kpi"><div class="kpi-label">Total Overcharge</div><div class="kpi-value" style="font-size:14px;color:#dc2626">$${overAmt.toLocaleString("en-IN")}</div></div>
+        <div class="kpi"><div class="kpi-label">Total Recovered</div><div class="kpi-value" style="font-size:14px;color:#059669">$${Number(summary.total_recovered ?? 0).toLocaleString("en-IN")}</div></div>
         <div class="kpi"><div class="kpi-label">Recovery Rate</div><div class="kpi-value">${recRate}</div></div>
       </div>`;
       })() : ""}

@@ -230,7 +230,7 @@ export default function AnalystReview() {
                   <div className="mt-4 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 flex items-center gap-2">
                     <BarChart3 className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
                     <p className="text-[10px] text-blue-700">
-                      <span className="font-bold">SC-001:</span> BlueDart billed ₹12,500 · Contract rate ₹8,000 · Overcharge ₹4,500 (fuel + accessorial surcharge, 96% confidence)
+                      <span className="font-bold">SC-001:</span> BlueDart billed $12,500 · Contract rate $8,000 · Overcharge $4,500 (fuel + accessorial surcharge, 96% confidence)
                     </p>
                   </div>
                 )}

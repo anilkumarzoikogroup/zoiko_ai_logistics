@@ -364,7 +364,7 @@ if page == "hub":
     m3.metric("Approved",          approved)
     m4.metric("Active Tokens",     active_tokens)
     m5.metric("Closed",            closed)
-    m6.metric("Total Recovered",   f"₹{recovered:,.0f}" if recovered else "₹0")
+    m6.metric("Total Recovered",   f"${recovered:,.0f}" if recovered else "$0")
 
     st.divider()
 
@@ -373,14 +373,14 @@ if page == "hub":
         st.markdown("""
 **You run a large e-commerce company. You ship millions of packages. You pay shipping companies.**
 
-You have a contract: *"₹8,000 to move one truckload from Hyderabad to Warangal."*
+You have a contract: *"$8,000 to move one truckload from Hyderabad to Warangal."*
 
 At the end of every month, the shipping company sends you a bill. **50,000 line items.**
 Your finance team has five people. They cannot check every single one. They spot-check. They pay.
 
 > **3% of the time, the shipping company overcharges.**
 > Sometimes by accident. Sometimes by adding fees that were never in the contract.
-> One shipment: contract says ₹8,000. They bill ₹12,500. Extra ₹4,500 — not in any contract.
+> One shipment: contract says $8,000. They bill $12,500. Extra $4,500 — not in any contract.
 > Multiply by thousands of shipments per month. **You are losing crores of rupees per year.**
 
 **That is the problem Zoiko solves.**
@@ -422,8 +422,8 @@ This is <b>Separation of Duties</b>, enforced in code.</i>
 <hr style="border:none;border-top:1px solid #ffe0b2;margin:8px 0">
 <div style="font-size:13px;color:#333;line-height:1.6">
 The shipping company. They move the goods. They send invoices.<br><br>
-<b>Contract says:</b> ₹8,000 for Hyderabad → Warangal, 800 kg<br><br>
-<b>Invoice says:</b> ₹12,500 — added "Express Handling" (₹4,500) not in the contract<br><br>
+<b>Contract says:</b> $8,000 for Hyderabad → Warangal, 800 kg<br><br>
+<b>Invoice says:</b> $12,500 — added "Express Handling" ($4,500) not in the contract<br><br>
 <i>BlueDart does not log into Zoiko. They receive a <b>credit memo</b> through their API when
 a recovery is approved.</i>
 </div>
@@ -460,7 +460,7 @@ Using only <b>public cryptographic keys</b>, they run a verification script and 
               font-weight:700;font-size:12px;flex-shrink:0;margin-right:12px;margin-top:2px">1</div>
   <div><b style="color:#1a1a2e">Monday 9 AM — 30,000 invoices arrive overnight.</b>
   <span style="color:#555"> Zoiko ingested all of them. 200 are flagged. One is SC-001:
-  BlueDart billed ₹12,500 on a ₹8,000 contract route. Overcharge: <b style="color:#c62828">₹4,500</b>.</span></div>
+  BlueDart billed $12,500 on a $8,000 contract route. Overcharge: <b style="color:#c62828">$4,500</b>.</span></div>
 </div>
 
 <div style="display:flex;align-items:flex-start;margin-bottom:14px">
@@ -470,7 +470,7 @@ Using only <b>public cryptographic keys</b>, they run a verification script and 
   <div><b style="color:#1a1a2e">9:30 AM — Ravi opens the dashboard.</b>
   <span style="color:#555"> SC-001 is near the top. Confidence: <b>96%</b>.
   He sees invoice, contract, AI reasoning. "Express handling fee — not in contract."
-  He clicks <b>Propose Recovery: ₹4,500</b>.</span></div>
+  He clicks <b>Propose Recovery: $4,500</b>.</span></div>
 </div>
 
 <div style="display:flex;align-items:flex-start;margin-bottom:14px">
@@ -489,7 +489,7 @@ Using only <b>public cryptographic keys</b>, they run a verification script and 
   <div><b style="color:#1a1a2e">8-gate execution.</b>
   <span style="color:#555"> Token signature valid ✓ Not expired ✓ Tenant binding matches ✓
   Scope = EXECUTE ✓ Sanctions clear ✓ FX locked ✓ Connector certified ✓ Idempotency key new ✓
-  → BlueDart API called → <b style="color:#2e7d32">Credit memo: ₹4,500</b></span></div>
+  → BlueDart API called → <b style="color:#2e7d32">Credit memo: $4,500</b></span></div>
 </div>
 
 <div style="display:flex;align-items:flex-start">
@@ -583,9 +583,9 @@ Using only <b>public cryptographic keys</b>, they run a verification script and 
     <tr><td style="color:#888;padding:3px 0">Shipper</td><td style="font-weight:600">Amazon India</td></tr>
     <tr><td style="color:#888;padding:3px 0">Carrier</td><td style="font-weight:600">BlueDart</td></tr>
     <tr><td style="color:#888;padding:3px 0">Route</td><td style="font-weight:600">HYD → WGL</td></tr>
-    <tr><td style="color:#888;padding:3px 0">Contract</td><td style="font-weight:600;color:#2e7d32">₹8,000</td></tr>
-    <tr><td style="color:#888;padding:3px 0">Billed</td><td style="font-weight:600;color:#c62828">₹12,500</td></tr>
-    <tr><td style="color:#888;padding:3px 0">Overcharge</td><td style="font-weight:700;color:#c62828;font-size:14px">₹4,500</td></tr>
+    <tr><td style="color:#888;padding:3px 0">Contract</td><td style="font-weight:600;color:#2e7d32">$8,000</td></tr>
+    <tr><td style="color:#888;padding:3px 0">Billed</td><td style="font-weight:600;color:#c62828">$12,500</td></tr>
+    <tr><td style="color:#888;padding:3px 0">Overcharge</td><td style="font-weight:700;color:#c62828;font-size:14px">$4,500</td></tr>
     <tr><td style="color:#888;padding:3px 0">AI Conf.</td><td style="font-weight:700;color:#1565c0">96%</td></tr>
   </table>
 </div>

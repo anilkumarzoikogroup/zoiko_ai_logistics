@@ -28,3 +28,5 @@ node_modules/
 .vercel
 .env*
 superadmin.md
+test.md
+pipeline.md
