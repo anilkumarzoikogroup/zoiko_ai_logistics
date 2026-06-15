@@ -190,6 +190,21 @@ def upgrade() -> None:
 
     op.execute("CREATE INDEX IF NOT EXISTS idx_rule_sets_active ON validation_rule_sets (source_type, status) WHERE status = 'ACTIVE'")
 
+    # Some environments' validation_rule_sets has an extra rule_set_name
+    # column (not part of this model) with a NOT NULL constraint that would
+    # reject the seed INSERT below — relax it if present.
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name='validation_rule_sets' AND column_name='rule_set_name'
+            ) THEN
+                ALTER TABLE validation_rule_sets ALTER COLUMN rule_set_name DROP NOT NULL;
+            END IF;
+        END $$;
+    """)
+
     # validation_results — rule_set columns
     op.execute("ALTER TABLE validation_results ADD COLUMN IF NOT EXISTS rule_set_id TEXT")
     op.execute("ALTER TABLE validation_results ADD COLUMN IF NOT EXISTS rule_set_version TEXT")
