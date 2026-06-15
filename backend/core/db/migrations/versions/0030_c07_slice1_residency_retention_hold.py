@@ -96,6 +96,23 @@ def upgrade() -> None:
             _add(table, col, defn)
 
     # ── 4. Upgrade legal_hold_records to full C07 model ───────────────────────
+    # Some environments are missing this table even though alembic_version is
+    # past 0019 (which originally created it) — recreate defensively so the
+    # ADD COLUMN calls below have a table to target.
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS legal_hold_records (
+            id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            tenant_id    UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            case_id      UUID REFERENCES cases(id),
+            subject_type TEXT NOT NULL DEFAULT 'case',
+            subject_id   UUID NOT NULL,
+            reason       TEXT NOT NULL DEFAULT '',
+            applied_by   TEXT NOT NULL DEFAULT '',
+            applied_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            lifted_at    TIMESTAMPTZ,
+            lifted_by    TEXT NOT NULL DEFAULT ''
+        )
+    """)
     _add("legal_hold_records", "hold_scope",    "TEXT NOT NULL DEFAULT 'case'")
     _add("legal_hold_records", "reason_code",   "TEXT NOT NULL DEFAULT 'operator_hold'")
     _add("legal_hold_records", "status",        "TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','RELEASED'))")
