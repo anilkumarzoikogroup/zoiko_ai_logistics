@@ -162,6 +162,32 @@ def upgrade() -> None:
             UNIQUE (rule_set_id, version)
         )
     """)
+    # Backfill columns on environments where validation_rule_sets pre-existed
+    # with an older shape (CREATE TABLE IF NOT EXISTS above no-ops there).
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS rule_set_id TEXT NOT NULL DEFAULT ''")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS version TEXT NOT NULL DEFAULT ''")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT ''")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS rules JSONB NOT NULL DEFAULT '[]'")
+    op.execute("""
+        ALTER TABLE validation_rule_sets
+        ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'DRAFT'
+        CHECK (status IN ('DRAFT','ACTIVE','SUPERSEDED','RETIRED'))
+    """)
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS activated_at TIMESTAMPTZ")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS authored_by UUID")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS signature TEXT")
+    op.execute("ALTER TABLE validation_rule_sets ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+    op.execute("""
+        DO $$
+        BEGIN
+            ALTER TABLE validation_rule_sets
+                ADD CONSTRAINT validation_rule_sets_rule_set_id_version_key
+                UNIQUE (rule_set_id, version);
+        EXCEPTION WHEN duplicate_object OR duplicate_table THEN NULL;
+        END $$;
+    """)
+
     op.execute("CREATE INDEX IF NOT EXISTS idx_rule_sets_active ON validation_rule_sets (source_type, status) WHERE status = 'ACTIVE'")
 
     # validation_results — rule_set columns
