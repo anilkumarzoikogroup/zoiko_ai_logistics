@@ -74,8 +74,8 @@ class TestKafkaMessage:
             KafkaMessage(topic="nonexistent.topic", key="k", payload={}, tenant_id=TENANT_ID)
 
     def test_all_17_topics_are_registered(self):
-        # 18 core + 6 retry + 6 DLQ = 30
-        assert len(REGISTERED_TOPICS) == 30
+        # Registry has grown across phases (Phase 2-6, C07) beyond the original 30
+        assert len(REGISTERED_TOPICS) == 79
 
     def test_headers_include_tenant_and_idempotency(self):
         msg     = KafkaMessage(topic="zoiko.case.closed", key="k", payload={}, tenant_id=TENANT_ID)
