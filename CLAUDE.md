@@ -20,6 +20,8 @@ Zoiko detects freight overcharges automatically and recovers money through a cry
 | Phase 3 | ✅ | 46/46 | Evidence → Reasoning → Governance → Token · OPA wired · DEV_MODE · Redis CONSUMED lock |
 | Phase 4 | ✅ | unit  | 8-gate Execution Gateway → Reconciliation → ACR · WORM index · CLOSED case state |
 | Phase 5 | ✅ | — | React 18 + TypeScript + Vite frontend · /v1/ API prefix · fully wired to live backend |
+| Phase 6 | ✅ | — | Recovery pipeline — expected_recoveries → recovery_instruments → recovery_matches (tiered) → ledger_svc → write_off_svc → recovery_proofs (acr_ready) |
+| C07 | ✅ | — | Data governance/compliance — legal holds (blocking), retention, crypto-shred, archive/restore (verified)/purge jobs, observability dashboard (admin-only) |
 
 ---
 
@@ -31,6 +33,10 @@ Phases share the PostgreSQL database. They do NOT make live API calls to each ot
 Phase 2 writes → cases (PENDING_APPROVAL)
 Phase 3 reads  → case_id, writes evidence_bundles / findings / governance_tokens (ACTIVE)
 Phase 4 reads  → token_id, writes execution_envelopes / reconciliations / ACR
+Phase 6 reads  → case_id / authorization_decision_id, writes expected_recoveries →
+                  recovery_instruments → recovery_matches → ledger_entries → recovery_proofs (acr_ready)
+C07     reads  → tenant_id / record refs, writes legal_holds / retention jobs / archive,
+                  restore, purge, crypto-shred jobs (legal holds block purge & crypto-shred)
 ```
 
 Frontend (Phase 5) talks to the Phase 2 API gateway on port 8000 via Vite proxy.
@@ -59,8 +65,8 @@ zoiko-logistics/
 │   │   │   ├── kafka/schemas.py     ← KafkaEventEnvelope (17-topic registry + envelope format)
 │   │   │   ├── errors/exceptions.py ← ZoikoError hierarchy (GateFailureError, SoDViolationError…)
 │   │   │   └── observability/logging.py ← JSON structured logging with tenant/trace context
-│   │   ├── db/migrations/           ← Alembic: 19 migration versions
-│   │   └── scripts/                 ← seed_dummy_data.py, demo_sc001.py, tenant_fuzzer.py
+│   │   ├── db/migrations/           ← Alembic: 31 migration versions (0001–0031)
+│   │   └── scripts/                 ← demo_sc001.py, tenant_fuzzer.py
 │   │
 │   ├── platform/                    ← Identity (KMS, OIDC), policy (OPA), events (Kafka)
 │   │   ├── packages/zoiko-kms/      ← zoiko_kms: hierarchy.py, local_backend.py
@@ -69,21 +75,28 @@ zoiko-logistics/
 │   │   └── kafka/                   ← producer.py (zoiko.* topics), consumer.py, mock_kafka.py
 │   │
 │   ├── gateway/                     ← API gateway — ingestion, validation, case FSM (port 8000)
-│   │   ├── services/api_gateway/    ← app.py (283 routes + /v1/ prefix), auth.py, models.py
+│   │   ├── services/api_gateway/    ← app.py (/v1/ prefix), auth.py, models.py
 │   │   │   ├── config.py            ← pydantic-settings BaseSettings
 │   │   │   ├── constants.py         ← CaseStatus, GovernanceDecisionType, ChannelType enums
 │   │   │   └── routers/             ← identity, connectors, canonical, evidence, approval,
-│   │   │                              reasoning, policy, evaluation, reports
-│   │   ├── services/ingestion_svc/  ← handler.py (5-step write pattern)
+│   │   │                              reasoning, policy, evaluation, reports, c07, observability
+│   │   ├── services/ingestion_svc/  ← handler.py (5-step write pattern), file_adapter.py (EDI/CSV)
 │   │   ├── services/validation_svc/ ← handler.py (contract rate engine)
 │   │   ├── services/canonical_truth/← handler.py (authoritative row)
 │   │   ├── services/case_orchestration/ ← handler.py (FSM)
+│   │   ├── services/legal_hold_svc/ ← handler.py (blocks purge/crypto-shred while held)
+│   │   ├── services/retention_svc/  ← handler.py (retention schedule jobs)
+│   │   ├── services/archive_svc/    ← handler.py (archive jobs)
+│   │   ├── services/restore_svc/    ← handler.py (restore + 10-check verification)
+│   │   ├── services/purge_svc/      ← handler.py (purge jobs, legal-hold aware)
+│   │   ├── services/crypto_shred_svc/ ← handler.py (tenant key destruction, legal-hold aware)
+│   │   ├── services/observability_svc/ ← handler.py (C07 observability dashboard data)
 │   │   ├── shared/db.py             ← DB helpers (q, q1)
 │   │   ├── paths.py                 ← sys.path bootstrap (import first)
 │   │   └── Dockerfile               ← Multi-stage, non-root, port 8000
 │   │
 │   ├── governance/                  ← Evidence, reasoning, tokens, SoD (port 8002)
-│   │   ├── services/evidence_svc/   ← handler.py (Merkle bundle)
+│   │   ├── services/evidence_svc/   ← handler.py (growing/append-only Merkle bundle)
 │   │   ├── services/reasoning_svc/  ← handler.py (SC-001 confidence 0.96)
 │   │   ├── services/governance_svc/ ← handler.py (SoD + case FSM)
 │   │   ├── services/token_svc/      ← handler.py (tenant-bound token, 15-min TTL)
@@ -91,10 +104,19 @@ zoiko-logistics/
 │   │   ├── paths.py                 ← sys.path bootstrap (import first)
 │   │   └── Dockerfile               ← Multi-stage, non-root, port 8002
 │   │
-│   ├── execution/                   ← 8-gate execution, reconciliation, ACR (port 8001)
+│   ├── execution/                   ← 8-gate execution, reconciliation, recovery, ACR (port 8001)
 │   │   ├── services/execution_gateway/ ← handler.py (8-gate check), models.py
-│   │   ├── services/reconciliation_svc/ ← handler.py (settlement match)
+│   │   ├── services/reconciliation_svc/ ← handler.py (settlement match, case variances)
 │   │   ├── services/audit_acr_svc/  ← handler.py (8-artifact Merkle ACR)
+│   │   ├── services/recovery/
+│   │   │   ├── expected_recovery_svc/  ← handler.py (expected_recoveries CRUD + supersede)
+│   │   │   ├── recovery_instrument_svc/← handler.py (instruments — credit memos, refunds…)
+│   │   │   ├── recovery_match_svc/     ← handler.py (tiered matching against instruments)
+│   │   │   ├── ledger_svc/             ← handler.py (double-entry ledger, LEDGER_CLOSED)
+│   │   │   ├── write_off_svc/          ← handler.py (PENDING → AUTHORIZED → POSTED → WRITTEN_OFF)
+│   │   │   ├── recovery_proof_svc/     ← handler.py (rollup proof, acr_ready flag)
+│   │   │   └── recovery_exceptions_svc/← handler.py (stuck/aged recovery exceptions)
+│   │   ├── services/api_gateway/    ← app.py — /v1/execute, /v1/reconcile, /v1/recovery/*, /v1/cases/{id}/acr
 │   │   ├── paths.py                 ← sys.path bootstrap (import first)
 │   │   └── Dockerfile               ← Multi-stage, non-root, port 8001
 │   │
@@ -102,9 +124,13 @@ zoiko-logistics/
 │       └── app.py                   ← Routes /v1/* to gateway/governance/execution
 │
 └── zoiko-frontend/frontend/
-    ├── src/api/client.ts            ← Axios instance · /v1/ API base · auth + idempotency headers
+    ├── src/api/client.ts            ← Axios instances (api/api4) · /v1/ API base · auth + idempotency headers
     ├── src/api/zoiko.ts             ← API service layer (USE_MOCK gate on every method)
-    ├── vite.config.ts               ← Dev proxy: /api → http://localhost:8000
+    ├── src/features/recovery/RecoveryDashboard.tsx     ← Phase 6 recovery pipeline UI
+    ├── src/features/reconciliation/ReconciliationPage.tsx ← envelope reconciliation + variances
+    ├── src/features/compliance/     ← C07 pages: LegalHolds, DataRetention, CryptoShred,
+    │                                   ArchiveJobs, RestoreJobs, PurgeJobs, DataGovernance (admin-only)
+    ├── vite.config.ts               ← Dev proxy: /api → :8000, /api4 → :8001
     ├── Dockerfile                   ← Multi-stage: dev + build + nginx prod
     └── .env.local                   ← VITE_USE_MOCK=false · VITE_API_BASE=/api
 ```
@@ -219,20 +245,20 @@ cd backend\governance; py -m pytest -q --tb=short; cd ..\..
 ```powershell
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:PYTHONIOENCODING = "utf-8"
-cd backend\gateway; py demo_phase2.py; cd ..\..   # produces a case in PENDING_APPROVAL
-cd backend\governance; py demo_phase3.py; cd ..\.. # consumes that case, produces ACTIVE token
+cd backend\core; py scripts\demo_sc001.py; cd ..\..   # full SC-001 walkthrough across all phases
 ```
 
 ### Check live API
 ```powershell
 curl http://localhost:8000/health
-curl http://localhost:8000/docs         # Swagger UI with all 24 routes
+curl http://localhost:8000/docs         # Swagger UI — gateway routes
+curl http://localhost:8001/docs         # Swagger UI — execution gateway (recovery/reconciliation/ACR)
 curl http://localhost:5173/api/health   # same, through Vite proxy
 ```
 
 ---
 
-## Phase 2 API Routes (24 total)
+## Gateway API Routes (port 8000, /v1/ prefix) — core set
 
 | Route | Notes |
 |-------|-------|
@@ -263,6 +289,54 @@ Required headers on every request:
 - `Authorization: Bearer <JWT>`
 - `X-Tenant-ID: <tenant-uuid>`
 - `Idempotency-Key: <unique-string>` (mutations only)
+
+---
+
+## Execution Gateway API Routes (port 8001, /v1/ prefix)
+
+| Route | Notes |
+|-------|-------|
+| `POST /execute` | 8-gate execution check, redeems governance token, writes execution_envelopes |
+| `POST /reconcile` | Match an execution envelope against connector_responses → reconciliations |
+| `GET /cases/{id}/variances` | Reconciliation variance records for a case |
+| `POST /cases/{id}/variances/{vid}/resolve` | Resolve or waive an OPEN variance |
+| `POST /cases/{id}/acr` | Issue 8-artifact Merkle ACR (WORM-locked) |
+| `POST /recovery/expected` | Create an expected recovery (dedup on `authorization_decision_id`) |
+| `GET /recovery/expected:by-case` | Expected recoveries for a case |
+| `POST /recovery/expected/{id}/supersede` | Replace an expected recovery (audit-preserving) |
+| `POST /recovery/instruments` | Create a recovery instrument (dedup on `external_reference`) |
+| `GET /recovery/instruments:by-case` / `:by-counterparty` | List instruments |
+| `POST /recovery/match` | Tiered match of an expected recovery against AVAILABLE instruments |
+| `GET /recovery/matches:by-case` / `:by-expected` | List matches |
+| `POST /recovery/matches/{id}/reverse` | Reverse a recovery match |
+| `GET /recovery/exceptions` | Stuck/aged expected recoveries (no match after N days) |
+| `POST /recovery/proofs` | Generate recovery proof rollup (sets `acr_ready`) |
+| `GET /recovery/proofs:by-case` / `:latest` | Fetch recovery proofs |
+
+---
+
+## C07 Data Governance API Routes (gateway, port 8000, /v1/ prefix, admin-only)
+
+| Route | Notes |
+|-------|-------|
+| `POST /legal-holds` | Place a legal hold on records — blocks purge & crypto-shred |
+| `GET /legal-holds/{id}` / `GET /legal-holds:by-scope` | Fetch/list holds |
+| `POST /legal-holds/{id}/release` | Release a hold |
+| `POST /data/retention/policies` / `GET /data/retention/policies/{id}` | Retention policy CRUD |
+| `POST /data/retention/assign` / `GET /data/retention:by-record` | Assign + look up retention for a record |
+| `POST /data/archive/jobs` / `GET /data/archive/jobs/{id}` | Archive job lifecycle |
+| `GET /data/archive/{id}/verify` | Verify archive integrity |
+| `POST /data/archive/{id}/restore` | Restore from an archive |
+| `POST /data/restore/jobs` / `GET /data/restore/jobs/{id}` | Restore job lifecycle |
+| `POST /data/restore/jobs/{id}/verify` | Run the 10-check restore verification |
+| `GET /data/restore/jobs/{id}/verification` | Fetch verification results |
+| `POST /data/restore/jobs/{id}/approve-use` | Approve restored data for use |
+| `POST /data/purge/jobs` / `GET /data/purge/jobs/{id}` | Purge job lifecycle — blocked if an active legal hold covers the records |
+| `POST /data/purge/jobs/{id}/approve` | Approve a pending purge |
+| `GET /data/purge/jobs/{id}/evidence` | Purge evidence record |
+| `POST /privacy/crypto-shred` / `GET /privacy/crypto-shred/{id}` | Destroy tenant data-encryption keys — blocked if an active legal hold covers the records |
+| `GET /privacy/crypto-shred/{id}/verify` | Verify a crypto-shred completed |
+| `GET /data/observability/metrics` / `GET /data/observability/alerts` | C07 observability dashboard data |
 
 ---
 
@@ -423,41 +497,24 @@ Gracefully no-ops if Redis unavailable — DB `status=CONSUMED` update is author
 
 ---
 
-## What Phase 4 Will Need
-
-- `execution_envelopes` table (already in schema)
-## Phase 4 — What's Built
-
-Phase 4 is now implemented. Key files:
+## Phase 4 / Execution Gateway — Key Files
 
 | File | Purpose |
 |------|---------|
-| `phase-4/services/execution_gateway/handler.py` | 8-gate check (sig, expiry, consumed, binding, scope, sanctions, FX, connector) |
-| `phase-4/services/reconciliation_svc/handler.py` | Settlement match against connector_responses, writes reconciliations + outcomes |
-| `phase-4/services/audit_acr_svc/handler.py` | 8-artifact Merkle ACR, writes action_certification_records + audit_worm_index |
-| `phase-4/services/api_gateway/app.py` | FastAPI gateway (port 8001): POST /v1/execute, POST /v1/reconcile, POST /v1/cases/{id}/acr |
-| `phase-4/demo_phase4.py` | Full end-to-end demo (requires Phase 2+3 demo first) |
-| `phase-4/tests/test_execution_gateway.py` | Gate unit tests (no DB) + integration test (skip if no DB) |
-| `phase-4/tests/test_acr.py` | ACR verify bundle structure tests |
+| `backend/execution/services/execution_gateway/handler.py` | 8-gate check (sig, expiry, consumed, binding, scope, sanctions, FX, connector) |
+| `backend/execution/services/reconciliation_svc/handler.py` | Settlement match against connector_responses, writes reconciliations + outcomes + variances |
+| `backend/execution/services/audit_acr_svc/handler.py` | 8-artifact Merkle ACR, writes action_certification_records + audit_worm_index |
+| `backend/execution/services/recovery/*` | Phase 6 recovery pipeline (see table above) |
+| `backend/execution/services/api_gateway/app.py` | FastAPI gateway (port 8001): `/v1/execute`, `/v1/reconcile`, `/v1/recovery/*`, `/v1/cases/{id}/acr` |
+| `backend/execution/tests/test_execution_gateway.py` | Gate unit tests (no DB) + integration test (skip if no DB) |
+| `backend/execution/tests/test_acr.py` | ACR verify bundle structure tests |
 
-### Running Phase 4 demo
+### Running the Execution Gateway API
 ```powershell
-# First run Phase 2 + 3 demos to seed an ACTIVE token
-cd phase-2; py demo_phase2.py; cd ..
-cd phase-3; py demo_phase3.py; cd ..
-
-# Then run Phase 4
-cd phase-4
-$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
-$env:PYTHONIOENCODING = "utf-8"
-py demo_phase4.py
-```
-
-### Running Phase 4 API
-```powershell
-cd phase-4
+cd backend\execution
 ..\..\.venv\Scripts\activate
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
 python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8001
 ```
