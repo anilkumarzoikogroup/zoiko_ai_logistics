@@ -26,21 +26,6 @@ depends_on    = None
 
 
 def upgrade() -> None:
-    # Some environments' dedup_index has an extra raw_payload_hash column
-    # (not part of this model) with a NOT NULL constraint that rejects the
-    # write_dedup_index() INSERT (which only sets payload_hash) — relax it.
-    op.execute("""
-        DO $$
-        BEGIN
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name='dedup_index' AND column_name='raw_payload_hash'
-            ) THEN
-                ALTER TABLE dedup_index ALTER COLUMN raw_payload_hash DROP NOT NULL;
-            END IF;
-        END $$;
-    """)
-
     # ── source_records — governance / identity fields ─────────────────────
     op.execute("ALTER TABLE source_records ADD COLUMN IF NOT EXISTS schema_version TEXT NOT NULL DEFAULT 'source-record.v1'")
     op.execute("ALTER TABLE source_records ADD COLUMN IF NOT EXISTS domain_tag TEXT NOT NULL DEFAULT 'zoiko/v1/source-record'")

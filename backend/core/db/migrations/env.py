@@ -40,13 +40,19 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         # Serialize concurrent `alembic upgrade head` runs (e.g. parallel CI
         # jobs sharing one Neon DB) so they don't race on alembic_version.
+        # Commit immediately after acquiring/releasing — pg_advisory_lock is
+        # session-scoped and persists across commits, but leaving these
+        # statements in an open transaction would make alembic's own
+        # transaction a nested one whose commit doesn't reach the DB.
         connection.execute(text("SELECT pg_advisory_lock(727274)"))
+        connection.commit()
         try:
             context.configure(connection=connection, target_metadata=target_metadata)
             with context.begin_transaction():
                 context.run_migrations()
         finally:
             connection.execute(text("SELECT pg_advisory_unlock(727274)"))
+            connection.commit()
 
 
 if context.is_offline_mode():
