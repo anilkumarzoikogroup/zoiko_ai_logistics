@@ -40,6 +40,8 @@ from services.api_gateway.models import (
     ContractRateRequest,
     LoginRequest, RegisterRequest, RegisterResponse,
     UsersListResponse, UserItem,
+    CreateApiKeyRequest, CreateApiKeyResponse, ApiKeyItem, ApiKeysListResponse,
+    NotificationSettings, UsageSummary,
     TenantCreateRequest,
     ExecuteRequest,
     ErrorResponse,
@@ -397,6 +399,60 @@ def login(body: LoginRequest):
     )
 
 
+@app.post("/auth/setup", tags=["auth"])
+@app.post("/v1/auth/setup", tags=["auth"], include_in_schema=False)
+def setup_first_user(body: dict):
+    """One-time setup: creates the first tenant + admin user. Returns 409 if any user already exists."""
+    import bcrypt as _bcrypt, psycopg2 as _pg
+    from middleware.oidc.token_verifier import TokenVerifier
+
+    existing = q1("SELECT COUNT(*) AS cnt FROM users")
+    if existing and int(existing["cnt"]) > 0:
+        raise HTTPException(status_code=409, detail="Setup already complete — users exist. Use /auth/register to add more users.")
+
+    email     = (body.get("email") or "").lower().strip()
+    full_name = (body.get("full_name") or "").strip()
+    password  = body.get("password") or ""
+    org_name  = (body.get("org_name") or "My Organisation").strip()
+
+    if not email or not password or not full_name:
+        raise HTTPException(status_code=422, detail="email, full_name, and password are required")
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="password must be at least 8 characters")
+
+    tenant_id = uuid.uuid4()
+    user_id   = uuid.uuid4()
+    slug      = org_name.lower().replace(" ", "-")[:50]
+    pw_hash   = _bcrypt.hashpw(password.encode(), _bcrypt.gensalt()).decode()
+    now_dt    = datetime.now(timezone.utc)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenants (id, slug, display_name, status) VALUES (%s, %s, %s, 'ACTIVE') "
+            "ON CONFLICT (slug) DO UPDATE SET display_name=EXCLUDED.display_name RETURNING id",
+            (tenant_id, slug, org_name),
+        )
+        row = cur.fetchone()
+        tenant_id = row[0]
+        cur.execute(
+            "INSERT INTO users (id, tenant_id, email, password_hash, full_name, role, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, 'admin', %s)",
+            (user_id, tenant_id, email, pw_hash, full_name, now_dt),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {
+        "message":   "Setup complete. You can now log in at /auth/login.",
+        "tenant_id": str(tenant_id),
+        "email":     email,
+        "role":      "admin",
+    }
+
+
 @app.post("/auth/register", response_model=RegisterResponse, tags=["auth"])
 @app.post("/v1/auth/register", response_model=RegisterResponse, tags=["auth"], include_in_schema=False)
 def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
@@ -413,7 +469,8 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
     if existing:
         raise HTTPException(status_code=409, detail=f"Email '{email}' is already registered")
 
-    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode()
+    need_welcome = body.password == ""
+    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode() if body.password else ""
     user_id = uuid.uuid4()
     now     = datetime.now(timezone.utc)
 
@@ -428,6 +485,34 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
         conn.commit()
     finally:
         conn.close()
+
+    if need_welcome:
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            smtp_user = os.getenv("EMAIL_NAME", "")
+            smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+            if smtp_user and smtp_pass:
+                smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+                smtp_port = int(os.getenv("SMTP_PORT", "587"))
+                msg = MIMEText(
+                    f"Hello {body.full_name.strip()},\n\n"
+                    f"You have been added as a {body.role} for ZoikoAI.\n\n"
+                    f"Please set your password by visiting the following link:\n"
+                    f"{os.getenv('APP_URL', 'http://localhost:5173')}/forgot-password\n\n"
+                    f"Use the 'Forgot Password' option and enter your email ({email}) to receive an OTP.\n\n"
+                    f"Best regards,\nZoikoAI Admin Team",
+                    "plain", "utf-8",
+                )
+                msg["Subject"] = "ZoikoAI — You've been added as a team member"
+                msg["From"] = smtp_user
+                msg["To"] = email
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+                    s.starttls()
+                    s.login(smtp_user, smtp_pass)
+                    s.sendmail(smtp_user, [email], msg.as_string())
+        except Exception:
+            pass  # welcome email is best-effort
 
     return RegisterResponse(
         user_id    = str(user_id),
@@ -463,6 +548,190 @@ def list_users(claims: ZoikoClaims = Depends(get_claims)):
             )
             for r in rows
         ],
+    )
+
+
+# ── API Keys (Settings → API Keys) ─────────────────────────────────────────────
+
+@v1_router.get("/api-keys", response_model=ApiKeysListResponse, tags=["settings"])
+def list_api_keys(claims: ZoikoClaims = Depends(get_claims)):
+    """Admin-only: list API keys for the tenant (hashes never returned)."""
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can manage API keys")
+    rows = q(
+        "SELECT id, name, key_prefix, scopes, created_at, last_used_at, revoked_at "
+        "FROM api_keys WHERE tenant_id = %s ORDER BY created_at DESC",
+        (claims.tenant_id,),
+    )
+    return ApiKeysListResponse(
+        tenant_id = str(claims.tenant_id),
+        api_keys = [
+            ApiKeyItem(
+                id           = str(r["id"]),
+                name         = r["name"],
+                key_prefix   = r["key_prefix"],
+                scopes       = r["scopes"],
+                created_at   = r["created_at"].isoformat(),
+                last_used_at = r["last_used_at"].isoformat() if r["last_used_at"] else None,
+                revoked      = r["revoked_at"] is not None,
+            )
+            for r in rows
+        ],
+    )
+
+
+@v1_router.post("/api-keys", response_model=CreateApiKeyResponse, status_code=201, tags=["settings"])
+def create_api_key(body: CreateApiKeyRequest, claims: ZoikoClaims = Depends(get_claims)):
+    """Admin-only: generate a new API key. The full key is returned once and never stored."""
+    import secrets as _sec, hashlib as _hl, psycopg2 as _pg
+
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can manage API keys")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+
+    secret     = _sec.token_urlsafe(32)
+    full_key   = f"zk_live_{secret}"
+    key_hash   = _hl.sha256(full_key.encode()).hexdigest()
+    key_prefix = f"zk_live_••••••••••••••••{full_key[-4:]}"
+    key_id     = uuid.uuid4()
+    now        = datetime.now(timezone.utc)
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO api_keys (id, tenant_id, name, key_prefix, key_hash, scopes, created_by, created_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+            (key_id, claims.tenant_id, name, key_prefix, key_hash, body.scopes, claims.sub, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return CreateApiKeyResponse(
+        id         = str(key_id),
+        name       = name,
+        key        = full_key,
+        key_prefix = key_prefix,
+        scopes     = body.scopes,
+        created_at = now.isoformat(),
+    )
+
+
+@v1_router.delete("/api-keys/{key_id}", status_code=204, tags=["settings"])
+def revoke_api_key(key_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """Admin-only: revoke an API key (irreversible)."""
+    import psycopg2 as _pg
+
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can manage API keys")
+    row = q1("SELECT id FROM api_keys WHERE id = %s::uuid AND tenant_id = %s::uuid", (key_id, claims.tenant_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE api_keys SET revoked_at = NOW() WHERE id = %s::uuid AND revoked_at IS NULL",
+            (key_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return None
+
+
+# ── Notification settings (Settings → Notifications) ───────────────────────────
+
+@v1_router.get("/settings/notifications", response_model=NotificationSettings, tags=["settings"])
+def get_notification_settings(claims: ZoikoClaims = Depends(get_claims)):
+    """Per-tenant email alert toggles. Returns defaults (all enabled) if never saved."""
+    row = q1(
+        "SELECT case_opened_email, overcharge_detected_email, approval_needed_email, recovery_executed_email "
+        "FROM tenant_notification_settings WHERE tenant_id = %s::uuid",
+        (claims.tenant_id,),
+    )
+    if not row:
+        return NotificationSettings()
+    return NotificationSettings(**row)
+
+
+@v1_router.put("/settings/notifications", response_model=NotificationSettings, tags=["settings"])
+def update_notification_settings(body: NotificationSettings, claims: ZoikoClaims = Depends(get_claims)):
+    """Admin-only: upsert per-tenant email alert toggles."""
+    import psycopg2 as _pg
+
+    if "admin" not in claims.roles:
+        raise HTTPException(status_code=403, detail="Only admins can manage notification settings")
+
+    conn = _pg.connect(DB_URL)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO tenant_notification_settings "
+            "    (tenant_id, case_opened_email, overcharge_detected_email, approval_needed_email, recovery_executed_email, updated_at) "
+            "VALUES (%s::uuid, %s, %s, %s, %s, NOW()) "
+            "ON CONFLICT (tenant_id) DO UPDATE SET "
+            "    case_opened_email = EXCLUDED.case_opened_email, "
+            "    overcharge_detected_email = EXCLUDED.overcharge_detected_email, "
+            "    approval_needed_email = EXCLUDED.approval_needed_email, "
+            "    recovery_executed_email = EXCLUDED.recovery_executed_email, "
+            "    updated_at = NOW()",
+            (
+                claims.tenant_id,
+                body.case_opened_email,
+                body.overcharge_detected_email,
+                body.approval_needed_email,
+                body.recovery_executed_email,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return body
+
+
+# ── Billing / usage overview (Settings → Billing) ──────────────────────────────
+
+@v1_router.get("/billing/usage", response_model=UsageSummary, tags=["settings"])
+def get_billing_usage(claims: ZoikoClaims = Depends(get_claims)):
+    """Real usage figures for the tenant — no payment data, informational plan only."""
+    tid = claims.tenant_id
+
+    tenant = q1("SELECT created_at FROM tenants WHERE id = %s::uuid", (tid,))
+
+    cnt = q1("""
+        SELECT
+            COUNT(*) AS total_cases,
+            SUM(CASE WHEN opened_at >= date_trunc('month', NOW()) THEN 1 ELSE 0 END) AS cases_this_month
+        FROM cases WHERE tenant_id = %s::uuid
+    """, (tid,))
+
+    rec = q1("""
+        SELECT COALESCE(SUM((
+            SELECT (vr.rule_violations->0->>'delta')::float
+            FROM   validation_results vr
+            WHERE  vr.source_record_id = ci.source_record_id AND vr.status='FAIL'
+            LIMIT  1
+        )), 0) AS total_recovered
+        FROM  cases c
+        JOIN  canonical_invoices ci ON ci.id = c.invoice_id
+        WHERE c.tenant_id = %s::uuid
+          AND c.state IN ('EXECUTION_READY','DISPATCHED','OUTCOME_RECORDED','CLOSED')
+    """, (tid,))
+
+    users_cnt = q1("SELECT COUNT(*) AS active_users FROM users WHERE tenant_id = %s::uuid AND is_active = TRUE", (tid,))
+
+    return UsageSummary(
+        plan             = "Enterprise — all features included",
+        member_since     = tenant["created_at"].isoformat() if tenant else "",
+        total_cases      = int(cnt["total_cases"] or 0),
+        cases_this_month = int(cnt["cases_this_month"] or 0),
+        total_recovered  = float(rec["total_recovered"] or 0),
+        active_users     = int(users_cnt["active_users"] or 0),
     )
 
 
@@ -661,6 +930,11 @@ def forgot_password(body: dict):
     _time.sleep(_rand.uniform(0.15, 0.25))
 
     if user:
+        user_full = q1("SELECT full_name, role, password_hash FROM users WHERE email = %s", (email,))
+        user_name = (user_full.get("full_name") or email) if user_full else email
+        user_role = (user_full.get("role") or "User") if user_full else "User"
+        has_pw    = bool(user_full and user_full.get("password_hash"))
+
         otp = f"{_sec.randbelow(900000) + 100000}"
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
@@ -685,16 +959,29 @@ def forgot_password(body: dict):
         if smtp_user and smtp_pass:
             import logging as _log
             try:
-                email_body = (
-                    f"Welcome to ZoikoAI,\n\n"
-                    f"We understand you forgot your password. No worries — here's your One-Time Password (OTP) to set a new one:\n\n"
-                    f"Your OTP: {otp}\n\n"
-                    f"This code is valid for 10 minutes. Please use it before it expires.\n\n"
-                    f"If you didn't request this, you can safely ignore this email.\n\n"
-                    f"Best regards,\nZoikoAI Logistics Team"
-                )
+                if has_pw:
+                    email_body = (
+                        f"Hello {user_name},\n\n"
+                        f"We received a request to reset your ZoikoAI password. "
+                        f"Use the OTP below to set a new one:\n\n"
+                        f"Your OTP: {otp}\n\n"
+                        f"This code is valid for 10 minutes.\n\n"
+                        f"If you didn't request this, please ignore this email.\n\n"
+                        f"Best regards,\nZoikoAI Logistics Team"
+                    )
+                    subject = "ZoikoAI — Password Reset OTP"
+                else:
+                    email_body = (
+                        f"Welcome to ZoikoAI, {user_name}!\n\n"
+                        f"Your admin has added you as a {user_role}. "
+                        f"Please create your password using the OTP below:\n\n"
+                        f"Your OTP: {otp}\n\n"
+                        f"This code is valid for 10 minutes.\n\n"
+                        f"Best regards,\nZoikoAI Team"
+                    )
+                    subject = "ZoikoAI — Welcome! Set your password"
                 msg = MIMEText(email_body, "plain", "utf-8")
-                msg["Subject"] = "ZoikoAI — Password Reset OTP"
+                msg["Subject"] = subject
                 msg["From"] = smtp_user
                 msg["To"] = email
                 with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
@@ -2150,7 +2437,7 @@ def _sign_dev(tenant_id: str, data: bytes) -> tuple[bytes, str]:
     return _sign(slug, data)
 
 
-def _cases_q(where: str, params: tuple) -> list[dict]:
+def _cases_q(where: str, params: tuple, limit: int = 50, offset: int = 0) -> list[dict]:
     rows = q(f"""
         SELECT
             c.id::text                                                   AS id,
@@ -2179,8 +2466,8 @@ def _cases_q(where: str, params: tuple) -> list[dict]:
         LEFT JOIN canonical_shipments cs ON cs.invoice_id = ci.id
         {where}
         ORDER BY c.opened_at DESC
-        LIMIT 100
-    """, params)
+        LIMIT %s OFFSET %s
+    """, params + (limit, offset))
     return [_r(row) for row in rows]
 
 
@@ -2226,12 +2513,29 @@ def ui_stats(claims: ZoikoClaims = Depends(get_claims)):
 @v1_router.get("/cases", tags=["ui"])
 def ui_list_cases(
     state: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    tid = claims.tenant_id
+    tid    = claims.tenant_id
+    limit  = max(1, min(page_size, 200))
+    offset = (max(1, page) - 1) * limit
+
     if state:
-        return _cases_q("WHERE c.tenant_id=%s::uuid AND c.state=%s", (tid, state))
-    return _cases_q("WHERE c.tenant_id=%s::uuid", (tid,))
+        total_row = q1("SELECT COUNT(*) AS cnt FROM cases c WHERE c.tenant_id=%s::uuid AND c.state=%s", (tid, state))
+        cases     = _cases_q("WHERE c.tenant_id=%s::uuid AND c.state=%s", (tid, state), limit=limit, offset=offset)
+    else:
+        total_row = q1("SELECT COUNT(*) AS cnt FROM cases c WHERE c.tenant_id=%s::uuid", (tid,))
+        cases     = _cases_q("WHERE c.tenant_id=%s::uuid", (tid,), limit=limit, offset=offset)
+
+    total = int(total_row["cnt"]) if total_row else 0
+    return {
+        "cases":     cases,
+        "total":     total,
+        "page":      page,
+        "page_size": limit,
+        "pages":     max(1, (total + limit - 1) // limit),
+    }
 
 
 @v1_router.get("/cases/{case_id}", tags=["ui"])
@@ -2598,7 +2902,8 @@ _TOKEN_SELECT = """
         dp.currency,
         encode(gt.tenant_binding,'hex') AS tenant_binding,
         gt.expires_at                   AS exp,
-        gt.status,
+        CASE WHEN gt.status = 'ACTIVE' AND gt.expires_at < NOW()
+             THEN 'EXPIRED' ELSE gt.status END AS status,
         encode(gt.signature,'hex')      AS signature,
         gt.kid                          AS key_id,
         gt.issued_at
@@ -2748,15 +3053,17 @@ def ui_download_acr(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     from fastapi.responses import Response
 
     row = q1("""
-        SELECT acr.id::text, acr.case_id::text, acr.artifact_refs,
-               acr.merkle_root, acr.certification_status, acr.signature,
-               acr.created_at::text,
+        SELECT acr.id::text, acr.case_id::text, acr.artifact_hashes,
+               encode(acr.merkle_root, 'hex') AS merkle_root_hex,
+               encode(acr.signature, 'hex') AS signature_hex,
+               acr.kid, acr.closure_reason, acr.recovered_amount, acr.currency AS acr_currency,
+               acr.certified_at::text,
                c.state, ci.carrier_id AS carrier, ci.total_amount, ci.currency
         FROM   action_certification_records acr
         JOIN   cases c  ON c.id = acr.case_id
         JOIN   canonical_invoices ci ON ci.id = c.invoice_id
         WHERE  acr.case_id=%s::uuid AND acr.tenant_id=%s::uuid
-        ORDER BY acr.created_at DESC LIMIT 1
+        ORDER BY acr.certified_at DESC LIMIT 1
     """, (case_id, claims.tenant_id))
 
     if not row:
@@ -2766,11 +3073,15 @@ def ui_download_acr(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
         "acr_id":               row["id"],
         "case_id":              row["case_id"],
         "carrier":              row.get("carrier", ""),
-        "certification_status": row.get("certification_status", "CERTIFIED"),
-        "merkle_root":          str(row.get("merkle_root", "")),
-        "artifact_refs":        row.get("artifact_refs", []),
-        "signature":            row.get("signature", {}),
-        "generated_at":         row.get("created_at", ""),
+        "case_state":           row.get("state", ""),
+        "closure_reason":       row.get("closure_reason"),
+        "recovered_amount":     float(row["recovered_amount"]) if row.get("recovered_amount") is not None else None,
+        "currency":             row.get("acr_currency") or row.get("currency"),
+        "merkle_root":          row.get("merkle_root_hex", ""),
+        "artifact_hashes":      row.get("artifact_hashes", {}),
+        "signature":            row.get("signature_hex", ""),
+        "kid":                  row.get("kid", ""),
+        "generated_at":         row.get("certified_at", ""),
         "note":                 "Zoiko AI Logistics — Action Certification Record",
     }
     content = _json.dumps(bundle, indent=2, default=str)
@@ -3806,10 +4117,54 @@ def send_dispute_letter_email(
     body: dict,
     claims: ZoikoClaims = Depends(get_claims),
 ):
-    """Return the recipient email so frontend can open email client."""
-    recipient = body.get("recipient_email", "").strip()
-    if not recipient:
-        raise HTTPException(status_code=422, detail="recipient_email is required")
+    """Send the dispute letter to the carrier via SMTP, Reply-To the sender."""
+    import smtplib, logging as _log
+    from email.mime.text import MIMEText
+
+    recipient = (body.get("recipient_email") or "").strip()
+    if not recipient or "@" not in recipient:
+        raise HTTPException(status_code=422, detail="Valid recipient_email is required")
+
+    letter = (body.get("dispute_letter") or "").strip()
+    if not letter:
+        raise HTTPException(status_code=422, detail="dispute_letter is required")
+
+    lines = letter.split("\n")
+    subject_line = next((l for l in lines if l.startswith("Subject:")), "Freight Overcharge Dispute")
+    subject  = _re.sub(r"^Subject:\s*", "", subject_line).strip() or "Freight Overcharge Dispute"
+    body_text = _re.sub(r"^Subject:.*\n\n?", "", letter, count=1).strip()
+
+    sender_email = claims.sub
+    user_row = q1(
+        "SELECT email FROM users WHERE email = %s AND tenant_id = %s::uuid",
+        (claims.sub, claims.tenant_id),
+    )
+    if user_row:
+        sender_email = (user_row.get("email") or claims.sub).strip()
+
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("EMAIL_NAME", "")
+    smtp_pass = os.getenv("EMAIL_PASSWORD", "")
+
+    if not smtp_user or not smtp_pass:
+        _log.getLogger("zoiko.email").error("SMTP credentials not configured for dispute letter send")
+        raise HTTPException(status_code=500, detail="Email service not configured")
+
+    try:
+        msg = MIMEText(body_text, "plain", "utf-8")
+        msg["Subject"]   = subject
+        msg["From"]      = smtp_user
+        msg["To"]        = recipient
+        msg["Reply-To"]  = sender_email
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
+            s.starttls()
+            s.login(smtp_user, smtp_pass)
+            s.sendmail(smtp_user, [recipient], msg.as_string())
+    except Exception as exc:
+        _log.getLogger("zoiko.email").error("Dispute letter send failed for case %s: %s", case_id, exc)
+        raise HTTPException(status_code=502, detail="Failed to send email — please try again later")
+
     return {"sent": True, "to": recipient}
 
 
@@ -3904,10 +4259,10 @@ def _run_evidence_and_reasoning(
         finding_id = uuid.uuid4()
         cur.execute("""
             INSERT INTO findings
-                (id, tenant_id, case_id, bundle_id, confidence, rule_trace, signature, kid, created_at,
+                (id, tenant_id, case_id, bundle_id, confidence, rule_trace, finding_hash, signature, kid, created_at,
                  ai_confidence, risk_level, ai_reasoning)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NULL, NULL, NULL)
-        """, (finding_id, tenant_id, uuid.UUID(case_id), bundle_id, SC001, json.dumps(rule_trace), f_sig, f_kid, now))
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, NULL, NULL, NULL)
+        """, (finding_id, tenant_id, uuid.UUID(case_id), bundle_id, SC001, json.dumps(rule_trace), finding_hash, f_sig, f_kid, now))
 
         prop_payload = {"amount": str(amount), "case_id": case_id, "currency": currency,
                         "finding_hash": finding_hash.hex(), "proposed_action": "CREDIT_MEMO",
@@ -4053,6 +4408,34 @@ def ui_submit_case_async(
                      )
             case_r = CaseHandler(DB_URL, broker).open_case(_tenant, can_r.canonical_invoice_id, _sub)
             diff   = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(_body.amount) * 0.2
+
+            if not case_r.is_new:
+                # Duplicate invoice — a case already exists for this canonical
+                # invoice (same invoice_number + same content seen before).
+                # Don't re-run Phase 3 against the existing case (it has already
+                # moved past EVIDENCE_PENDING and would throw an invalid-transition
+                # error). Return the existing case's real state so the UI can show
+                # "already processed" instead of a fake fresh success.
+                existing = q1(
+                    "SELECT state, opened_at FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+                    (str(case_r.case_id), _tenant),
+                )
+                now_str = datetime.now(timezone.utc).isoformat()
+                _case_data = {
+                    "id": str(case_r.case_id), "tenant_id": _tenant,
+                    "state": existing["state"] if existing else case_r.state,
+                    "carrier": _body.carrier, "shipment_ref": _body.route,
+                    "amount": float(_body.amount), "currency": _body.currency,
+                    "diff": diff, "confidence": 0.0,
+                    "opened_at": (existing["opened_at"].isoformat() if existing else now_str),
+                    "updated_at": now_str,
+                    "duplicate": True,
+                    "deduplication_outcome": ing_r.deduplication_outcome,
+                }
+                _SUBMIT_JOBS[job_id] = {"status": "done", "case": _case_data, "error": None}
+                _persist_job(job_id, "done", _case_data, None)
+                return
+
             try:
                 _run_evidence_and_reasoning(
                     tenant_id=_tenant, case_id=str(case_r.case_id), slug=slug,
@@ -4068,6 +4451,8 @@ def ui_submit_case_async(
                     "shipment_ref": _body.route, "amount": float(_body.amount),
                     "currency": _body.currency, "diff": diff, "confidence": 0.96,
                     "opened_at": now_str, "updated_at": now_str,
+                    "duplicate": False,
+                    "deduplication_outcome": ing_r.deduplication_outcome,
                 }
             _SUBMIT_JOBS[job_id] = {"status": "done", "case": _case_data, "error": None}
             _persist_job(job_id, "done", _case_data, None)
@@ -4153,6 +4538,34 @@ def ui_submit_case(
                  charge_lines=body.charge_lines,
              )
     case_r = CaseHandler(DB_URL, broker).open_case(str(claims.tenant_id), can_r.canonical_invoice_id, claims.sub)
+    diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(body.amount) * 0.2
+
+    # ── Duplicate detection ──────────────────────────────────────────────────
+    # is_new=False means a case already exists for this canonical invoice (same
+    # invoice_number + same content was seen before). Don't re-run Phase 3 —
+    # the existing case has already moved past EVIDENCE_PENDING and re-running
+    # would just throw an invalid-transition error in the background. Return
+    # the existing case's real state so the frontend can show "already processed".
+    if not case_r.is_new:
+        existing = q1(
+            "SELECT state, opened_at FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+            (str(case_r.case_id), claims.tenant_id),
+        )
+        return {
+            "id":                     str(case_r.case_id),
+            "tenant_id":              str(claims.tenant_id),
+            "state":                  existing["state"] if existing else case_r.state,
+            "carrier":                body.carrier,
+            "shipment_ref":           body.route,
+            "amount":                 float(body.amount),
+            "currency":               body.currency,
+            "diff":                   diff,
+            "confidence":             0.0,
+            "opened_at":              (existing["opened_at"].isoformat() if existing else case_r.opened_at.isoformat()),
+            "updated_at":             datetime.now(timezone.utc).isoformat(),
+            "duplicate":              True,
+            "deduplication_outcome":  ing_r.deduplication_outcome,
+        }
 
     # ── Phase 3 pipeline — run in background thread so response returns fast ────
     # The evidence + reasoning step takes ~8-12s against a cloud DB.  Running it
@@ -4161,7 +4574,6 @@ def ui_submit_case(
     # logged "201 Created" but the frontend got "lost connection mid-request".
     # Moving Phase 3 to a daemon thread cuts the client-visible wait to ~3-5s.
     import threading as _threading
-    diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else float(body.amount) * 0.2
 
     def _bg():
         try:
@@ -4928,13 +5340,13 @@ except Exception as _p4_err:
 # ── Domain extension routers ──────────────────────────────────────────────────
 try:
     from services.api_gateway.routers import (
-        identity, connectors, canonical, evidence, approval, reasoning, policy, evaluation, reports, ingestion, webhooks
+        identity, connectors, canonical, evidence, approval, reasoning, policy, evaluation, reports, ingestion, webhooks, c07, observability
     )
     for _domain_router in (
         identity.router, connectors.router, canonical.router,
         evidence.router, approval.router, reasoning.router,
         policy.router, evaluation.router, reports.router,
-        ingestion.router, webhooks.router,
+        ingestion.router, webhooks.router, c07.router, observability.router,
     ):
         app.include_router(_domain_router, prefix="/v1")
         app.include_router(_domain_router)   # backward-compat bare path

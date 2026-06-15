@@ -124,12 +124,13 @@ class TestTCPGateCertification:
     Results are persisted to certification_runs for release sign-off.
     """
 
-    def test_t020_gate1_signature_blocked(self, db_url):
+    def test_t020_gate1_signature_blocked(self, db_url, monkeypatch):
         """T-020: Gate 1 rejects token with invalid signature."""
         from services.execution_gateway.handler import ExecutionGateway
         from kafka.mock_kafka import MockKafkaBroker
         import time
 
+        monkeypatch.delenv("ZOIKO_DEV_MODE", raising=False)
         gw    = ExecutionGateway(db_url, MockKafkaBroker())
         token = {
             "id": str(uuid.uuid4()), "tenant_id": "t1", "decision_id": str(uuid.uuid4()),
@@ -156,12 +157,13 @@ class TestTCPGateCertification:
         }])
         assert result.passed is False
 
-    def test_t021_gate2_expiry_blocked(self, db_url):
+    def test_t021_gate2_expiry_blocked(self, db_url, monkeypatch):
         """T-021: Gate 2 rejects expired token."""
         from services.execution_gateway.handler import ExecutionGateway
         from kafka.mock_kafka import MockKafkaBroker
         import time
 
+        monkeypatch.delenv("ZOIKO_DEV_MODE", raising=False)
         gw    = ExecutionGateway(db_url, MockKafkaBroker())
         token = {
             "id": str(uuid.uuid4()), "tenant_id": "t1", "decision_id": str(uuid.uuid4()),

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { zoikoApi, RegisterRequest } from "@/api/zoiko";
+import { zoikoApi, RegisterRequest, NotificationSettings } from "@/api/zoiko";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -434,25 +434,207 @@ function IntegrationsTab() {
 }
 
 function ApiKeysTab() {
+  const qc    = useQueryClient();
+  const toast = useToast();
+
+  const [showForm, setShowForm] = useState(false);
+  const [keyName,  setKeyName]  = useState("");
+  const [newKey,   setNewKey]   = useState<string | null>(null);
+
+  const keysQ = useQuery({
+    queryKey: ["api-keys"],
+    queryFn:  zoikoApi.listApiKeys,
+  });
+
+  const createM = useMutation({
+    mutationFn: () => zoikoApi.createApiKey(keyName.trim()),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["api-keys"] });
+      setNewKey(r.key);
+      setKeyName("");
+      setShowForm(false);
+    },
+    onError: (e: any) => toast.error("Failed to generate key", e?.response?.data?.detail || "Error"),
+  });
+
+  const revokeM = useMutation({
+    mutationFn: (id: string) => zoikoApi.revokeApiKey(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["api-keys"] });
+      toast.info("API key revoked", "");
+    },
+    onError: (e: any) => toast.error("Failed to revoke key", e?.response?.data?.detail || "Error"),
+  });
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">API keys for programmatic access. Keys are scoped to your tenant.</p>
-        <Button size="sm" className="gap-2"><Plus className="h-4 w-4" /> Generate Key</Button>
+        <Button size="sm" className="gap-2" onClick={() => { setShowForm(v => !v); setNewKey(null); }}>
+          <Plus className="h-4 w-4" /> Generate Key
+        </Button>
       </div>
+
+      {newKey && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-2">
+          <p className="text-sm font-semibold text-emerald-800">Your new API key (copy it now — it won't be shown again)</p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-xs bg-white border rounded px-3 py-2 break-all">{newKey}</code>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => { navigator.clipboard.writeText(newKey); toast.success("Copied", "API key copied to clipboard"); }}
+            >
+              Copy
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <Card>
+          <CardContent className="pt-5 space-y-3">
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Key name</label>
+              <Input
+                placeholder="e.g. CI Pipeline Key"
+                value={keyName}
+                onChange={e => setKeyName(e.target.value)}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={!keyName.trim() || createM.isPending}
+              onClick={() => createM.mutate()}
+              className="gap-2"
+            >
+              {createM.isPending ? "Generating…" : "Generate"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="pt-5 space-y-3">
-          {[
-            { name: "CI Pipeline Key",    key: "zk_live_••••••••••••••••a3f7", scopes: "read:cases,write:cases", created: "Jan 10, 2025", last_used: "2 min ago" },
-            { name: "Dashboard Key",      key: "zk_live_••••••••••••••••c2e9", scopes: "read:*",                 created: "Jan 12, 2025", last_used: "1 hr ago"  },
-          ].map(k => (
-            <div key={k.name} className="rounded-lg border px-4 py-3 flex items-center justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="font-semibold text-sm">{k.name}</p>
-                <code className="text-[10px] text-muted-foreground">{k.key}</code>
-                <p className="text-[10px] text-muted-foreground mt-0.5">Scopes: {k.scopes} · Created {k.created} · Last used {k.last_used}</p>
+          {keysQ.isLoading ? (
+            <LoadingSpinner />
+          ) : keysQ.data && keysQ.data.length > 0 ? (
+            keysQ.data.map(k => (
+              <div key={k.id} className="rounded-lg border px-4 py-3 flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm flex items-center gap-2">
+                    {k.name}
+                    {k.revoked && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500">REVOKED</span>}
+                  </p>
+                  <code className="text-[10px] text-muted-foreground">{k.key_prefix}</code>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Scopes: {k.scopes} · Created {new Date(k.created_at).toLocaleDateString()}
+                    {k.last_used_at ? ` · Last used ${new Date(k.last_used_at).toLocaleString()}` : " · Never used"}
+                  </p>
+                </div>
+                {!k.revoked && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={revokeM.isPending}
+                    onClick={() => revokeM.mutate(k.id)}
+                    className="text-destructive hover:text-destructive flex-shrink-0"
+                  >
+                    Revoke
+                  </Button>
+                )}
               </div>
-              <Button variant="outline" size="sm" className="text-destructive hover:text-destructive flex-shrink-0">Revoke</Button>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-6">No API keys yet. Generate one above.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ToggleSwitch({ checked, disabled, onChange }: { checked: boolean; disabled?: boolean; onChange: () => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        "relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors",
+        checked ? "bg-blue-600" : "bg-slate-300",
+        disabled && "opacity-50 cursor-not-allowed"
+      )}
+    >
+      <span className={cn(
+        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+        checked ? "translate-x-[18px]" : "translate-x-0.5"
+      )} />
+    </button>
+  );
+}
+
+const NOTIFICATION_OPTIONS: { key: keyof NotificationSettings; label: string; desc: string }[] = [
+  { key: "case_opened_email",         label: "New case opened",        desc: "Email when a new dispute case is opened for review" },
+  { key: "overcharge_detected_email", label: "Overcharge detected",    desc: "Email when validation finds a freight overcharge" },
+  { key: "approval_needed_email",     label: "Approval needed",        desc: "Email when a recovery proposal is awaiting manager approval" },
+  { key: "recovery_executed_email",   label: "Recovery executed",      desc: "Email when a credit memo / recovery has been executed" },
+];
+
+function NotificationsTab() {
+  const qc      = useQueryClient();
+  const toast   = useToast();
+  const role    = useAppSelector(s => s.auth.role);
+  const isAdmin = role === "admin";
+
+  const settingsQ = useQuery({
+    queryKey: ["notification-settings"],
+    queryFn:  zoikoApi.getNotificationSettings,
+  });
+
+  const updateM = useMutation({
+    mutationFn: (settings: NotificationSettings) => zoikoApi.updateNotificationSettings(settings),
+    onSuccess: (s) => {
+      qc.setQueryData(["notification-settings"], s);
+      toast.success("Saved", "Notification preferences updated");
+    },
+    onError: (e: any) => toast.error("Failed to save", e?.response?.data?.detail || "Error"),
+  });
+
+  if (settingsQ.isLoading) return <LoadingSpinner />;
+  const settings = settingsQ.data;
+
+  function toggle(key: keyof NotificationSettings) {
+    if (!settings) return;
+    updateM.mutate({ ...settings, [key]: !settings[key] });
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Choose which events send an email alert{isAdmin ? " for everyone on your team" : ""}.
+        {!isAdmin && " Only admins can change these settings."}
+      </p>
+      <Card>
+        <CardContent className="pt-0 divide-y">
+          {NOTIFICATION_OPTIONS.map(opt => (
+            <div key={opt.key} className="flex items-center justify-between py-4">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-full bg-secondary flex items-center justify-center flex-shrink-0">
+                  <Bell className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <div>
+                  <p className="font-semibold text-sm">{opt.label}</p>
+                  <p className="text-xs text-muted-foreground">{opt.desc}</p>
+                </div>
+              </div>
+              <ToggleSwitch
+                checked={!!settings?.[opt.key]}
+                disabled={!isAdmin || updateM.isPending}
+                onChange={() => toggle(opt.key)}
+              />
             </div>
           ))}
         </CardContent>
@@ -461,13 +643,65 @@ function ApiKeysTab() {
   );
 }
 
-function PlaceholderTab({ label }: { label: string }) {
+function BillingTab() {
+  const usageQ = useQuery({
+    queryKey: ["billing-usage"],
+    queryFn:  zoikoApi.getUsageSummary,
+  });
+
+  if (usageQ.isLoading) return <LoadingSpinner />;
+  const usage = usageQ.data;
+  if (!usage) return null;
+
+  const memberSince = usage.member_since
+    ? new Date(usage.member_since).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })
+    : "—";
+
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-3">
-      <div className="h-14 w-14 rounded-full bg-secondary flex items-center justify-center">
-        <Bell className="h-7 w-7 text-muted-foreground/50" />
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="pt-5 flex items-center justify-between">
+          <div>
+            <p className="text-xs text-muted-foreground font-medium">Current Plan</p>
+            <p className="font-semibold text-lg">{usage.plan}</p>
+          </div>
+          <div className="text-right">
+            <p className="text-xs text-muted-foreground font-medium">Member Since</p>
+            <p className="font-semibold">{memberSince}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card>
+          <CardContent className="pt-5">
+            <p className="text-xs text-muted-foreground font-medium">Total Cases</p>
+            <p className="text-2xl font-bold mt-1">{usage.total_cases.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5">
+            <p className="text-xs text-muted-foreground font-medium">Cases This Month</p>
+            <p className="text-2xl font-bold mt-1">{usage.cases_this_month.toLocaleString()}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5">
+            <p className="text-xs text-muted-foreground font-medium">Total Recovered</p>
+            <p className="text-2xl font-bold mt-1 text-emerald-700">{formatCurrency(usage.total_recovered, "INR")}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5">
+            <p className="text-xs text-muted-foreground font-medium">Active Users</p>
+            <p className="text-2xl font-bold mt-1">{usage.active_users.toLocaleString()}</p>
+          </CardContent>
+        </Card>
       </div>
-      <p className="font-medium">{label} settings coming soon</p>
+
+      <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-xs text-blue-800">
+        Usage figures reflect your tenant's live data. No payment information is collected or stored.
+      </div>
     </div>
   );
 }
@@ -681,8 +915,8 @@ export default function Settings() {
         {activeTab === "carriers"      && <CarriersTab />}
         {activeTab === "integrations"  && <IntegrationsTab />}
         {activeTab === "apikeys"       && <ApiKeysTab />}
-        {activeTab === "notifications" && <PlaceholderTab label="Notification" />}
-        {activeTab === "billing"       && <PlaceholderTab label="Billing" />}
+        {activeTab === "notifications" && <NotificationsTab />}
+        {activeTab === "billing"       && <BillingTab />}
       </div>
     </div>
   );

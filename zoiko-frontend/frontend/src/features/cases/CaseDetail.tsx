@@ -8,7 +8,7 @@ import {
   ArrowRight, ArrowLeft, CheckCircle2, Clock,
   FileText, Shield, Hash, Brain, Lock, AlertTriangle,
   ChevronRight, Zap, Users, RefreshCw, GitBranch,
-  ShieldCheck, Download, AlertCircle, Wand2,
+  ShieldCheck, Download, AlertCircle, Wand2, Wallet,
 } from "lucide-react";
 import { useToast } from "@/hooks/useToast";
 import type { CaseState } from "@/types";
@@ -117,6 +117,7 @@ export default function CaseDetail() {
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
   const [showSendForm,  setShowSendForm]    = useState(false);
+  const [sendingLetter, setSendingLetter]   = useState(false);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
   const eventsQ  = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),        retry: 1 });
@@ -126,6 +127,7 @@ export default function CaseDetail() {
   const tokenQ   = useQuery({ queryKey: ["token-for-case", id], queryFn: () => zoikoApi.getTokenForCase(id),      retry: false });
   const varQ     = useQuery({ queryKey: ["variances",       id], queryFn: () => zoikoApi.listVariances(id),       retry: false });
   const acrQ     = useQuery({ queryKey: ["acr",             id], queryFn: () => zoikoApi.getAcr(id),              retry: false });
+  const recoveryQ = useQuery({ queryKey: ["recovery-proof", id], queryFn: () => zoikoApi.getLatestRecoveryProof(id), retry: false });
 
   const sealMut = useMutation({
     mutationFn: () => zoikoApi.sealBundle(id),
@@ -144,9 +146,9 @@ export default function CaseDetail() {
     zoikoApi.downloadAcr(id).then(blob => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `acr_${id.slice(0, 8)}.zip`;
+      a.href = url; a.download = `acr_${id.slice(0, 8)}.json`;
       a.click(); URL.revokeObjectURL(url);
-    }).catch(() => toast.error("Download failed", "ACR zip not available — run Phase 4 demo first"));
+    }).catch(() => toast.error("Download failed", "ACR not yet issued for this case"));
   }
 
   async function handleGenerateLetter() {
@@ -163,15 +165,22 @@ export default function CaseDetail() {
     }
   }
 
-  function handleSendLetter() {
+  async function handleSendLetter() {
     if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
-    const lines = disputeLetter.split("\n");
-    const subjectLine = lines.find(l => l.startsWith("Subject:")) || "Freight Overcharge Dispute";
-    const subject = subjectLine.replace(/^Subject:\s*/i, "").trim();
-    const body = disputeLetter.replace(/^Subject:.*\n\n?/, "").trim();
-    const url = `mailto:${encodeURIComponent(sendEmail.trim())}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.location.href = url;
-    toast.success("Email client opened", `Draft ready for ${sendEmail.trim()}`);
+    setSendingLetter(true);
+    try {
+      await api.post(`/cases/${id}/dispute-letter/send`, {
+        recipient_email: sendEmail.trim(),
+        dispute_letter:  disputeLetter,
+      });
+      toast.success("Email sent", `Dispute letter sent to ${sendEmail.trim()}`);
+      setShowSendForm(false);
+    } catch (e: any) {
+      const msg = e?.response?.data?.detail;
+      toast.error("Send failed", typeof msg === "string" ? msg : "Could not send the email. Please try again.");
+    } finally {
+      setSendingLetter(false);
+    }
   }
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -589,6 +598,47 @@ export default function CaseDetail() {
         </div>
       )}
 
+      {/* ── Recovery Status (Phase 6) ───────────────────────────────── */}
+      {recoveryQ.data && (
+        <div className="bg-white rounded-xl border border-blue-200 p-4 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-lg bg-blue-100 flex items-center justify-center">
+                <Wallet className="h-3.5 w-3.5 text-blue-600" />
+              </div>
+              <p className="text-sm font-bold text-slate-700">Recovery Status</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", recoveryQ.data.ledger_status === "LEDGER_CLOSED" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
+                {recoveryQ.data.ledger_status}
+              </span>
+              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", recoveryQ.data.acr_ready ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500")}>
+                {recoveryQ.data.acr_ready ? "ACR READY" : "ACR NOT READY"}
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+              <p className="text-[9px] text-slate-400 uppercase font-semibold">Expected</p>
+              <p className="text-sm font-bold text-slate-700">{formatCurrency(recoveryQ.data.total_expected, recoveryQ.data.currency)}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+              <p className="text-[9px] text-slate-400 uppercase font-semibold">Recovered</p>
+              <p className="text-sm font-bold text-emerald-700">{formatCurrency(recoveryQ.data.total_recovered, recoveryQ.data.currency)}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
+              <p className="text-[9px] text-slate-400 uppercase font-semibold">Unrecovered</p>
+              <p className="text-sm font-bold text-amber-700">{formatCurrency(recoveryQ.data.total_unrecovered, recoveryQ.data.currency)}</p>
+            </div>
+          </div>
+          <div className="mt-2">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+              {recoveryQ.data.recovery_status}
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* ── ACR (Phase 4) ────────────────────────────────────────────── */}
       {acrQ.data && (
         <div className="bg-white rounded-xl border border-emerald-200 p-4 shadow-sm">
@@ -695,14 +745,17 @@ export default function CaseDetail() {
                     />
                     <button
                       onClick={handleSendLetter}
-                      disabled={!sendEmail.trim()}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
+                      disabled={!sendEmail.trim() || sendingLetter}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap flex items-center gap-1.5"
                     >
-                      Open Email Client
+                      {sendingLetter
+                        ? <><div className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />Sending…</>
+                        : "Send Email"
+                      }
                     </button>
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    💡 Opens your default email app (Outlook, Gmail, etc.) with the letter pre-filled. Zoiko never stores or sends your emails.
+                    💡 Sends the dispute letter directly to the carrier from Zoiko's email service.
                   </p>
                 </div>
               )}

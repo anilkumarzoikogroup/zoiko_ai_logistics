@@ -15,13 +15,16 @@ import os
 _BACKEND = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _PATHS = [
-    os.path.join(_BACKEND, "execution"),
-    os.path.join(_BACKEND, "core", "packages", "zoiko-common"),
-    os.path.join(_BACKEND, "platform"),
-    os.path.join(_BACKEND, "platform", "packages", "zoiko-kms"),
     os.path.join(_BACKEND, "governance"),   # for shared/redis_token.py
+    os.path.join(_BACKEND, "platform", "packages", "zoiko-kms"),
+    os.path.join(_BACKEND, "platform"),
+    os.path.join(_BACKEND, "core", "packages", "zoiko-common"),
+    os.path.join(_BACKEND, "execution"),
 ]
 
+# Inserted in this order so that, after all insert(0,...) calls, backend/execution
+# ends up FIRST in sys.path — its "services"/"shared" packages must win over the
+# same-named namespace packages in backend/governance.
 for _p in _PATHS:
     if _p not in sys.path:
         sys.path.insert(0, _p)

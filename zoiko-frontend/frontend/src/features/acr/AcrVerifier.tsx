@@ -39,42 +39,59 @@ export default function AcrVerifier() {
   const processFile = useCallback(async (file: File) => {
     setState({ ...INIT, status: "loading" });
     try {
-      // ── Extract ZIP ────────────────────────────────────────────────────
       const arrayBuf = await file.arrayBuffer();
-      const zip      = await JSZip.loadAsync(arrayBuf);
 
-      // Look for acr.json at root or inside a subdirectory
-      let acrEntry = zip.file("acr.json");
-      if (!acrEntry) {
-        const found = Object.keys(zip.files).find(name => name.endsWith("acr.json"));
-        if (found) acrEntry = zip.file(found);
+      let acrText: string;
+      let zip: JSZip | null = null;
+
+      // ── Try plain JSON first (e.g. acr_<id>.json from the case download) ──
+      try {
+        acrText = new TextDecoder("utf-8").decode(arrayBuf);
+        JSON.parse(acrText);
+      } catch {
+        // ── Not JSON — fall back to ZIP package containing acr.json ────────
+        zip = await JSZip.loadAsync(arrayBuf);
+
+        let acrEntry = zip.file("acr.json");
+        if (!acrEntry) {
+          const found = Object.keys(zip.files).find(name => name.endsWith("acr.json"));
+          if (found) acrEntry = zip.file(found);
+        }
+
+        if (!acrEntry) {
+          setState({
+            ...INIT,
+            status: "error",
+            errors: ["No JSON ACR found. Upload either acr_<case_id>.json or an acr-verify-*.zip package containing acr.json."],
+          });
+          return;
+        }
+
+        acrText = await acrEntry.async("string");
       }
 
-      if (!acrEntry) {
-        setState({
-          ...INIT,
-          status: "error",
-          errors: ["acr.json not found in ZIP. Make sure you uploaded the correct ACR verify package."],
-        });
-        return;
-      }
-
-      const acrText = await acrEntry.async("string");
-
-      // ── Inject public keys from public_keys/ folder if present ────────
-      let acrObj = JSON.parse(acrText);
-      const pubKeyFiles = Object.keys(zip.files).filter(n => n.includes("public_keys/") && !zip.files[n].dir);
-      if (pubKeyFiles.length > 0 && !acrObj.public_keys) {
-        acrObj.public_keys = {};
-        for (const pkFile of pubKeyFiles) {
-          const kid = pkFile.split("/").pop()?.replace(".pub", "") ?? pkFile;
-          const pkContent = await zip.file(pkFile)!.async("string");
-          acrObj.public_keys[kid] = pkContent.trim();
+      // ── Inject public keys from public_keys/ folder if present (ZIP only) ──
+      const acrObj = JSON.parse(acrText);
+      if (zip) {
+        const pubKeyFiles = Object.keys(zip.files).filter(n => n.includes("public_keys/") && !zip.files[n].dir);
+        if (pubKeyFiles.length > 0 && !acrObj.public_keys) {
+          acrObj.public_keys = {};
+          for (const pkFile of pubKeyFiles) {
+            const kid = pkFile.split("/").pop()?.replace(".pub", "") ?? pkFile;
+            const pkContent = await zip.file(pkFile)!.async("string");
+            acrObj.public_keys[kid] = pkContent.trim();
+          }
         }
       }
 
+      // ── Unwrap nested verify bundle (acr_<id>.json from /acr/download
+      //    stores the verifiable fields under artifact_hashes) ─────────────
+      const verifyObj = (acrObj.artifact_hashes && Array.isArray(acrObj.artifact_hashes.artifacts))
+        ? acrObj.artifact_hashes
+        : acrObj;
+
       // ── Parse + verify ─────────────────────────────────────────────────
-      const bundle = parseACRBundle(acrObj);
+      const bundle = parseACRBundle(verifyObj);
       const result = await verifyACRBundle(bundle);
 
       setState({
@@ -122,7 +139,7 @@ export default function AcrVerifier() {
         <h1 className="text-2xl font-bold text-zoiko-navy">ACR Offline Verifier</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Verify an Action Certification Record offline — no backend required.
-          Upload the <code className="bg-slate-100 rounded px-1">acr-verify-*.zip</code> downloaded from a case.
+          Upload the <code className="bg-slate-100 rounded px-1">acr_&lt;case_id&gt;.json</code> (or <code className="bg-slate-100 rounded px-1">acr-verify-*.zip</code>) downloaded from a case.
         </p>
       </div>
 
@@ -155,15 +172,15 @@ export default function AcrVerifier() {
         >
           <UploadCloud className="h-12 w-12 text-slate-400" />
           <div className="text-center">
-            <p className="text-sm font-semibold text-slate-700">Drop ACR verify package here</p>
+            <p className="text-sm font-semibold text-slate-700">Drop ACR file here</p>
             <p className="text-xs text-muted-foreground mt-1">
-              acr-verify-*.zip — or click to browse
+              acr_&lt;case_id&gt;.json or acr-verify-*.zip — or click to browse
             </p>
           </div>
           <input
             ref={inputRef}
             type="file"
-            accept=".zip"
+            accept=".json,.zip"
             className="hidden"
             onChange={handleChange}
           />

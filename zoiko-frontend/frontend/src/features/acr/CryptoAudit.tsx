@@ -44,7 +44,7 @@ export default function CryptoAudit() {
 
   // Load all cases (for exports) and closed cases (for ACR)
   const { data: allCases = [] } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases() });
-  const closedCases = allCases.filter(c => ["OUTCOME_RECORDED", "CLOSED", "DISPATCHED"].includes(c.state));
+  const closedCases = allCases.filter(c => c.state.startsWith("CLOSED") || ["OUTCOME_RECORDED", "DISPATCHED"].includes(c.state));
   const { data: stats } = useQuery({ queryKey: ["stats"], queryFn: () => zoikoApi.getStats() });
   const { data: tokens = [] } = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens() });
 
@@ -215,7 +215,7 @@ export default function CryptoAudit() {
         }
         try {
           const blob = await zoikoApi.downloadAcr(acrCaseId);
-          const name = `acr_${acrCaseId.slice(0, 8)}.zip`;
+          const name = `acr_${acrCaseId.slice(0, 8)}.json`;
           setDownloadBlob(blob);
           setDownloadName(name);
           setGenerated(true);

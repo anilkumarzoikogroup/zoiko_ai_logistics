@@ -298,18 +298,26 @@ class ExecutionGateway:
             with _db.get_conn(self._db_url) as conn:
                 cur = conn.cursor()
 
+                # Envelope hash — SHA-256 over (token_id || case_id || scope || gate_results)
+                _env_payload = f"{token_id}:{case_id}:{scope}:{gate_json}".encode()
+                env_hash     = hashlib.sha256(_env_payload).digest()
+                env_sig      = bytes(32)   # placeholder — production uses KMS signing
+                env_kid      = "dev-placeholder"
+
                 # Write execution_envelopes
                 cur.execute("""
                     INSERT INTO execution_envelopes
                         (id, tenant_id, token_id, case_id, scope, amount, currency,
-                         actor_sub, gate_results, connector_ref, status, dispatched_at)
-                    VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                         actor_sub, gate_results, connector_ref, status, dispatched_at,
+                         env_hash, signature, kid)
+                    VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
                 """, (
                     env_id, req.tenant_id, token_id,
                     uuid.UUID(case_id) if case_id else None,
                     scope, amount, currency,
                     req.actor_sub, gate_json, connector_ref,
                     "DISPATCHED", now,
+                    env_hash, env_sig, env_kid,
                 ))
 
                 # Mark token CONSUMED in DB

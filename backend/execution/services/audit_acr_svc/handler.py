@@ -98,6 +98,30 @@ class AuditACRHandler:
                 f"resolve or waive all variances before issuing ACR (T-011)"
             )
 
+        # Phase 6 — if this case has expected recoveries, the recovery pipeline
+        # must report acr_ready=true (ledger closed) before the ACR can be issued.
+        has_expected_recovery = _db.q1(
+            db_url=self._db_url,
+            sql="SELECT 1 FROM expected_recoveries WHERE case_id=%s::uuid AND tenant_id=%s::uuid LIMIT 1",
+            params=(case_id, tenant_id),
+        )
+        recovery_proof = _db.q1(
+            db_url=self._db_url,
+            sql="""
+                SELECT id, acr_ready, recovery_status, ledger_status
+                FROM   recovery_proofs
+                WHERE  case_id=%s::uuid AND tenant_id=%s::uuid AND superseded_by IS NULL
+                LIMIT  1
+            """,
+            params=(case_id, tenant_id),
+        )
+        if has_expected_recovery and not (recovery_proof and recovery_proof["acr_ready"]):
+            raise ValueError(
+                f"Case '{case_id}' has expected recoveries but no acr_ready recovery proof — "
+                f"close the ledger and generate a recovery proof "
+                f"(POST /v1/recovery/proofs) before issuing the ACR"
+            )
+
         artifacts = self._collect_artifacts(case_id, tenant_id)
         if len(artifacts) < 8:
             raise ValueError(
@@ -174,6 +198,8 @@ class AuditACRHandler:
         verify_bundle["closure_reason"]   = closure_reason
         verify_bundle["recovered_amount"] = recovered_amount
         verify_bundle["currency"]         = currency
+        verify_bundle["recovery_proof_id"] = str(recovery_proof["id"]) if recovery_proof else None
+        verify_bundle["recovery_status"]   = recovery_proof["recovery_status"] if recovery_proof else None
 
         with _db.get_conn(self._db_url) as conn:
           try:
@@ -204,28 +230,41 @@ class AuditACRHandler:
             # Write audit_worm_index row (APPEND-ONLY)
             cur.execute("""
                 INSERT INTO audit_worm_index
-                    (id, tenant_id, entity_type, entity_id, content_hash,
-                     signature, kid, is_locked, recorded_at)
-                VALUES (%s, %s::uuid, %s, %s::uuid, %s, %s, %s, FALSE, %s)
+                    (id, tenant_id, acr_id, worm_bucket, object_name, object_hash, indexed_at)
+                VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s)
             """, (
-                uuid.uuid4(), tenant_id, "ACR", acr_id,
-                acr_hash, acr_sig, acr_kid, now,
+                uuid.uuid4(), tenant_id, acr_id,
+                "dev-bucket",
+                f"acr/{acr_id}.json",
+                acr_hash,
+                now,
             ))
 
-            # Close the case
+            # Close the case — Clarification 05 §16 closure sub-state + reason
+            cur.execute(
+                "SELECT state FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+                (uuid.UUID(case_id), tenant_id),
+            )
+            _case_row  = cur.fetchone()
+            from_state = _case_row[0] if _case_row else "OUTCOME_RECORDED"
+
             cur.execute("""
-                UPDATE cases SET state='CLOSED'
+                UPDATE cases SET state=%s, closure_reason=%s
                 WHERE id=%s::uuid AND tenant_id=%s::uuid
-                  AND state IN ('OUTCOME_RECORDED', 'RECONCILED')
-            """, (uuid.UUID(case_id), tenant_id))
+                  AND state NOT LIKE 'CLOSED%%' AND state != 'ABORTED'
+            """, (new_state, closure_reason, uuid.UUID(case_id), tenant_id))
             cur.execute("""
                 INSERT INTO case_events
                     (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
-                VALUES (%s, %s::uuid, %s::uuid, 'ACR_ISSUED', 'OUTCOME_RECORDED', 'CLOSED', %s, %s::jsonb, %s)
+                VALUES (%s, %s::uuid, %s::uuid, 'ACR_ISSUED', %s, %s, %s, %s::jsonb, %s)
             """, (
                 uuid.uuid4(), tenant_id, uuid.UUID(case_id),
+                from_state, new_state,
                 actor_sub,
-                json.dumps({"acr_id": str(acr_id), "merkle_root": merkle_root.hex()}),
+                json.dumps({
+                    "acr_id": str(acr_id), "merkle_root": merkle_root.hex(),
+                    "closure_reason": closure_reason, "recovered_amount": recovered_amount,
+                }),
                 now,
             ))
 
@@ -266,6 +305,9 @@ class AuditACRHandler:
             is_locked     = False,
             issued_at     = now,
             verify_bundle = verify_bundle,
+            closure_reason   = closure_reason,
+            recovered_amount = recovered_amount,
+            currency         = currency,
         )
 
     def get_acr(self, case_id: str, tenant_id: str) -> Optional[dict]:
@@ -336,7 +378,7 @@ class AuditACRHandler:
         # 4. Finding hash
         row = _db.q1(
             db_url=self._db_url,
-            sql="SELECT encode(signature,'hex') AS hash FROM findings WHERE case_id=%s::uuid AND tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",
+            sql="SELECT encode(finding_hash,'hex') AS hash FROM findings WHERE case_id=%s::uuid AND tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",
             params=(case_id, tenant_id),
         )
         if row:

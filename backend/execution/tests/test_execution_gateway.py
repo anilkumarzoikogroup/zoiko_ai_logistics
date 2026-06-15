@@ -43,8 +43,9 @@ class TestGateValidation:
         base.update(overrides)
         return base
 
-    def test_gate2_rejects_expired_token(self):
+    def test_gate2_rejects_expired_token(self, monkeypatch):
         from datetime import datetime, timezone, timedelta
+        monkeypatch.delenv("ZOIKO_DEV_MODE", raising=False)
         gw    = self._gw()
         token = self._make_token(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
         result = gw._gate2_expiry(token)

@@ -1,55 +1,62 @@
 import { Routes, Route, Navigate } from "react-router-dom";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, Suspense, lazy } from "react";
 import AppLayout from "./layouts/AppLayout";
 import { Toaster } from "@/components/ui/toast";
 import { useAppSelector, useAppDispatch } from "@/store";
 import { login as loginAction } from "@/store/authSlice";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import axios from "axios";
 
-// auth
+// auth — kept eager (needed immediately on every load)
 import Login          from "./auth/Login";
 import GoogleCallback from "./auth/GoogleCallback";
 import ForgotPassword from "./auth/ForgotPassword";
 
-// features/dashboard
-import Home        from "./features/dashboard/Home";
-import Analytics   from "./features/dashboard/Analytics";
-import Performance from "./features/dashboard/Performance";
+// All feature pages — lazy loaded to reduce initial bundle
+const Home           = lazy(() => import("./features/dashboard/Home"));
+const Analytics      = lazy(() => import("./features/dashboard/Analytics"));
+const Performance    = lazy(() => import("./features/dashboard/Performance"));
+const Cases          = lazy(() => import("./features/cases/Cases"));
+const NewCase        = lazy(() => import("./features/cases/NewCase"));
+const CaseDetail     = lazy(() => import("./features/cases/CaseDetail"));
+const ExecuteRecovery= lazy(() => import("./features/cases/ExecuteRecovery"));
+const PaymentControl = lazy(() => import("./features/cases/PaymentControl"));
+const CarriersPage   = lazy(() => import("./features/carriers/CarriersPage"));
+const ConnectorsPage = lazy(() => import("./features/connectors/ConnectorsPage"));
+const RateControl    = lazy(() => import("./features/cases/RateControl"));
+const AnalystReview  = lazy(() => import("./features/governance/AnalystReview"));
+const ManagerApproval= lazy(() => import("./features/governance/ManagerApproval"));
+const CryptoAudit    = lazy(() => import("./features/acr/CryptoAudit"));
+const AcrVerifier    = lazy(() => import("./features/acr/AcrVerifier"));
+const Alerts         = lazy(() => import("./features/audit/Alerts"));
+const DatabasePage   = lazy(() => import("./features/audit/DatabasePage"));
+const KafkaEvents    = lazy(() => import("./features/audit/KafkaEvents"));
+const AuditConditions= lazy(() => import("./features/audit/AuditConditions"));
+const Settings       = lazy(() => import("./features/settings/Settings"));
+const UserManagement = lazy(() => import("./features/settings/UserManagement"));
+const TenantManagement   = lazy(() => import("./features/admin/TenantManagement"));
+const WorkspaceRequests  = lazy(() => import("./features/admin/WorkspaceRequests"));
+const StubViewer         = lazy(() => import("./features/stubs/StubViewer"));
+const DataGovernance = lazy(() => import("./features/compliance/DataGovernance"));
+const LegalHolds     = lazy(() => import("./features/compliance/LegalHolds"));
+const DataRetention  = lazy(() => import("./features/compliance/DataRetention"));
+const CryptoShred    = lazy(() => import("./features/compliance/CryptoShred"));
+const RestoreJobs    = lazy(() => import("./features/compliance/RestoreJobs"));
+const ArchiveJobs    = lazy(() => import("./features/compliance/ArchiveJobs"));
+const PurgeJobs      = lazy(() => import("./features/compliance/PurgeJobs"));
+const RecoveryDashboard = lazy(() => import("./features/recovery/RecoveryDashboard"));
+const ReconciliationPage= lazy(() => import("./features/reconciliation/ReconciliationPage"));
 
-// features/cases
-import Cases          from "./features/cases/Cases";
-import NewCase        from "./features/cases/NewCase";
-import CaseDetail     from "./features/cases/CaseDetail";
-import ExecuteRecovery from "./features/cases/ExecuteRecovery";
-import PaymentControl from "./features/cases/PaymentControl";
-import CarriersPage   from "./features/carriers/CarriersPage";
-import ConnectorsPage from "./features/connectors/ConnectorsPage";
-import RateControl    from "./features/cases/RateControl";
-
-// features/governance
-import AnalystReview  from "./features/governance/AnalystReview";
-import ManagerApproval from "./features/governance/ManagerApproval";
-
-// features/acr
-import CryptoAudit   from "./features/acr/CryptoAudit";
-import AcrVerifier   from "./features/acr/AcrVerifier";
-
-// features/audit
-import Alerts          from "./features/audit/Alerts";
-import DatabasePage    from "./features/audit/DatabasePage";
-import KafkaEvents     from "./features/audit/KafkaEvents";
-import AuditConditions from "./features/audit/AuditConditions";
-
-// features/settings
-import Settings        from "./features/settings/Settings";
-import UserManagement  from "./features/settings/UserManagement";
-
-// features/admin
-import TenantManagement    from "./features/admin/TenantManagement";
-import WorkspaceRequests   from "./features/admin/WorkspaceRequests";
-
-// features/stubs
-import StubViewer from "./features/stubs/StubViewer";
+function PageLoader() {
+  return (
+    <div className="flex items-center justify-center min-h-[320px]">
+      <div className="flex flex-col items-center gap-3">
+        <div className="h-8 w-8 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+        <p className="text-xs text-slate-400">Loading…</p>
+      </div>
+    </div>
+  );
+}
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const role = useAppSelector(state => state.auth.role);
@@ -91,6 +98,8 @@ export default function App() {
   return (
     <>
     <Toaster />
+    <ErrorBoundary>
+    <Suspense fallback={<PageLoader />}>
     <Routes>
       <Route path="/login"                    element={<Login />} />
       <Route path="/auth/google/callback"     element={<GoogleCallback />} />
@@ -132,6 +141,14 @@ export default function App() {
           </RequireRole>
         } />
 
+        {/* Phase 6 — Recovery pipeline */}
+        <Route path="/recovery"        element={<RecoveryDashboard />} />
+        <Route path="/reconciliation"  element={
+          <RequireRole allowed={["manager","admin"]}>
+            <ReconciliationPage />
+          </RequireRole>
+        } />
+
         {/* ACR */}
         <Route path="/crypto"    element={<CryptoAudit />} />
         <Route path="/verifier"  element={<AcrVerifier />} />
@@ -169,11 +186,22 @@ export default function App() {
             <StubViewer />
           </RequireRole>
         } />
+
+        {/* C07 — Data Governance (admin only) */}
+        <Route path="/governance/data"    element={<DataGovernance />} />
+        <Route path="/governance/holds"   element={<LegalHolds />} />
+        <Route path="/governance/retention" element={<DataRetention />} />
+        <Route path="/governance/crypto-shred" element={<CryptoShred />} />
+        <Route path="/governance/restore" element={<RestoreJobs />} />
+        <Route path="/governance/archive" element={<ArchiveJobs />} />
+        <Route path="/governance/purge"   element={<PurgeJobs />} />
       </Route>
 
       {/* Catch-all → login page */}
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
+    </Suspense>
+    </ErrorBoundary>
     </>
   );
 }

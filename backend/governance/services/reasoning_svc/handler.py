@@ -347,15 +347,15 @@ class ReasoningHandler:
                 cur.execute("""
                     INSERT INTO findings
                         (id, tenant_id, case_id, bundle_id, confidence,
-                         rule_trace, signature, kid, created_at,
+                         rule_trace, finding_hash, signature, kid, created_at,
                          ai_confidence, risk_level, ai_reasoning)
-                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s,
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s,
                             %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                 """, (
                     finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
                     SC001_CONFIDENCE, json.dumps(rule_trace),
-                    finding_sig, finding_kid, now,
+                    finding_hash, finding_sig, finding_kid, now,
                     ai_conf, ai_risk, ai_text,
                 ))
             else:
@@ -363,13 +363,13 @@ class ReasoningHandler:
                 cur.execute("""
                     INSERT INTO findings
                         (id, tenant_id, case_id, bundle_id, confidence,
-                         rule_trace, signature, kid, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s)
+                         rule_trace, finding_hash, signature, kid, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                 """, (
                     finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
                     SC001_CONFIDENCE, json.dumps(rule_trace),
-                    finding_sig, finding_kid, now,
+                    finding_hash, finding_sig, finding_kid, now,
                 ))
 
             # INSERT decision_proposal with reasoning_trace_id + governance_envelope + action_intent_id

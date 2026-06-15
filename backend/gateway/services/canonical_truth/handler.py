@@ -105,7 +105,7 @@ class CanonicalHandler:
                     (id, tenant_id, invoice_id, origin_city, dest_city,
                      weight_lbs, mode, equipment_type, created_at)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT DO NOTHING
+                ON CONFLICT (invoice_id) DO NOTHING
             """, (
                 ship_id, tenant_id, inv_id, origin_city, dest_city,
                 weight_lbs,

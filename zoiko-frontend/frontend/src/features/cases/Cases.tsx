@@ -53,17 +53,27 @@ export default function Cases() {
   const nav = useNavigate();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<CaseState | "ALL">("ALL");
-  const { data: cases, isLoading } = useQuery({
-    queryKey: ["cases"],
-    queryFn:  () => zoikoApi.listCases(),
-    refetchInterval: 5000,   // spec: poll active cases every 5s
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
+
+  const { data: paged, isLoading } = useQuery({
+    queryKey: ["cases", page, filter !== "ALL" ? filter : undefined],
+    queryFn:  () => zoikoApi.listCasesPaged({
+      page,
+      page_size: PAGE_SIZE,
+      state: filter !== "ALL" ? filter : undefined,
+    }),
+    refetchInterval: 10000,
   });
 
-  const filtered = (cases || [])
-    .filter(c => filter === "ALL" || c.state === filter)
+  const cases   = paged?.cases ?? [];
+  const total   = paged?.total ?? 0;
+  const pages   = paged?.pages ?? 1;
+
+  const filtered = cases
     .filter(c => !search || c.id.includes(search) || (c.carrier ?? "").toLowerCase().includes(search.toLowerCase()) || (c.shipment_ref ?? "").toLowerCase().includes(search.toLowerCase()));
 
-  const byState = (cases || []).reduce<Record<string, number>>((acc, c) => {
+  const byState = cases.reduce<Record<string, number>>((acc, c) => {
     acc[c.state] = (acc[c.state] ?? 0) + 1;
     return acc;
   }, {});
@@ -137,7 +147,7 @@ export default function Cases() {
           {STATE_TABS.map(s => (
             <button
               key={s}
-              onClick={() => setFilter(s)}
+              onClick={() => { setFilter(s); setPage(1); }}
               className={cn(
                 "flex-shrink-0 px-3 py-2.5 text-[11px] font-semibold border-b-2 transition-colors whitespace-nowrap",
                 filter === s
@@ -211,11 +221,41 @@ export default function Cases() {
           </>
         )}
 
-        {/* Footer count */}
-        {!isLoading && filtered.length > 0 && (
-          <div className="px-5 py-3 border-t border-slate-100 text-[10px] text-slate-400 flex items-center justify-between">
-            <span>Showing {filtered.length} of {cases?.length ?? 0} cases</span>
-            <span className="text-[10px] text-slate-300">Last updated: just now</span>
+        {/* Pagination footer */}
+        {!isLoading && (
+          <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between gap-3">
+            <span className="text-[10px] text-slate-400">
+              {total} total · page {page} of {pages}
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="px-2.5 py-1 text-[11px] border border-slate-200 rounded-md text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                ‹ Prev
+              </button>
+              {Array.from({ length: Math.min(5, pages) }, (_, i) => {
+                const p = page <= 3 ? i + 1 : page - 2 + i;
+                if (p > pages) return null;
+                return (
+                  <button key={p} onClick={() => setPage(p)}
+                    className={cn(
+                      "w-7 h-7 text-[11px] rounded-md border transition-colors",
+                      p === page ? "bg-blue-600 border-blue-600 text-white font-bold" : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    )}>
+                    {p}
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => setPage(p => Math.min(pages, p + 1))}
+                disabled={page >= pages}
+                className="px-2.5 py-1 text-[11px] border border-slate-200 rounded-md text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Next ›
+              </button>
+            </div>
           </div>
         )}
       </div>

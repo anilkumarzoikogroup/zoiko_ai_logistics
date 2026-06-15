@@ -14,23 +14,23 @@ router = APIRouter(tags=["evidence"])
 # ── Evidence Bundles ───────────────────────────────────────────────────────────
 
 class EvidenceBundleIn(BaseModel):
-    case_id:            str
-    completeness_score: float = 0.0
-    notes:              str = ""
+    case_id: str
+    notes:   str = ""
 
 @router.post("/evidence/bundles", status_code=201)
 def create_evidence_bundle(body: EvidenceBundleIn, claims=Depends(get_claims)):
     case = q1("SELECT id FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid", (body.case_id, claims.tenant_id))
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
+    placeholder = bytes(32)
     row = q1("""
-        INSERT INTO evidence_bundles (id, tenant_id, case_id, completeness_score, status)
-        VALUES (gen_random_uuid(), %s::uuid, %s::uuid, %s, 'OPEN')
-        RETURNING id, tenant_id, case_id, completeness_score, status, created_at
-    """, (claims.tenant_id, body.case_id, body.completeness_score))
+        INSERT INTO evidence_bundles (id, tenant_id, case_id, bundle_hash, signature, kid, completeness_status)
+        VALUES (gen_random_uuid(), %s::uuid, %s::uuid, %s, %s, %s, 'INCOMPLETE')
+        RETURNING id, tenant_id, case_id, completeness_status, created_at
+    """, (claims.tenant_id, body.case_id, placeholder, placeholder, "dev-placeholder"))
     return {"id": str(row["id"]), "tenant_id": str(row["tenant_id"]),
-            "case_id": str(row["case_id"]), "completeness_score": float(row["completeness_score"]),
-            "status": row["status"], "created_at": row["created_at"].isoformat()}
+            "case_id": str(row["case_id"]), "completeness_status": row["completeness_status"],
+            "created_at": row["created_at"].isoformat()}
 
 @router.get("/cases/{case_id}/evidence")
 def get_case_evidence(case_id: str, claims=Depends(get_claims)):
@@ -38,7 +38,7 @@ def get_case_evidence(case_id: str, claims=Depends(get_claims)):
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
     bundles = q("""
-        SELECT eb.id, eb.case_id, eb.completeness_score, eb.status, eb.created_at,
+        SELECT eb.id, eb.case_id, eb.completeness_status, eb.created_at,
                COUNT(ei.id) AS item_count
         FROM evidence_bundles eb
         LEFT JOIN evidence_items ei ON ei.bundle_id = eb.id
@@ -47,31 +47,31 @@ def get_case_evidence(case_id: str, claims=Depends(get_claims)):
     """, (case_id, claims.tenant_id))
     return {"case_id": case_id, "bundles": [
         {"id": str(b["id"]), "case_id": str(b["case_id"]),
-         "completeness_score": float(b["completeness_score"]),
-         "status": b["status"], "item_count": b["item_count"],
+         "completeness_status": b["completeness_status"],
+         "item_count": b["item_count"],
          "created_at": b["created_at"].isoformat()} for b in bundles
     ]}
 
 @router.get("/evidence/bundles/{bundle_id}")
 def get_evidence_bundle(bundle_id: str, claims=Depends(get_claims)):
     row = q1("""
-        SELECT eb.id, eb.tenant_id, eb.case_id, eb.completeness_score, eb.status, eb.created_at
+        SELECT eb.id, eb.tenant_id, eb.case_id, eb.completeness_status, eb.created_at
         FROM evidence_bundles eb WHERE eb.id=%s::uuid AND eb.tenant_id=%s::uuid
     """, (bundle_id, claims.tenant_id))
     if not row:
         raise HTTPException(status_code=404, detail="Evidence bundle not found")
     items = q("""
-        SELECT id, bundle_id, item_type, content_hash, created_at
-        FROM evidence_items WHERE bundle_id=%s::uuid ORDER BY created_at
+        SELECT id, bundle_id, item_type, item_hash, added_at
+        FROM evidence_items WHERE bundle_id=%s::uuid ORDER BY added_at
     """, (bundle_id,))
     return {
         "id": str(row["id"]), "tenant_id": str(row["tenant_id"]),
         "case_id": str(row["case_id"]),
-        "completeness_score": float(row["completeness_score"]),
-        "status": row["status"], "created_at": row["created_at"].isoformat(),
+        "completeness_status": row["completeness_status"],
+        "created_at": row["created_at"].isoformat(),
         "items": [{"id": str(i["id"]), "item_type": i["item_type"],
-                   "content_hash": i["content_hash"],
-                   "created_at": i["created_at"].isoformat()} for i in items],
+                   "item_hash": i["item_hash"].hex(),
+                   "added_at": i["added_at"].isoformat()} for i in items],
     }
 
 
@@ -79,20 +79,20 @@ def get_evidence_bundle(bundle_id: str, claims=Depends(get_claims)):
 
 @router.get("/cases/{case_id}/timeline")
 def get_case_timeline(case_id: str, claims=Depends(get_claims)):
-    case = q1("SELECT id, status FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid", (case_id, claims.tenant_id))
+    case = q1("SELECT id, state FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid", (case_id, claims.tenant_id))
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
 
     # Combine case_events (append-only) + case_timeline_entries
     events = q("""
-        SELECT 'event' AS source, id, event_type, actor, payload::text AS summary, occurred_at
-        FROM case_events WHERE case_id=%s::uuid
+        SELECT 'event' AS source, id, event_type, actor_sub AS actor, payload::text AS summary, occurred_at
+        FROM case_events WHERE case_id=%s::uuid AND tenant_id=%s::uuid
         UNION ALL
         SELECT 'timeline' AS source, id, event_type, actor, summary, occurred_at
         FROM case_timeline_entries WHERE case_id=%s::uuid AND tenant_id=%s::uuid
         ORDER BY occurred_at ASC
-    """, (case_id, case_id, claims.tenant_id))
-    return {"case_id": case_id, "status": case["status"], "entries": [
+    """, (case_id, claims.tenant_id, case_id, claims.tenant_id))
+    return {"case_id": case_id, "status": case["state"], "entries": [
         {"source": e["source"], "id": str(e["id"]),
          "event_type": e["event_type"], "actor": e["actor"],
          "summary": e["summary"] or "",

@@ -4,7 +4,13 @@ import type {
   Case, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
   DecisionProposal, GovernanceToken, GovernanceDecision, CaseEvent,
   KafkaEvent, DashboardStats, SourceRecord, VarianceRecord, ACRBundle,
-  ExecutionResult,
+  ExecutionResult, RecoveryProof,
+  ExpectedRecovery, RecoveryInstrument, RecoveryMatch, RecoveryException, ReconcileResult,
+  LegalHold, RetentionPolicy, RetentionAssignment,
+  CryptoShredRequest, CryptoShredVerification,
+  RestoreJob, RestoreVerification,
+  ArchiveJob, PurgeJob,
+  ObservabilityMetrics, ObservabilityAlert,
 } from "@/types";
 
 // Simulates network latency for mock mode so loading states are visible
@@ -36,6 +42,41 @@ export interface UserItem {
   created_at: string;
 }
 
+export interface ApiKeyItem {
+  id:           string;
+  name:         string;
+  key_prefix:   string;
+  scopes:       string;
+  created_at:   string;
+  last_used_at: string | null;
+  revoked:      boolean;
+}
+
+export interface CreateApiKeyResponse {
+  id:         string;
+  name:       string;
+  key:        string;
+  key_prefix: string;
+  scopes:     string;
+  created_at: string;
+}
+
+export interface NotificationSettings {
+  case_opened_email:         boolean;
+  overcharge_detected_email: boolean;
+  approval_needed_email:     boolean;
+  recovery_executed_email:   boolean;
+}
+
+export interface UsageSummary {
+  plan:             string;
+  member_since:     string;
+  total_cases:      number;
+  cases_this_month: number;
+  total_recovered:  number;
+  active_users:     number;
+}
+
 export const zoikoApi = {
   // ---------- Auth ----------
   async login(email: string, password: string): Promise<LoginResponse> {
@@ -53,6 +94,38 @@ export const zoikoApi = {
     return data.users;
   },
 
+  // ---------- API Keys ----------
+  async listApiKeys(): Promise<ApiKeyItem[]> {
+    const { data } = await api.get<{ api_keys: ApiKeyItem[] }>("/api-keys");
+    return data.api_keys;
+  },
+
+  async createApiKey(name: string, scopes = "read:*"): Promise<CreateApiKeyResponse> {
+    const { data } = await api.post<CreateApiKeyResponse>("/api-keys", { name, scopes });
+    return data;
+  },
+
+  async revokeApiKey(id: string): Promise<void> {
+    await api.delete(`/api-keys/${id}`);
+  },
+
+  // ---------- Notification Settings ----------
+  async getNotificationSettings(): Promise<NotificationSettings> {
+    const { data } = await api.get<NotificationSettings>("/settings/notifications");
+    return data;
+  },
+
+  async updateNotificationSettings(settings: NotificationSettings): Promise<NotificationSettings> {
+    const { data } = await api.put<NotificationSettings>("/settings/notifications", settings);
+    return data;
+  },
+
+  // ---------- Billing / Usage ----------
+  async getUsageSummary(): Promise<UsageSummary> {
+    const { data } = await api.get<UsageSummary>("/billing/usage");
+    return data;
+  },
+
   // ---------- Dashboard ----------
   async getStats(): Promise<DashboardStats> {
     if (USE_MOCK) { await delay(); return mocks.mockStats; }
@@ -61,14 +134,27 @@ export const zoikoApi = {
   },
 
   // ---------- Cases ----------
-  async listCases(filters?: { state?: string }): Promise<Case[]> {
+  async listCases(filters?: { state?: string; page?: number; page_size?: number }): Promise<Case[]> {
     if (USE_MOCK) {
       await delay();
       return filters?.state
         ? mocks.mockCases.filter(c => c.state === filters.state)
         : mocks.mockCases;
     }
-    const { data } = await api.get<Case[]>("/cases", { params: filters });
+    const { data } = await api.get<{ cases: Case[]; total: number; page: number; pages: number } | Case[]>(
+      "/cases", { params: filters }
+    );
+    // Handle both paginated response and legacy array response
+    return Array.isArray(data) ? data : data.cases;
+  },
+
+  async listCasesPaged(filters?: { state?: string; page?: number; page_size?: number }): Promise<{ cases: Case[]; total: number; page: number; pages: number }> {
+    if (USE_MOCK) {
+      await delay();
+      const cases = filters?.state ? mocks.mockCases.filter(c => c.state === filters.state) : mocks.mockCases;
+      return { cases, total: cases.length, page: 1, pages: 1 };
+    }
+    const { data } = await api.get<{ cases: Case[]; total: number; page: number; pages: number }>("/cases", { params: filters });
     return data;
   },
 
@@ -279,6 +365,105 @@ export const zoikoApi = {
     return response.data as Blob;
   },
 
+  // ---------- Phase 6 — Recovery ----------
+  async getLatestRecoveryProof(caseId: string): Promise<RecoveryProof | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    try {
+      const { data } = await api4.get<RecoveryProof>(`/recovery/proofs:latest`, { params: { case_id: caseId } });
+      return data;
+    } catch {
+      return null;
+    }
+  },
+
+  async listRecoveryProofsByCase(caseId: string): Promise<RecoveryProof[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api4.get<RecoveryProof[]>(`/recovery/proofs:by-case`, { params: { case_id: caseId } });
+    return data;
+  },
+
+  async generateRecoveryProof(caseId: string): Promise<RecoveryProof> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data } = await api4.post<RecoveryProof>("/recovery/proofs", { case_id: caseId });
+    return data;
+  },
+
+  async listExpectedRecoveriesByCase(caseId: string): Promise<ExpectedRecovery[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api4.get<ExpectedRecovery[]>("/recovery/expected:by-case", { params: { case_id: caseId } });
+    return data;
+  },
+
+  async createExpectedRecovery(payload: {
+    case_id: string;
+    expected_amount: number;
+    currency?: string;
+    expected_recovery_method?: string;
+    counterparty_type?: string;
+    counterparty_id?: string;
+    expected_external_invoice_ref?: string;
+    authorization_decision_id?: string;
+  }): Promise<ExpectedRecovery> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await api4.post<ExpectedRecovery>("/recovery/expected", payload);
+    return data;
+  },
+
+  async listRecoveryInstrumentsByCase(caseId: string): Promise<RecoveryInstrument[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api4.get<RecoveryInstrument[]>("/recovery/instruments:by-case", { params: { case_id: caseId } });
+    return data;
+  },
+
+  async createRecoveryInstrument(payload: {
+    instrument_type: string;
+    instrument_amount: number;
+    currency?: string;
+    counterparty_type?: string;
+    counterparty_id?: string;
+    related_case_id?: string;
+    external_reference?: string;
+    related_external_invoice_ref?: string;
+    instrument_date?: string;
+  }): Promise<RecoveryInstrument> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await api4.post<RecoveryInstrument>("/recovery/instruments", payload);
+    return data;
+  },
+
+  async listRecoveryMatchesByCase(caseId: string): Promise<RecoveryMatch[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api4.get<RecoveryMatch[]>("/recovery/matches:by-case", { params: { case_id: caseId } });
+    return data;
+  },
+
+  async createRecoveryMatch(expectedRecoveryId: string): Promise<RecoveryMatch> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await api4.post<RecoveryMatch>("/recovery/match", { expected_recovery_id: expectedRecoveryId });
+    return data;
+  },
+
+  async reverseRecoveryMatch(matchId: string, reason = ""): Promise<RecoveryMatch> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await api4.post<RecoveryMatch>(`/recovery/matches/${matchId}/reverse`, { reason });
+    return data;
+  },
+
+  async listRecoveryExceptions(caseId?: string, stuckAfterDays = 7): Promise<RecoveryException[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await api4.get<RecoveryException[]>("/recovery/exceptions", {
+      params: { case_id: caseId, stuck_after_days: stuckAfterDays },
+    });
+    return data;
+  },
+
+  // ---------- Phase 4 — Reconciliation ----------
+  async reconcileEnvelope(envelopeId: string, actorSub: string): Promise<ReconcileResult> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data } = await api4.post<ReconcileResult>("/reconcile", { envelope_id: envelopeId, actor_sub: actorSub });
+    return data;
+  },
+
   // ---------- Contract rates ----------
   async listContractRates(): Promise<{ id: string; carrier: string; rate_type: string; rate_value: number; currency: string; effective_on: string; expires_on: string | null }[]> {
     if (USE_MOCK) {
@@ -376,6 +561,135 @@ export const zoikoApi = {
                created_at: new Date().toISOString() };
     }
     const { data } = await api.post<TenantCreateResponse>("/admin/tenants", req);
+    return data;
+  },
+
+  // ── C07 — Observability ──────────────────────────────────────────────────────
+  async getObservabilityMetrics(): Promise<ObservabilityMetrics> {
+    const { data } = await api.get<ObservabilityMetrics>("/data/observability/metrics");
+    return data;
+  },
+
+  async getObservabilityAlerts(): Promise<ObservabilityAlert[]> {
+    const { data } = await api.get<ObservabilityAlert[]>("/data/observability/alerts");
+    return data;
+  },
+
+  // ── C07 — Legal Holds ────────────────────────────────────────────────────────
+  async createLegalHold(payload: { hold_scope: string; scope_id: string; reason_code: string; approved_by?: string }): Promise<LegalHold> {
+    const { data } = await api.post<LegalHold>("/legal-holds", payload);
+    return data;
+  },
+
+  async getLegalHold(id: string): Promise<LegalHold> {
+    const { data } = await api.get<LegalHold>(`/legal-holds/${id}`);
+    return data;
+  },
+
+  async releaseLegalHold(id: string, released_by: string): Promise<LegalHold> {
+    const { data } = await api.post<LegalHold>(`/legal-holds/${id}/release`, { released_by });
+    return data;
+  },
+
+  async legalHoldsByScope(scope_id: string): Promise<LegalHold[]> {
+    const { data } = await api.get<LegalHold[]>("/legal-holds:by-scope", { params: { scope_id } });
+    return data;
+  },
+
+  // ── C07 — Retention ─────────────────────────────────────────────────────────
+  async createRetentionPolicy(payload: { policy_name: string; data_class: string; retention_class: string; retention_days: number; archive_after_days?: number; purge_after_days?: number }): Promise<RetentionPolicy> {
+    const { data } = await api.post<RetentionPolicy>("/data/retention/policies", payload);
+    return data;
+  },
+
+  async getRetentionPolicy(id: string): Promise<RetentionPolicy> {
+    const { data } = await api.get<RetentionPolicy>(`/data/retention/policies/${id}`);
+    return data;
+  },
+
+  async assignRetention(payload: { record_type: string; record_id: string; policy_id: string }): Promise<RetentionAssignment> {
+    const { data } = await api.post<RetentionAssignment>("/data/retention/assign", payload);
+    return data;
+  },
+
+  async retentionByRecord(record_id: string): Promise<RetentionAssignment | null> {
+    try {
+      const { data } = await api.get<RetentionAssignment>("/data/retention:by-record", { params: { record_id } });
+      return data;
+    } catch { return null; }
+  },
+
+  // ── C07 — Archive Jobs ───────────────────────────────────────────────────────
+  async createArchiveJob(payload: { archive_scope: string; record_ids: string[]; retention_policy_id?: string }): Promise<ArchiveJob> {
+    const { data } = await api.post<ArchiveJob>("/data/archive/jobs", payload);
+    return data;
+  },
+
+  async getArchiveJob(id: string): Promise<ArchiveJob> {
+    const { data } = await api.get<ArchiveJob>(`/data/archive/jobs/${id}`);
+    return data;
+  },
+
+  async restoreFromArchive(archive_id: string): Promise<RestoreJob> {
+    const { data } = await api.post<RestoreJob>(`/data/archive/${archive_id}/restore`);
+    return data;
+  },
+
+  // ── C07 — Crypto-Shred ───────────────────────────────────────────────────────
+  async requestCryptoShred(payload: { subject_ref: string; affected_key_ids: string[]; affected_record_ids: string[] }): Promise<CryptoShredRequest> {
+    const { data } = await api.post<CryptoShredRequest>("/privacy/crypto-shred", payload);
+    return data;
+  },
+
+  async getCryptoShred(id: string): Promise<CryptoShredRequest> {
+    const { data } = await api.get<CryptoShredRequest>(`/privacy/crypto-shred/${id}`);
+    return data;
+  },
+
+  async verifyCryptoShred(id: string): Promise<CryptoShredVerification> {
+    const { data } = await api.get<CryptoShredVerification>(`/privacy/crypto-shred/${id}/verify`);
+    return data;
+  },
+
+  // ── C07 — Restore Jobs ───────────────────────────────────────────────────────
+  async createRestoreJob(payload: { restore_type: string; restored_scope: string }): Promise<RestoreJob> {
+    const { data } = await api.post<RestoreJob>("/data/restore/jobs", payload);
+    return data;
+  },
+
+  async getRestoreJob(id: string): Promise<RestoreJob> {
+    const { data } = await api.get<RestoreJob>(`/data/restore/jobs/${id}`);
+    return data;
+  },
+
+  async getRestoreVerification(restore_job_id: string): Promise<RestoreVerification> {
+    const { data } = await api.get<RestoreVerification>(`/data/restore/jobs/${restore_job_id}/verification`);
+    return data;
+  },
+
+  async submitRestoreVerification(restore_job_id: string, checks: Record<string, boolean>): Promise<RestoreVerification> {
+    const { data } = await api.post<RestoreVerification>(`/data/restore/jobs/${restore_job_id}/verify`, checks);
+    return data;
+  },
+
+  async approveRestoreUse(restore_job_id: string): Promise<RestoreJob> {
+    const { data } = await api.post<RestoreJob>(`/data/restore/jobs/${restore_job_id}/approve-use`);
+    return data;
+  },
+
+  // ── C07 — Purge Jobs ─────────────────────────────────────────────────────────
+  async createPurgeJob(payload: { purge_scope: string; record_count: number; retention_policy_id?: string; scope_ids?: string[] }): Promise<PurgeJob> {
+    const { data } = await api.post<PurgeJob>("/data/purge/jobs", payload);
+    return data;
+  },
+
+  async getPurgeJob(id: string): Promise<PurgeJob> {
+    const { data } = await api.get<PurgeJob>(`/data/purge/jobs/${id}`);
+    return data;
+  },
+
+  async approvePurge(id: string, approval_id: string): Promise<PurgeJob> {
+    const { data } = await api.post<PurgeJob>(`/data/purge/jobs/${id}/approve`, { approval_id });
     return data;
   },
 };

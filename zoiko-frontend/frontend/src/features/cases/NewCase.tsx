@@ -153,7 +153,14 @@ export default function NewCase() {
     }),
     onSuccess: (c) => {
       qc.invalidateQueries({ queryKey: ["cases"] });
-      toast.success("Case submitted", `Overcharge detection pipeline started for ${form.carrier}`);
+      if (c.duplicate) {
+        toast.error(
+          "Duplicate invoice detected",
+          `This invoice was already submitted — showing the existing case (${c.deduplication_outcome ?? "DUPLICATE_OF"}).`
+        );
+      } else {
+        toast.success("Case submitted", `Overcharge detection pipeline started for ${form.carrier}`);
+      }
       // Navigate to the case detail page; use replace so Back doesn't return to this form
       nav(`/cases/${c.id}`, { replace: true });
     },

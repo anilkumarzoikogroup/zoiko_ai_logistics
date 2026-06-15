@@ -53,6 +53,48 @@ class UsersListResponse(BaseModel):
     users:     List[UserItem]
 
 
+class CreateApiKeyRequest(BaseModel):
+    name:   str
+    scopes: str = "read:*"
+
+class ApiKeyItem(BaseModel):
+    id:           str
+    name:         str
+    key_prefix:   str
+    scopes:       str
+    created_at:   str
+    last_used_at: Optional[str] = None
+    revoked:      bool
+
+class CreateApiKeyResponse(BaseModel):
+    id:         str
+    name:       str
+    key:        str   # full key — shown only once
+    key_prefix: str
+    scopes:     str
+    created_at: str
+
+class ApiKeysListResponse(BaseModel):
+    tenant_id: str
+    api_keys:  List[ApiKeyItem]
+
+
+class NotificationSettings(BaseModel):
+    case_opened_email:         bool = True
+    overcharge_detected_email: bool = True
+    approval_needed_email:     bool = True
+    recovery_executed_email:   bool = True
+
+
+class UsageSummary(BaseModel):
+    plan:             str
+    member_since:     str
+    total_cases:      int
+    cases_this_month: int
+    total_recovered:  float
+    active_users:     int
+
+
 # ── Requests ──────────────────────────────────────────────────────────────────
 
 class InvoiceRequest(BaseModel):

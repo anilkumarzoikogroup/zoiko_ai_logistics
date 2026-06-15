@@ -42,6 +42,38 @@ REGISTERED_TOPICS = {
     "zoiko.evidence.bundled.dlq",             "zoiko.finding.generated.dlq",
     "zoiko.governance.decision.issued.dlq",   "zoiko.governance.token.issued.dlq",
     "zoiko.execution.dispatched.dlq",         "zoiko.reconciliation.updated.dlq",
+
+    # Phase 6 (Clarification 06 Slice 1) — financial recovery layer
+    "zoiko.recovery.expected.created",        "zoiko.recovery.instrument.received",
+    "zoiko.recovery.expected.created.retry",  "zoiko.recovery.instrument.received.retry",
+    "zoiko.recovery.expected.created.dlq",    "zoiko.recovery.instrument.received.dlq",
+    "zoiko.recovery.match.created",           "zoiko.recovery.match.reversed",
+    "zoiko.recovery.match.created.retry",     "zoiko.recovery.match.reversed.retry",
+    "zoiko.recovery.match.created.dlq",       "zoiko.recovery.match.reversed.dlq",
+    "zoiko.ledger.entry.posted",              "zoiko.ledger.entry.reversed",
+    "zoiko.ledger.entry.posted.retry",        "zoiko.ledger.entry.reversed.retry",
+    "zoiko.ledger.entry.posted.dlq",          "zoiko.ledger.entry.reversed.dlq",
+    "zoiko.recovery.writeoff.requested",      "zoiko.recovery.writeoff.posted",
+    "zoiko.recovery.writeoff.requested.retry","zoiko.recovery.writeoff.posted.retry",
+    "zoiko.recovery.writeoff.requested.dlq",  "zoiko.recovery.writeoff.posted.dlq",
+    "zoiko.recovery.proof.generated",
+    "zoiko.recovery.proof.generated.retry",
+    "zoiko.recovery.proof.generated.dlq",
+
+    # Clarification 07 — Data Residency, Retention, Legal Hold, Crypto-Shred, Archive, Restore, Purge
+    "zoiko.legal_hold.created",            "zoiko.legal_hold.released",
+    "zoiko.legal_hold.blocked_purge",
+    "zoiko.crypto_shred.requested",        "zoiko.crypto_shred.completed",
+    "zoiko.crypto_shred.blocked",          "zoiko.crypto_shred.verified",
+    "zoiko.restore.requested",             "zoiko.restore.verification_passed",
+    "zoiko.restore.verification_failed",   "zoiko.restore.completed",
+    "zoiko.archive.started",               "zoiko.archive.completed",
+    "zoiko.archive.failed",
+    "zoiko.purge.requested",               "zoiko.purge.approved",
+    "zoiko.purge.blocked",                 "zoiko.purge.completed",
+    "zoiko.purge.failed",
+    "zoiko.data.residency.assigned",       "zoiko.data.retention.assigned",
+    "zoiko.data.retention.expired",
 }
 
 

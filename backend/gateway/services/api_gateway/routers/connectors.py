@@ -109,15 +109,46 @@ def trigger_connector_sync(
     body: SyncIn,
     claims=Depends(get_claims),
 ):
-    conn_row = q1("SELECT id FROM connectors WHERE id=%s::uuid AND tenant_id=%s::uuid AND operational_state='healthy'", (connector_id, claims.tenant_id))
+    conn_row = q1("""
+        SELECT id, name, connector_type, endpoint_url
+        FROM connectors WHERE id=%s::uuid AND tenant_id=%s::uuid AND operational_state='healthy'
+    """, (connector_id, claims.tenant_id))
     if not conn_row:
         raise HTTPException(status_code=404, detail="Connector not found or not healthy")
-    row = q1("""
+
+    run = q1("""
         INSERT INTO ingestion_runs (id, tenant_id, connector_id, status)
         VALUES (gen_random_uuid(), %s::uuid, %s::uuid, 'RUNNING')
-        RETURNING id, tenant_id, connector_id, status, records_received, records_accepted, records_rejected, started_at, completed_at, error_detail
+        RETURNING id
     """, (claims.tenant_id, connector_id))
-    return _fmt_run(row)
+    run_id = str(run["id"])
+
+    # Attempt real fetch if endpoint_url is configured; otherwise complete with 0 records.
+    records_received = 0
+    records_accepted = 0
+    records_rejected = 0
+    error_detail = ""
+    new_status = "COMPLETED"
+
+    if conn_row.get("endpoint_url"):
+        try:
+            import urllib.request
+            with urllib.request.urlopen(conn_row["endpoint_url"], timeout=5) as resp:
+                records_received = 1 if resp.status == 200 else 0
+                records_accepted = records_received
+        except Exception as exc:
+            new_status = "FAILED"
+            error_detail = str(exc)[:500]
+
+    completed = q1("""
+        UPDATE ingestion_runs
+        SET status=%s, records_received=%s, records_accepted=%s, records_rejected=%s,
+            completed_at=NOW(), error_detail=%s
+        WHERE id=%s::uuid
+        RETURNING id, tenant_id, connector_id, status, records_received, records_accepted,
+                  records_rejected, started_at, completed_at, error_detail
+    """, (new_status, records_received, records_accepted, records_rejected, error_detail, run_id))
+    return _fmt_run(completed)
 
 @router.get("/ingestion/runs/{run_id}", response_model=IngestionRunOut)
 def get_ingestion_run(run_id: str, claims=Depends(get_claims)):

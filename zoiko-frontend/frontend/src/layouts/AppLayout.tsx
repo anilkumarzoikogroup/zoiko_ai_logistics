@@ -12,6 +12,8 @@ import {
   Users, Settings, Building2, Bell, Search,
   ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
   Download, Zap, CheckSquare, FlaskConical, Plug,
+  Activity, Lock, Clock, ShieldOff, RotateCcw, HardDrive, Trash2,
+  Wallet, Scale,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -44,6 +46,8 @@ const NAV: NavGroup[] = [
       { label: "Manager Approval", icon: ShieldCheck,  to: "/manager", roles: ["manager","admin"]         },
       { label: "Execute Recovery", icon: Zap,          to: "/execute", roles: ["manager","admin"]         },
       { label: "Gov. Tokens",      icon: Key,          to: "/execute", roles: ["manager","admin"]         },
+      { label: "Recovery Pipeline",icon: Wallet,       to: "/recovery"                                    },
+      { label: "Reconciliation",   icon: Scale,        to: "/reconciliation", roles: ["manager","admin"]  },
       { label: "Audit & ACR",      icon: Archive,      to: "/crypto"                                      },
       { label: "ACR Verifier",     icon: ShieldCheck,  to: "/verifier"                                    },
       { label: "Audit Trail",      icon: ClipboardList,to: "/alerts"                                      },
@@ -54,6 +58,19 @@ const NAV: NavGroup[] = [
     items: [
       { label: "Performance", icon: BarChart3,  to: "/performance" },
       { label: "Analytics",   icon: TrendingUp, to: "/analytics"   },
+    ],
+  },
+  {
+    group: "DATA GOVERNANCE",
+    roles: ["admin"],
+    items: [
+      { label: "Gov. Dashboard",   icon: Activity,    to: "/governance/data"         },
+      { label: "Legal Holds",      icon: Lock,        to: "/governance/holds"        },
+      { label: "Retention",        icon: Clock,       to: "/governance/retention"    },
+      { label: "Crypto-Shred",     icon: ShieldOff,   to: "/governance/crypto-shred" },
+      { label: "Restore Jobs",     icon: RotateCcw,   to: "/governance/restore"      },
+      { label: "Archive Jobs",     icon: HardDrive,   to: "/governance/archive"      },
+      { label: "Purge Jobs",       icon: Trash2,      to: "/governance/purge"        },
     ],
   },
   {

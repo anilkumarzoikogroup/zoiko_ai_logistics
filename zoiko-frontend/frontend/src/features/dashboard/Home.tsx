@@ -368,7 +368,7 @@ export default function Home() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
                 <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
                 <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false}
-                       tickFormatter={(v: number) => `₹${(v/1000).toFixed(0)}k`} />
+                       tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
                 <Tooltip
                   formatter={(v: number, n: string) => [formatCurrency(v), n === "billed" ? "Overcharged" : "Recovered"]}
                   contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }}
@@ -433,7 +433,17 @@ export default function Home() {
         </div>
 
         {isLoading ? (
-          <div style={{ padding: 32, textAlign: "center", color: "#94a3b8", fontSize: 13 }}>Loading cases…</div>
+          <div>
+            {[0,1,2,3,4].map(i => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 16px", borderBottom: i < 4 ? "1px solid #f8fafc" : "none" }}>
+                <div className="animate-pulse" style={{ height: 10, width: 64, background: "#f1f5f9", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 10, width: 96, background: "#f1f5f9", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 10, width: 80, background: "#f1f5f9", borderRadius: 999, marginLeft: "auto" }} />
+                <div className="animate-pulse" style={{ height: 10, width: 64, background: "#f1f5f9", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 18, width: 72, background: "#f1f5f9", borderRadius: 999 }} />
+              </div>
+            ))}
+          </div>
         ) : recentCases.length === 0 ? (
           <div style={{ padding: 48, textAlign: "center" }}>
             <FileText style={{ width: 32, height: 32, color: "#cbd5e1", margin: "0 auto 10px" }} />
