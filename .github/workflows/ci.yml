@@ -16,8 +16,8 @@ env:
   PYTHONIOENCODING: utf-8
   ZOIKO_ISSUER: https://auth.zoikotech.com
   ZOIKO_DEV_SECRET: zoiko-dev-secret-for-testing-only   # CI-only test value
-  # ZOIKO_DEV_MODE is set per-job: true for phase2/3 (API tests need it),
-  # NOT set for phase4 (unit tests assert gate rejection behaviour)
+  # ZOIKO_DEV_MODE is set per-job: true for gateway/governance (API tests need it),
+  # NOT set for execution (unit tests assert gate rejection behaviour)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 0  Security scan — runs in parallel with lint, never blocks deploy alone
@@ -91,10 +91,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
 
       - name: JCS canonical vectors (must be 100%)
-        run: python -m pytest phase-0/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
+        run: python -m pytest backend/core/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 3a  Crypto + Merkle
@@ -115,8 +115,8 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common
-      - run: python -m pytest phase-0/packages/zoiko-common/tests/ -v --tb=short
+      - run: pip install -e backend/core/packages/zoiko-common
+      - run: python -m pytest backend/core/packages/zoiko-common/tests/ -v --tb=short
 
   kms:
     name: KMS Hierarchy
@@ -132,14 +132,14 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-      - run: python -m pytest phase-1/packages/zoiko-kms/tests/ -v --tb=short
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: python -m pytest backend/platform/packages/zoiko-kms/tests/ -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 4  Phase 1 — Kafka + OPA + OIDC
+# GATE 4  Platform — Kafka + OPA + OIDC
 # ─────────────────────────────────────────────────────────────────────────────
-  phase1:
-    name: Phase 1 (Kafka + OPA + OIDC)
+  platform:
+    name: Platform (Kafka + OPA + OIDC)
     runs-on: ubuntu-latest
     needs: [crypto, kms]
     steps:
@@ -152,19 +152,19 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
-      - run: python -m pytest phase-1/tests/ -v --tb=short
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: python -m pytest backend/platform/tests/ -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 5a  Phase 2 Integration — uses Neon DB (secret: NEON_DB_URL)
-# GATE 5b  Phase 3 Integration — uses Neon DB (secret: NEON_DB_URL)
-# GATE 5c  Phase 4 Tests       — uses Neon DB (secret: NEON_DB_URL)
-# All three run in parallel after phase1 passes
+# GATE 5a  Gateway Integration     — uses Neon DB (secret: NEON_DB_URL)
+# GATE 5b  Governance Integration  — uses Neon DB (secret: NEON_DB_URL)
+# GATE 5c  Execution Tests         — uses Neon DB (secret: NEON_DB_URL)
+# All three run in parallel after platform passes
 # ─────────────────────────────────────────────────────────────────────────────
-  phase2:
-    name: Phase 2 Integration
+  gateway:
+    name: Gateway Integration
     runs-on: ubuntu-latest
-    needs: phase1
+    needs: platform
     env:
       DB_URL: ${{ secrets.NEON_DB_URL }}
       ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
@@ -178,7 +178,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
 
       - name: Write .env
         run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
@@ -186,20 +186,14 @@ jobs:
       - name: Run migrations
         run: alembic upgrade head
 
-      - name: Seed CI tenant
-        run: python scripts/ci_seed_tenant.py
+      - name: Run Gateway tests
+        run: python -m pytest -v --tb=short -q
+        working-directory: backend/gateway
 
-      - name: Seed contract rates
-        run: python seed_contract_rates.py
-        working-directory: phase-2
-
-      - name: Run Phase 2 tests
-        run: python -m pytest phase-2/ -v --tb=short -q
-
-  phase3:
-    name: Phase 3 Integration
+  governance:
+    name: Governance Integration
     runs-on: ubuntu-latest
-    needs: phase1
+    needs: platform
     env:
       DB_URL: ${{ secrets.NEON_DB_URL }}
       ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
@@ -213,7 +207,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
 
       - name: Write .env
         run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
@@ -221,24 +215,18 @@ jobs:
       - name: Run migrations
         run: alembic upgrade head
 
-      - name: Seed CI tenant
-        run: python scripts/ci_seed_tenant.py
+      - name: Run Governance tests
+        run: python -m pytest -v --tb=short -q
+        working-directory: backend/governance
 
-      - name: Seed contract rates
-        run: python seed_contract_rates.py
-        working-directory: phase-2
-
-      - name: Run Phase 3 tests
-        run: python -m pytest phase-3/ -v --tb=short -q
-
-  phase4:
-    name: Phase 4 Tests
+  execution:
+    name: Execution Tests
     runs-on: ubuntu-latest
-    needs: phase1
-    # Phase 4 tests are all unit tests (no DB required — use "unused-url" +
+    needs: platform
+    # Execution tests are all unit tests (no DB required — use "unused-url" +
     # MockKafkaBroker). The integration test is explicitly skipif(True).
-    # Running alembic in parallel with phase2/3 causes advisory lock conflicts
-    # on the shared Neon DB, so we skip migrations here entirely.
+    # Running alembic in parallel with gateway/governance causes advisory lock
+    # conflicts on the shared Neon DB, so we skip migrations here entirely.
     steps:
       - uses: actions/checkout@v4
 
@@ -249,9 +237,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
 
-      - run: python -m pytest phase-4/tests/ -v --tb=short -q
+      - run: python -m pytest tests/ -v --tb=short -q
+        working-directory: backend/execution
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 6  Frontend — TypeScript build + type check
@@ -290,7 +279,7 @@ jobs:
   docker-build:
     name: Docker Build Check
     runs-on: ubuntu-latest
-    needs: [phase2, phase3, phase4, frontend]
+    needs: [gateway, governance, execution, frontend]
     steps:
       - uses: actions/checkout@v4
 
@@ -306,7 +295,7 @@ jobs:
   tenant-fuzzer:
     name: Tenant Isolation Fuzzer
     runs-on: ubuntu-latest
-    needs: phase2
+    needs: gateway
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     env:
       DB_URL: ${{ secrets.NEON_DB_URL }}
@@ -320,10 +309,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e phase-0/packages/zoiko-common -e phase-1/packages/zoiko-kms
+      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
 
       - name: Write .env
         run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
 
       - run: alembic upgrade head
-      - run: python phase-0/scripts/tenant_fuzzer.py
+      - run: python backend/core/scripts/tenant_fuzzer.py

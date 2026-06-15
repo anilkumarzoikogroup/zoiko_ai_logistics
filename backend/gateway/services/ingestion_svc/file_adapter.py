@@ -11,13 +11,10 @@ Controls:
 
 Engineering rule: A file's extension is not evidence of its type. Inspect the bytes.
 """
-import hashlib
 import io
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Optional
 
 # MIME magic bytes map (first N bytes → MIME type)
 # Sufficient for the file types accepted on this platform

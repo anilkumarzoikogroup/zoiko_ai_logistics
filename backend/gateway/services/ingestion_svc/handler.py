@@ -18,7 +18,6 @@ import hashlib
 import json
 import os
 import uuid
-from dataclasses import asdict
 from datetime import datetime, timezone
 
 import paths  # noqa: F401 — sys.path bootstrap

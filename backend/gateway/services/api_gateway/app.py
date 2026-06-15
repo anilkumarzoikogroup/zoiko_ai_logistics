@@ -404,7 +404,6 @@ def login(body: LoginRequest):
 def setup_first_user(body: dict):
     """One-time setup: creates the first tenant + admin user. Returns 409 if any user already exists."""
     import bcrypt as _bcrypt, psycopg2 as _pg
-    from middleware.oidc.token_verifier import TokenVerifier
 
     existing = q1("SELECT COUNT(*) AS cnt FROM users")
     if existing and int(existing["cnt"]) > 0:
@@ -4130,7 +4129,7 @@ def send_dispute_letter_email(
         raise HTTPException(status_code=422, detail="dispute_letter is required")
 
     lines = letter.split("\n")
-    subject_line = next((l for l in lines if l.startswith("Subject:")), "Freight Overcharge Dispute")
+    subject_line = next((line for line in lines if line.startswith("Subject:")), "Freight Overcharge Dispute")
     subject  = _re.sub(r"^Subject:\s*", "", subject_line).strip() or "Freight Overcharge Dispute"
     body_text = _re.sub(r"^Subject:.*\n\n?", "", letter, count=1).strip()
 

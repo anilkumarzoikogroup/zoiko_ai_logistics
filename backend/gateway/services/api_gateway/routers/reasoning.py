@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Optional
 
 from services.api_gateway.auth import get_claims
 from shared.db import q, q1

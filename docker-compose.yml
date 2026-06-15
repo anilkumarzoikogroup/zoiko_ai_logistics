@@ -49,7 +49,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: python seed_users.py
+    command: python backend/core/scripts/seed_users.py
     environment:
       DB_URL:                postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
       ZOIKO_COMPANY_NAME:    ${ZOIKO_COMPANY_NAME:-Zoiko}

@@ -6,7 +6,7 @@ All 22 routes defined in C07 §18.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel

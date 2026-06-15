@@ -17,7 +17,6 @@ that validation can be replayed later with the archived rule set.
 import hashlib
 import json
 import uuid
-from dataclasses import asdict
 from datetime import datetime, timezone, date
 
 import paths  # noqa: F401

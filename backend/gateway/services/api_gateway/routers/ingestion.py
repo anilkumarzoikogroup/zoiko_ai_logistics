@@ -25,14 +25,12 @@ GET    /lineage:by-canonical?canonical_invoice_id= — transform audit trail for
 """
 import base64
 import hashlib
-import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import psycopg2
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 import paths  # noqa: F401
 from services.api_gateway.auth import get_claims

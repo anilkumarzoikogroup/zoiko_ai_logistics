@@ -13,8 +13,7 @@ Rules (§11.4):
 """
 import json
 import uuid
-from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List
 
 import paths  # noqa: F401
 import shared.db as _db

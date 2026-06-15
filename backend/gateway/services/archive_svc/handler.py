@@ -84,7 +84,7 @@ class ArchiveHandler:
         requested_by:   str,
     ) -> dict:
         """Kicks off a restore job from this archive (delegates to restore_svc)."""
-        row = self.get_job(archive_job_id, tenant_id)
+        self.get_job(archive_job_id, tenant_id)  # 404s if the archive job doesn't exist
         from services.restore_svc.handler import RestoreHandler
         rh = RestoreHandler(self._db_url, self._broker)
         restore_job = rh.create_job(

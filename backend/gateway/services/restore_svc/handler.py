@@ -5,7 +5,6 @@ A restore is incomplete until verification passes. Failed verification blocks
 the restored data from being used for any material action.
 """
 import uuid
-from datetime import datetime, timezone
 from typing import Optional
 
 import paths  # noqa: F401
