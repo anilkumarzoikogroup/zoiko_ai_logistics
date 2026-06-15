@@ -17,6 +17,7 @@ to, which an IMMEDIATE FK can't allow in either order.
 """
 from __future__ import annotations
 from alembic import op
+import sqlalchemy as sa
 
 revision      = "0029"
 down_revision = "0028"
@@ -25,6 +26,16 @@ depends_on    = None
 
 
 def upgrade() -> None:
+    # Some environments created expected_recoveries (via 0028's
+    # CREATE TABLE IF NOT EXISTS, against a table that pre-existed with an
+    # older draft schema) with the column named superseded_by_id instead of
+    # superseded_by. Normalize to superseded_by before adding the index/FK
+    # so this migration is idempotent across both schema histories.
+    inspector = sa.inspect(op.get_bind())
+    cols = {c["name"] for c in inspector.get_columns("expected_recoveries")}
+    if "superseded_by" not in cols and "superseded_by_id" in cols:
+        op.execute("ALTER TABLE expected_recoveries RENAME COLUMN superseded_by_id TO superseded_by")
+
     op.execute("""
         CREATE UNIQUE INDEX uq_recovery_instruments_tenant_extref
         ON recovery_instruments (tenant_id, external_reference)
@@ -37,7 +48,11 @@ def upgrade() -> None:
     """)
     op.execute("""
         ALTER TABLE expected_recoveries
-        DROP CONSTRAINT expected_recoveries_superseded_by_fkey
+        DROP CONSTRAINT IF EXISTS expected_recoveries_superseded_by_fkey
+    """)
+    op.execute("""
+        ALTER TABLE expected_recoveries
+        DROP CONSTRAINT IF EXISTS expected_recoveries_superseded_by_id_fkey
     """)
     op.execute("""
         ALTER TABLE expected_recoveries
@@ -50,7 +65,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("""
         ALTER TABLE expected_recoveries
-        DROP CONSTRAINT expected_recoveries_superseded_by_fkey
+        DROP CONSTRAINT IF EXISTS expected_recoveries_superseded_by_fkey
     """)
     op.execute("""
         ALTER TABLE expected_recoveries
