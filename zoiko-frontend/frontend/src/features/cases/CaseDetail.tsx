@@ -116,6 +116,7 @@ export default function CaseDetail() {
   const [disputeLetter, setDisputeLetter]   = useState<string>("");
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
+  const [sendCcEmails,  setSendCcEmails]    = useState("");
   const [showSendForm,  setShowSendForm]    = useState(false);
   const [sendingLetter, setSendingLetter]   = useState(false);
 
@@ -169,12 +170,15 @@ export default function CaseDetail() {
     if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
     setSendingLetter(true);
     try {
+      const ccTrimmed = sendCcEmails.trim();
       await api.post(`/cases/${id}/dispute-letter/send`, {
         recipient_email: sendEmail.trim(),
+        cc_emails:       ccTrimmed,
         dispute_letter:  disputeLetter,
       });
-      toast.success("Email sent", `Dispute letter sent to ${sendEmail.trim()}`);
+      toast.success("Email sent", `Dispute letter sent to ${sendEmail.trim()}${ccTrimmed ? " with CC" : ""}`);
       setShowSendForm(false);
+      setSendCcEmails("");
     } catch (e: any) {
       const msg = e?.response?.data?.detail;
       toast.error("Send failed", typeof msg === "string" ? msg : "Could not send the email. Please try again.");
@@ -735,27 +739,46 @@ export default function CaseDetail() {
               {showSendForm && (
                 <div className="rounded-lg border border-blue-200 bg-blue-50 p-4 space-y-3">
                   <p className="text-xs font-bold text-slate-700">Send dispute letter directly to carrier</p>
-                  <div className="flex gap-2">
-                    <input
-                      type="email"
-                      placeholder="carrier-accounts@delhivery.com"
-                      value={sendEmail}
-                      onChange={e => setSendEmail(e.target.value)}
-                      className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    <button
-                      onClick={handleSendLetter}
-                      disabled={!sendEmail.trim() || sendingLetter}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap flex items-center gap-1.5"
-                    >
-                      {sendingLetter
-                        ? <><div className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />Sending…</>
-                        : "Send Email"
-                      }
-                    </button>
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <div className="flex-1 space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-500">TO</label>
+                        <input
+                          type="email"
+                          placeholder="carrier-accounts@delhivery.com"
+                          value={sendEmail}
+                          onChange={e => setSendEmail(e.target.value)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="flex-1 space-y-1">
+                        <label className="text-[10px] font-semibold text-slate-500">CC <span className="font-normal text-slate-400">(analyst, manager — comma-separated)</span></label>
+                        <input
+                          type="text"
+                          placeholder="analyst@company.com, manager@company.com"
+                          value={sendCcEmails}
+                          onChange={e => setSendCcEmails(e.target.value)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div className="flex items-end">
+                        <button
+                          onClick={handleSendLetter}
+                          disabled={!sendEmail.trim() || sendingLetter}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap flex items-center gap-1.5 h-[38px]"
+                        >
+                          {sendingLetter
+                            ? <><div className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />Sending…</>
+                            : "Send Email"
+                          }
+                        </button>
+                      </div>
+                    </div>
                   </div>
                   <p className="text-[10px] text-slate-500">
-                    💡 Sends the dispute letter directly to the carrier from Zoiko's email service.
+                    💡 Sends the dispute letter directly to the carrier from Zoiko's email service. CC recipients get a copy.
                   </p>
                 </div>
               )}

@@ -111,6 +111,43 @@ def send_new_signup_alert(full_name: str, work_email: str, company_name: str, us
     log.info("Signup alert sent to admin for %s (%s)", company_name, work_email)
 
 
+def send_welcome_otp(to_email: str, full_name: str, role: str, otp: str, app_url: str = "") -> None:
+    """Send OTP email when admin creates a user (no password set yet)."""
+    subject = "ZoikoAI — You've been added! Set your password"
+    login_url = app_url or APP_URL
+    plain = (
+        f"Hello {full_name},\n\n"
+        f"Your admin has added you as {role.title()} in Zoiko AI Logistics.\n\n"
+        f"Use the OTP below to create your password:\n\n"
+        f"Your OTP: {otp}\n\n"
+        f"This code is valid for 10 minutes.\n\n"
+        f"After entering the OTP, you'll be able to set your password and log in.\n\n"
+        f"Visit: {login_url}/forgot-password\n\n"
+        f"Best regards,\nZoikoAI Logistics Team"
+    )
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#1e3a8a;padding:20px 28px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-size:22px;font-weight:800">ZOIKO</span><span style="color:#60a5fa;font-size:22px;font-weight:800">AI</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:28px">
+        <h2 style="color:#1e293b;margin:0 0 8px">Welcome, {full_name}!</h2>
+        <p style="color:#64748b;margin:0 0 16px">Your admin has added you as <strong>{role.title()}</strong> in Zoiko AI Logistics.</p>
+        <p style="color:#475569;font-size:14px;margin:0 0 8px">Use the OTP below to create your password:</p>
+        <div style="background:#f8fafc;border:2px dashed #3b82f6;border-radius:12px;padding:20px;text-align:center;margin:16px 0">
+          <span style="font-size:36px;font-weight:900;letter-spacing:8px;color:#1d4ed8;font-family:monospace">{otp}</span>
+        </div>
+        <p style="color:#64748b;font-size:12px;margin:0 0 4px">This code is valid for <strong>10 minutes</strong>.</p>
+        <p style="color:#64748b;font-size:12px;margin:0 0 20px">
+          Visit <a href="{login_url}/forgot-password" style="color:#2563eb">{login_url}/forgot-password</a> to enter the OTP and set your password.
+        </p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0"/>
+        <p style="color:#94a3b8;font-size:11px">If you didn't expect this invitation, please ignore this email.</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Welcome OTP sent to %s as %s (provider=%s)", to_email, role, EMAIL_PROVIDER)
+
+
 def send_welcome_email(to_email: str, full_name: str, role: str, password: str, login_url: str, invited_by: str = "") -> None:
     """Send welcome email to newly created user with their login credentials."""
     subject = "Welcome to Zoiko AI Logistics — Your Account is Ready"

@@ -19,7 +19,7 @@ export default function UserManagement() {
   const role  = useAppSelector(s => s.auth.role);
 
   const [showForm, setShowForm]   = useState(false);
-  const [form, setForm]           = useState<RegisterRequest>({ email: "", password: "", full_name: "", role: "analyst" });
+  const [form, setForm]           = useState<RegisterRequest>({ email: "", full_name: "", role: "analyst" });
   const [formErr, setFormErr]     = useState("");
 
   // Change-password state (own account)
@@ -39,8 +39,8 @@ export default function UserManagement() {
     mutationFn: (req: RegisterRequest) => zoikoApi.registerUser(req),
     onSuccess: (u) => {
       qc.invalidateQueries({ queryKey: ["users"] });
-      toast.success("User created", `${u.full_name} (${u.role}) can now log in.`);
-      setForm({ email: "", password: "", full_name: "", role: "analyst" });
+      toast.success("User created", `${u.full_name} (${u.role}) will receive an email with OTP to set their password.`);
+      setForm({ email: "", full_name: "", role: "analyst" });
       setShowForm(false);
       setFormErr("");
     },
@@ -122,17 +122,6 @@ export default function UserManagement() {
               />
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-slate-600">Password (optional)</label>
-              <input
-                type="password"
-                placeholder="Leave blank to email a setup link"
-                value={form.password}
-                onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <p className="text-xs text-slate-400">If left blank, the user gets an email to set their own password.</p>
-            </div>
-            <div className="space-y-1">
               <label className="text-xs font-medium text-slate-600">Role</label>
               <select
                 value={form.role}
@@ -143,6 +132,12 @@ export default function UserManagement() {
                 <option value="manager">Manager — approves recoveries</option>
               </select>
             </div>
+          </div>
+
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+            <p className="text-xs font-medium text-amber-800">
+              An email with a one-time password (OTP) will be sent to the user to set their password.
+            </p>
           </div>
 
           {formErr && (

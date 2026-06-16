@@ -43,36 +43,43 @@ def get_dek(tenant_id: str) -> bytes:
     return _derive_dek(tenant_id)
 
 
-def encrypt(dek: bytes, plaintext: bytes) -> bytes:
+def encrypt(dek: bytes, plaintext: bytes, *, aad: bytes | None = None) -> tuple[bytes, bytes]:
     """
     AES-256-GCM encrypt.
-    Returns: nonce(12) + ciphertext(len(plaintext)) + tag(16)
+    Returns: (ciphertext_without_nonce, nonce)
+    The nonce (IV) is returned separately for external storage.
     """
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     if len(dek) != 32:
         raise ValueError(f"DEK must be 32 bytes, got {len(dek)}")
     nonce = os.urandom(12)
     aesgcm = AESGCM(dek)
-    ct_and_tag = aesgcm.encrypt(nonce, plaintext, None)   # no AAD
-    return nonce + ct_and_tag
+    ct_and_tag = aesgcm.encrypt(nonce, plaintext, aad)
+    return ct_and_tag, nonce
 
 
-def decrypt(dek: bytes, ciphertext: bytes) -> bytes:
+def decrypt(dek: bytes, ciphertext: bytes, *, iv: bytes | None = None, aad: bytes | None = None) -> bytes:
     """
     AES-256-GCM decrypt.
-    Expects: nonce(12) + ciphertext + tag(16)
+    Supports two input formats:
+      - Combined: ciphertext = nonce(12) + ciphertext + tag(16), iv=None
+      - Split:    ciphertext = ciphertext_without_nonce + tag(16), iv=nonce
     Raises ValueError on authentication failure.
     """
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     if len(dek) != 32:
         raise ValueError(f"DEK must be 32 bytes, got {len(dek)}")
-    if len(ciphertext) < 28:   # 12 nonce + at least 0 ct + 16 tag
-        raise ValueError("Ciphertext too short")
-    nonce      = ciphertext[:12]
-    ct_and_tag = ciphertext[12:]
-    aesgcm     = AESGCM(dek)
+    if iv is not None:
+        nonce      = iv
+        ct_and_tag = ciphertext
+    else:
+        if len(ciphertext) < 28:
+            raise ValueError("Ciphertext too short")
+        nonce      = ciphertext[:12]
+        ct_and_tag = ciphertext[12:]
+    aesgcm = AESGCM(dek)
     try:
-        return aesgcm.decrypt(nonce, ct_and_tag, None)
+        return aesgcm.decrypt(nonce, ct_and_tag, aad)
     except Exception as e:
         raise ValueError(f"AES-GCM authentication failed: {e}") from e
 

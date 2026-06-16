@@ -28,7 +28,7 @@ class LoginResponse(BaseModel):
 
 class RegisterRequest(BaseModel):
     email:     str
-    password:  str
+    password:  str = ""
     full_name: str
     role:      str    # analyst | manager | admin
 

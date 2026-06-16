@@ -379,7 +379,7 @@ def login(body: LoginRequest):
     if not row["is_active"]:
         raise HTTPException(status_code=403, detail="Account is disabled. Contact your admin.")
     if not row["password_hash"]:
-        raise HTTPException(status_code=401, detail="This account was created with Google Sign-In. Please use the 'Sign in with Google' button to log in.")
+        raise HTTPException(status_code=401, detail="No password set. Please use 'Forgot Password' or check your email for an OTP to create your password.")
     if not _bcrypt.checkpw(body.password.encode(), row["password_hash"].encode()):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -469,7 +469,7 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
         raise HTTPException(status_code=409, detail=f"Email '{email}' is already registered")
 
     need_welcome = body.password == ""
-    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode() if body.password else ""
+    pw_hash = _bcrypt.hashpw(body.password.encode(), _bcrypt.gensalt()).decode() if body.password else None
     user_id = uuid.uuid4()
     now     = datetime.now(timezone.utc)
 
@@ -487,31 +487,26 @@ def register(body: RegisterRequest, claims: ZoikoClaims = Depends(get_claims)):
 
     if need_welcome:
         try:
-            import smtplib
+            import secrets as _sec, hashlib as _hl, smtplib as _smtplib
             from email.mime.text import MIMEText
-            smtp_user = os.getenv("EMAIL_NAME", "")
-            smtp_pass = os.getenv("EMAIL_PASSWORD", "")
-            if smtp_user and smtp_pass:
-                smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-                smtp_port = int(os.getenv("SMTP_PORT", "587"))
-                msg = MIMEText(
-                    f"Hello {body.full_name.strip()},\n\n"
-                    f"You have been added as a {body.role} for ZoikoAI.\n\n"
-                    f"Please set your password by visiting the following link:\n"
-                    f"{os.getenv('APP_URL', 'http://localhost:5173')}/forgot-password\n\n"
-                    f"Use the 'Forgot Password' option and enter your email ({email}) to receive an OTP.\n\n"
-                    f"Best regards,\nZoikoAI Admin Team",
-                    "plain", "utf-8",
+            otp = f"{_sec.randbelow(900000) + 100000}"
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+            conn2 = _pg.connect(DB_URL)
+            try:
+                cur2 = conn2.cursor()
+                cur2.execute("UPDATE password_reset_otp SET used_at = NOW() WHERE email = %s AND used_at IS NULL", (email,))
+                cur2.execute(
+                    "INSERT INTO password_reset_otp (email, otp, expires_at) VALUES (%s, %s, %s)",
+                    (email, _hl.sha256(otp.encode()).hexdigest(), expires_at),
                 )
-                msg["Subject"] = "ZoikoAI — You've been added as a team member"
-                msg["From"] = smtp_user
-                msg["To"] = email
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
-                    s.starttls()
-                    s.login(smtp_user, smtp_pass)
-                    s.sendmail(smtp_user, [email], msg.as_string())
+                conn2.commit()
+            finally:
+                conn2.close()
+
+            from shared.email_sender import send_welcome_otp as _send_otp
+            _send_otp(email, body.full_name.strip(), body.role, otp)
         except Exception:
-            pass  # welcome email is best-effort
+            pass  # welcome OTP email is best-effort
 
     return RegisterResponse(
         user_id    = str(user_id),
@@ -752,6 +747,8 @@ def change_password(
     row = q1("SELECT id, password_hash FROM users WHERE email = %s", (claims.sub,))
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
+    if not row["password_hash"]:
+        raise HTTPException(status_code=400, detail="No password set. Use 'Forgot Password' to create one first.")
     if not _bcrypt.checkpw(current_pw.encode(), row["password_hash"].encode()):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
@@ -4124,6 +4121,9 @@ def send_dispute_letter_email(
     if not recipient or "@" not in recipient:
         raise HTTPException(status_code=422, detail="Valid recipient_email is required")
 
+    cc_raw = (body.get("cc_emails") or "").strip()
+    cc_list = [e.strip() for e in cc_raw.split(",") if e.strip() and "@" in e.strip()] if cc_raw else []
+
     letter = (body.get("dispute_letter") or "").strip()
     if not letter:
         raise HTTPException(status_code=422, detail="dispute_letter is required")
@@ -4155,16 +4155,19 @@ def send_dispute_letter_email(
         msg["Subject"]   = subject
         msg["From"]      = smtp_user
         msg["To"]        = recipient
+        if cc_list:
+            msg["Cc"]  = ", ".join(cc_list)
         msg["Reply-To"]  = sender_email
+        all_recipients = [recipient] + cc_list
         with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as s:
             s.starttls()
             s.login(smtp_user, smtp_pass)
-            s.sendmail(smtp_user, [recipient], msg.as_string())
+            s.sendmail(smtp_user, all_recipients, msg.as_string())
     except Exception as exc:
         _log.getLogger("zoiko.email").error("Dispute letter send failed for case %s: %s", case_id, exc)
         raise HTTPException(status_code=502, detail="Failed to send email — please try again later")
 
-    return {"sent": True, "to": recipient}
+    return {"sent": True, "to": recipient, "cc": cc_list}
 
 
 # ── Full pipeline: Phase 2 + Phase 3 inline ────────────────────────────────────
