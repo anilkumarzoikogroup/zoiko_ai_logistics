@@ -3,6 +3,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api/:path*", "destination": "https://zoiko-api.onrender.com/:path*" },
+    { "source": "/api3/:path*", "destination": "https://zoiko-governance.onrender.com/:path*" },
+    { "source": "/api4/:path*", "destination": "https://zoiko-execution.onrender.com/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

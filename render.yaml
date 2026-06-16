@@ -29,7 +29,7 @@ services:
 
       # ── CORS — allow your live Vercel frontend and local dev ─────────────
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-zoikoai-2857s-projects.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
 
       # ── AI (Groq) ─────────────────────────────────────────────────────────
       - key: GROQ_API_KEY
@@ -66,6 +66,88 @@ services:
         value: utf-8
 
       # ── Unused in production (leave blank) ────────────────────────────────
+      - key: OPA_URL
+        value: ""
+      - key: KAFKA_BOOTSTRAP
+        value: ""
+      - key: REDIS_URL
+        value: ""
+
+  # ── Execution Gateway — /v1/execute, /v1/reconcile, /v1/recovery/*, ACR ────
+  - type: web
+    name: zoiko-execution
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m uvicorn services.api_gateway.app:app --app-dir /app/backend/execution --host 0.0.0.0 --port $PORT --workers 2
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+
+    envVars:
+      - key: DB_URL
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: ZOIKO_DEV_MODE
+        value: "false"
+      - key: ZOIKO_DEV_SECRET
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: ZOIKO_ISSUER
+        value: https://auth.zoikotech.com
+      - key: ZOIKO_CORS_ORIGINS
+        value: https://zoiko-ai-zoikoai-2857s-projects.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
+      - key: SANCTIONS_STRICT
+        value: "false"
+      - key: FX_STRICT
+        value: "false"
+      - key: CONNECTOR_STRICT
+        value: "false"
+      - key: ZOIKO_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_EXECUTION
+        value: "10"
+      - key: PYTHONIOENCODING
+        value: utf-8
+      - key: OPA_URL
+        value: ""
+      - key: KAFKA_BOOTSTRAP
+        value: ""
+      - key: REDIS_URL
+        value: ""
+
+  # ── Governance — evidence / reasoning / governance tokens (port 8002) ──────
+  - type: web
+    name: zoiko-governance
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m uvicorn services.api_gateway.app:app --app-dir /app/backend/governance --host 0.0.0.0 --port $PORT --workers 2
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+
+    envVars:
+      - key: DB_URL
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: ZOIKO_DEV_MODE
+        value: "false"
+      - key: ZOIKO_DEV_SECRET
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: ZOIKO_ISSUER
+        value: https://auth.zoikotech.com
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
+      - key: GROQ_API_KEY
+        sync: false          # Set manually in Render dashboard — keep secret
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
+      - key: ZOIKO_RATE_LIMIT_ENABLED
+        value: "true"
+      - key: RATE_LIMIT_GOVERNANCE
+        value: "20"
+      - key: PYTHONIOENCODING
+        value: utf-8
       - key: OPA_URL
         value: ""
       - key: KAFKA_BOOTSTRAP
