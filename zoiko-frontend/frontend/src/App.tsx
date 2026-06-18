@@ -31,6 +31,7 @@ const AcrVerifier    = lazy(() => import("./features/acr/AcrVerifier"));
 const Alerts         = lazy(() => import("./features/audit/Alerts"));
 const DatabasePage   = lazy(() => import("./features/audit/DatabasePage"));
 const KafkaEvents    = lazy(() => import("./features/audit/KafkaEvents"));
+const DecisionPage   = lazy(() => import("./features/cases/DecisionPage"));
 const AuditConditions= lazy(() => import("./features/audit/AuditConditions"));
 const Settings       = lazy(() => import("./features/settings/Settings"));
 const UserManagement = lazy(() => import("./features/settings/UserManagement"));
@@ -112,6 +113,9 @@ export default function App() {
 
         {/* Audit */}
         <Route path="/audit-conditions"  element={<AuditConditions />} />
+
+        {/* Decision */}
+        <Route path="/decision"          element={<DecisionPage />} />
 
         {/* Payment & Rate */}
         <Route path="/payment-control"   element={<PaymentControl />} />

@@ -33,6 +33,7 @@ const NAV: NavGroup[] = [
       { label: "Dashboard",        icon: LayoutDashboard, to: "/"                  },
       { label: "Invoices & Cases", icon: FolderOpen,      to: "/cases"             },
       { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"         },
+      { label: "Decision",        icon: Scale,           to: "/decision"          },
       { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions"  },
       { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"      },
       { label: "Carriers",         icon: Truck,           to: "/carriers"          },

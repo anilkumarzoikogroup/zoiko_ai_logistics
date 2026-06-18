@@ -183,7 +183,7 @@ class SubmitCaseRequest(BaseModel):
     carrier:        str
     route:          str
     amount:         float
-    currency:       str   = "INR"
+    currency:       str   = "USD"
     invoice_number:   str   = ""   # Optional — blank → server generates UI-XXXXXXXX
     invoice_date:     str   = ""   # YYYY-MM-DD — used for contract effective_from check
     charge_lines:     list  = []   # [{description, amount, type}] for SC-001 reasoning
@@ -195,7 +195,7 @@ class SubmitCaseRequest(BaseModel):
 class UIProposalRequest(BaseModel):
     action:   str   = "EXECUTE_CREDIT_MEMO"
     amount:   float
-    currency: str   = "INR"
+    currency: str   = "USD"
 
 
 class UIDecideRequest(BaseModel):
@@ -207,7 +207,7 @@ class ContractRateRequest(BaseModel):
     carrier_id:   str
     rate_type:    str   = "FUEL_CHARGE"
     rate_value:   float
-    currency:     str   = "INR"
+    currency:     str   = "USD"
     effective_on: str   = "2025-01-01"   # ISO date string
     expires_on:   str | None = None
 
@@ -218,7 +218,7 @@ class ExecuteRequest(BaseModel):
     token_id: str
     case_id:  Optional[str]   = None
     amount:   Optional[float] = 0.0
-    currency: Optional[str]   = "INR"
+    currency: Optional[str]   = "USD"
 
 
 # ── Tenant admin models ────────────────────────────────────────────────────────

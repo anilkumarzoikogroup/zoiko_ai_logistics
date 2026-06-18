@@ -118,7 +118,7 @@ export default function NewCase() {
   const toast = useToast();
 
   const [mode, setMode]             = useState<Mode>("choose");
-  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", transport_mode: "", equipment_type: "", shipper_reference: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
+  const [form, setForm]             = useState<FormState>({ invoice_number: "", invoice_date: "", transport_mode: "", equipment_type: "", shipper_reference: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "USD", email: "", charge_lines: [] });
   const [file, setFile]             = useState<File | null>(null);
   const [parseState, setParseState] = useState<ParseState>("idle");
   const [parsedBy,  setParsedBy]    = useState<string>("");
@@ -215,7 +215,7 @@ export default function NewCase() {
 
       const resolvedCurrency = parsed.currency && CURRENCIES.includes(parsed.currency)
         ? parsed.currency
-        : parsed.currency || "INR";
+        : parsed.currency || "USD";
 
       setForm({
         invoice_number:   parsed.invoice_number   || "",
@@ -269,7 +269,7 @@ export default function NewCase() {
     setMode("choose");
     setPreviewOpen(true);
     setRouteType("");
-    setForm({ invoice_number: "", invoice_date: "", transport_mode: "", equipment_type: "", shipper_reference: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "INR", email: "", charge_lines: [] });
+    setForm({ invoice_number: "", invoice_date: "", transport_mode: "", equipment_type: "", shipper_reference: "", carrier: "", from_city: "", to_city: "", amount: "", currency: "USD", email: "", charge_lines: [] });
     if (inputRef.current) inputRef.current.value = "";
   }
 

@@ -3232,7 +3232,7 @@ async def parse_invoice_file(
         except Exception:
             text = content.decode("utf-8", errors="ignore")
 
-    carrier, amount, currency, origin, dest, email = "", 0.0, "INR", "", "", ""
+    carrier, amount, currency, origin, dest, email = "", 0.0, "USD", "", "", ""
     invoice_number   = ""
     invoice_date     = ""
     transport_mode   = ""
@@ -3419,9 +3419,9 @@ async def parse_invoice_file(
                     if isinstance(cl, dict) and float(cl.get("amount", 0) or 0) > 0
                 ]
             ai_amount = float(parsed.get("total_amount", 0) or 0)
-            _cur_raw  = str(parsed.get("currency", "INR")).strip()
+            _cur_raw  = str(parsed.get("currency", "USD")).strip()
             _sym_map  = {"₹": "INR", "$": "USD", "€": "EUR", "£": "GBP", "¥": "JPY"}
-            currency  = _sym_map.get(_cur_raw, _cur_raw.upper()) or "INR"
+            currency  = _sym_map.get(_cur_raw, _cur_raw.upper()) or "USD"
             origin    = _normalize_city(str(parsed.get("origin", "")).strip())
             dest      = _normalize_city(str(parsed.get("destination", "")).strip())
             if origin == dest:
@@ -3818,7 +3818,7 @@ async def batch_submit_invoices(
                 text = content.decode("utf-8", errors="ignore")
 
             # Step 2 — AI extraction if key set, else regex
-            carrier, amount, currency, route = "Unknown", 0.0, "INR", "Unknown-Unknown"
+            carrier, amount, currency, route = "Unknown", 0.0, "USD", "Unknown-Unknown"
             groq_key = os.getenv("GROQ_API_KEY", "")
             if groq_key and text.strip():
                 try:
@@ -3827,7 +3827,7 @@ async def batch_submit_invoices(
                     prompt = (
                         f"Extract from this invoice text:\n{text[:2000]}\n\n"
                         "Return ONLY JSON: {\"carrier\": \"...\", \"amount\": 0.0, "
-                        "\"currency\": \"INR\", \"route\": \"City1-City2\"}"
+                        "\"currency\": \"USD\", \"route\": \"City1-City2\"}"
                     )
                     chat = _groq.chat.completions.create(
                         model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
@@ -3879,7 +3879,7 @@ async def batch_submit_invoices(
             result = _run_full_pipeline(
                 claims.tenant_id, claims.sub,
                 carrier or "Unknown", origin, dest,
-                amount or 1000.0, currency or "INR",
+                amount or 1000.0, currency or "USD",
                 invoice_number=f.filename or f"batch-{uuid.uuid4().hex[:8]}",
             )
             item["status"]  = "success"
@@ -3978,7 +3978,7 @@ async def extract_contract_rates(
                 "carrier_id":   str(r.get("carrier_id", "")).strip(),
                 "rate_type":    r.get("rate_type", "base_rate") if r.get("rate_type") in valid_types else "base_rate",
                 "rate_value":   float(r.get("rate_value", 0)),
-                "currency":     str(r.get("currency", "INR")).strip().upper()[:3],
+                "currency":     str(r.get("currency", "USD")).strip().upper()[:3],
                 "effective_on": str(r.get("effective_on", datetime.now(timezone.utc).date())),
                 "expires_on":   r.get("expires_on"),
             })
@@ -4017,7 +4017,7 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
             COALESCE(cs.origin_city || ' to ' || cs.dest_city, '') AS route
         FROM cases c
         JOIN canonical_invoices ci ON ci.id = c.invoice_id
-        LEFT JOIN validation_results vr ON vr.source_record_id = ci.id AND vr.tenant_id = c.tenant_id
+        LEFT JOIN validation_results vr ON vr.source_record_id = ci.source_record_id AND vr.tenant_id = c.tenant_id
         LEFT JOIN findings f ON f.case_id = c.id AND f.tenant_id = c.tenant_id
         LEFT JOIN canonical_shipments cs ON cs.invoice_id = ci.id
         WHERE c.id = %s::uuid AND c.tenant_id = %s::uuid
@@ -4036,7 +4036,7 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     invoice_no   = row.get("invoice_number") or "N/A"
     route        = row.get("route") or "N/A"
     billed       = float(row.get("billed_amount") or 0)
-    currency     = row.get("currency") or "INR"
+    currency     = row.get("currency") or "USD"
     confidence   = int((row.get("confidence") or 0.96) * 100)
     contract_amt = billed - overcharge
     ref          = case_id[:8].upper()
@@ -4064,7 +4064,8 @@ def generate_dispute_letter(case_id: str, claims: ZoikoClaims = Depends(get_clai
     from datetime import date as _date
     today = _date.today().strftime("%d %B %Y")
 
-    letter = f"""Subject: Freight Overcharge Dispute - Invoice {invoice_no}
+    if overcharge > 0:
+        letter = f"""Subject: Freight Overcharge Dispute - Invoice {invoice_no}
 
 Dear {carrier} Team,
 
@@ -4076,15 +4077,41 @@ I am writing to bring to your attention a discrepancy in the freight charges bil
 - Contracted Rate: {currency} {contract_amt:,.2f}
 - Overcharge Amount: {currency} {overcharge:,.2f}
 
-Our analysis, supported by a cryptographic audit record (ACR-{ref}) with an AI Confidence of {confidence}%, indicates that the freight charges billed are not in line with our contracted agreement. As per our contract, the freight charges should have been {currency} {contract_amt:,.2f}. However, we have not identified any overcharge in this instance.
+Our analysis, supported by a cryptographic audit record (ACR-{ref}) with an AI Confidence of {confidence}%, confirms that you have overcharged us by {currency} {overcharge:,.2f} for this shipment. As per our contract, the freight charges should have been {currency} {contract_amt:,.2f}.
 
-Despite the lack of overcharge, we request that you issue a credit memo to reflect the accurate freight charges billed. We kindly request that you process this credit memo within 30 days from the date of this letter.
+We request that you issue a credit memo for the overcharged amount of {currency} {overcharge:,.2f} within 30 days from the date of this letter.
 
 We appreciate your prompt attention to this matter and look forward to resolving this dispute amicably. If you require any additional information or clarification, please do not hesitate to contact us.
 
 Please confirm in writing once the credit memo has been processed.
 
 Thank you for your cooperation and understanding.
+
+Sincerely,
+
+{sender_name}
+{sender_title}
+{company_name}
+{today}
+{sender_email}
+"""
+    else:
+        letter = f"""Subject: Freight Charge Review - Invoice {invoice_no}
+
+Dear {carrier} Team,
+
+I am writing to review the freight charges billed for the shipment from {route}. The details of the shipment are as follows:
+
+- Invoice Number: {invoice_no}
+- Route: {route}
+- Amount Billed: {currency} {billed:,.2f}
+- Contracted Rate: {currency} {contract_amt:,.2f}
+
+Our analysis indicates that the charges for this shipment are in line with our contracted agreement and no overcharge was identified.
+
+Please consider this matter resolved.
+
+Thank you for your cooperation.
 
 Sincerely,
 
@@ -4653,7 +4680,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
     token_id  = body.token_id.strip()
     case_id   = (body.case_id or "").strip()
     amount    = float(body.amount or 0)
-    currency  = body.currency or "INR"
+    currency  = body.currency or "USD"
     actor_sub = claims.sub
     tenant_id = str(claims.tenant_id)
 
@@ -4673,7 +4700,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
                gt.signature,
                gt.kid,
                COALESCE(dp.amount::float, 0) AS amount,
-               COALESCE(dp.currency, 'INR')  AS dp_currency,
+               COALESCE(dp.currency, 'USD')  AS dp_currency,
                dp.case_id                    AS dp_case_id
         FROM   governance_tokens gt
         LEFT   JOIN governance_decisions gd ON gd.id = gt.decision_id
@@ -4755,7 +4782,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
     connector_ref = f"CONNECTOR-{env_id.hex[:8].upper()}"
     gate_json     = _json.dumps(gates)
     use_amount    = amount or float(token.get("amount") or 0)
-    use_currency  = currency or token.get("dp_currency") or "INR"
+    use_currency  = currency or token.get("dp_currency") or "USD"
 
     conn = _pg.connect(DB_URL)
     try:
@@ -5168,7 +5195,7 @@ try:
         _env_id = _uuid_exec.uuid4()
         _case_id = str(_tok.get("case_id") or "")
         _amount  = float(_tok.get("amount") or 0)
-        _currency = _tok.get("currency") or "INR"
+        _currency = _tok.get("currency") or "USD"
         _scope   = _tok.get("scope") or "EXECUTE_CREDIT_MEMO"
         _ref     = f"CONNECTOR-{_env_id.hex[:8].upper()}"
         _gates   = [{"gate": i, "passed": True, "detail": "DEV_MODE" if _dev else "passed"} for i in range(1, 9)]

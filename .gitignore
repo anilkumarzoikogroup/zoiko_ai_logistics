@@ -28,3 +28,7 @@ node_modules/
 .vercel
 .env*
 superadmin.md
+code_management.md
+COMPLETE_AUDIT_SUMMARY.md
+DATA_GOVERNANCE.md
+GOVERNANCE.md
