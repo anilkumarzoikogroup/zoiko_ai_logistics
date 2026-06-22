@@ -192,6 +192,16 @@ class SubmitCaseRequest(BaseModel):
     shipper_reference: str  = ""   # PO/AWB/BL number — source record external_source_ref
 
 
+class SubmitClaimRequest(BaseModel):
+    carrier:         str
+    claim_type:      str   = "DAMAGE"
+    claimed_amount:  float = 0.0
+    currency:        str   = "INR"
+    claim_reference: str   = ""   # Optional — blank → server generates UI-CLAIM-XXXXXXXX
+    description:     str   = ""
+    related_invoice_number: str = ""
+
+
 class UIProposalRequest(BaseModel):
     action:   str   = "EXECUTE_CREDIT_MEMO"
     amount:   float
@@ -204,12 +214,13 @@ class UIDecideRequest(BaseModel):
 
 
 class ContractRateRequest(BaseModel):
-    carrier_id:   str
-    rate_type:    str   = "FUEL_CHARGE"
-    rate_value:   float
-    currency:     str   = "INR"
-    effective_on: str   = "2025-01-01"   # ISO date string
-    expires_on:   str | None = None
+    carrier_id:         str
+    rate_type:          str   = "FUEL_CHARGE"
+    rate_value:         float
+    currency:           str   = "INR"
+    effective_on:       str   = "2025-01-01"   # ISO date string
+    expires_on:         str | None = None
+    source_document_id: str | None = None      # set when rate came from AI contract extraction
 
 
 # ── Execution request ─────────────────────────────────────────────────────────

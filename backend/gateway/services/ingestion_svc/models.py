@@ -50,6 +50,17 @@ class InvoiceInput:
 
 
 @dataclass
+class ClaimInput:
+    carrier_id:       str
+    claim_reference:  str
+    claim_type:       str
+    claimed_amount:   float
+    currency:         str
+    description:      str   = ""
+    related_invoice_number: str = ""
+
+
+@dataclass
 class IngestResult:
     source_record_id:      UUID
     canonical_hash:        str   # hex string

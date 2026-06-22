@@ -654,7 +654,7 @@ cd phase-3; py -m pytest -q --tb=short; cd ..
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 cd phase-2; py demo_phase2.py; cd ..   # produces case in PENDING_APPROVAL
 cd phase-3; py demo_phase3.py; cd ..   # produces ACTIVE governance token
-cd phase-4; py demo_phase4.py; cd ..   # executes, reconciles, locks ACR
+cd backend\execution; py scripts\demo_phase4.py; cd ..\..   # executes, reconciles, locks ACR
 ```
 
 ### Production environment variables

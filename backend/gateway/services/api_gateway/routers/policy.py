@@ -1,6 +1,7 @@
 """Policy & governance endpoints: policy check, decisions, audit chain, overrides."""
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -8,9 +9,14 @@ from typing import Any, Dict, Optional
 import uuid
 
 from services.api_gateway.auth import get_claims
+from middleware.opa.client import OPAUnavailableError, resolve_opa_client
 from shared.db import q, q1
 
 router = APIRouter(tags=["policy"])
+
+_OPA_URL        = os.getenv("OPA_URL", "")
+_ZOIKO_DEV_MODE = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
+_opa            = resolve_opa_client(_OPA_URL, _ZOIKO_DEV_MODE)
 
 
 # ── Policy Evaluation ──────────────────────────────────────────────────────────
@@ -24,28 +30,23 @@ class PolicyCheckIn(BaseModel):
 
 @router.post("/policy/check")
 def policy_check(body: PolicyCheckIn, claims=Depends(get_claims)):
-    """Evaluate a governance policy decision — stateless OPA delegation."""
+    """
+    Evaluate a governance policy decision — stateless OPA delegation.
+    Fails closed (503) if no real OPA is reachable and the service is not
+    running in dev mode — never silently allows.
+    """
     try:
-        from backend.platform.middleware.opa.client import MockOPAClient  # type: ignore
-    except ImportError:
-        try:
-            from middleware.opa.client import MockOPAClient  # type: ignore
-        except ImportError:
-            MockOPAClient = None  # type: ignore
+        decision = _opa.check_freight_dispute({
+            "tenant_id": claims.tenant_id, "actor": claims.sub,
+            "action": body.action, "resource": body.resource,
+            "context": body.context,
+        })
+    except OPAUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
-    allowed = True
-    if MockOPAClient is not None:
-        client = MockOPAClient()
-        allowed = client.check(
-            input_data={"tenant_id": claims.tenant_id, "actor": claims.sub,
-                        "action": body.action, "resource": body.resource,
-                        "context": body.context}
-        )
-
-    decision = "ALLOW" if allowed else "DENY"
     decision_id = str(uuid.uuid4())
 
-    return {"decision_id": decision_id, "decision": decision,
+    return {"decision_id": decision_id, "decision": "ALLOW" if decision.allow else "DENY",
             "action": body.action, "resource": body.resource,
             "risk_class": "LOW",
             "evaluated_at": datetime.now(timezone.utc).isoformat(),

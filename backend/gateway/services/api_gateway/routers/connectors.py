@@ -1,6 +1,8 @@
 """Connector management and ingestion run routes."""
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
@@ -9,6 +11,11 @@ from services.api_gateway.auth import get_claims
 from shared.db import q, q1
 
 router = APIRouter(tags=["connectors"])
+
+
+def _slugify(name: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()
+    return slug or "connector"
 
 
 # ── Connector CRUD ─────────────────────────────────────────────────────────────
@@ -21,12 +28,13 @@ class ConnectorIn(BaseModel):
     endpoint_url:       str = ""
     credentials_ref:    str = ""
     rate_limit_rps:     int = 10
+    source_type:        str = ""   # webhook URL slug — auto-derived from name if blank
 
 class ConnectorOut(BaseModel):
     id: str; tenant_id: str; name: str; connector_type: str
     auth_method: str; trust_tier: str; certification_state: str
     operational_state: str; endpoint_url: str; rate_limit_rps: int
-    created_at: str; updated_at: str
+    source_type: str; created_at: str; updated_at: str
 
 def _fmt_connector(r: dict) -> dict:
     return {**r, "id": str(r["id"]), "tenant_id": str(r["tenant_id"]),
@@ -35,21 +43,31 @@ def _fmt_connector(r: dict) -> dict:
 
 @router.post("/connectors", response_model=ConnectorOut, status_code=201)
 def create_connector(body: ConnectorIn, claims=Depends(get_claims)):
+    source_type = body.source_type.strip().lower() or _slugify(body.name)
+
+    dup = q1("SELECT id FROM connectors WHERE tenant_id=%s::uuid AND source_type=%s",
+              (claims.tenant_id, source_type))
+    if dup:
+        raise HTTPException(
+            status_code=409,
+            detail=f"source_type '{source_type}' is already used by another connector — pick a different name/slug",
+        )
+
     row = q1("""
         INSERT INTO connectors
-            (id, tenant_id, name, connector_type, auth_method, trust_tier, endpoint_url, credentials_ref, rate_limit_rps)
-        VALUES (gen_random_uuid(), %s::uuid, %s, %s, %s, %s, %s, %s, %s)
+            (id, tenant_id, name, connector_type, auth_method, trust_tier, endpoint_url, credentials_ref, rate_limit_rps, source_type)
+        VALUES (gen_random_uuid(), %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id, tenant_id, name, connector_type, auth_method, trust_tier,
-                  certification_state, operational_state, endpoint_url, rate_limit_rps, created_at, updated_at
+                  certification_state, operational_state, endpoint_url, rate_limit_rps, source_type, created_at, updated_at
     """, (claims.tenant_id, body.name, body.connector_type, body.auth_method,
-          body.trust_tier, body.endpoint_url, body.credentials_ref, body.rate_limit_rps))
+          body.trust_tier, body.endpoint_url, body.credentials_ref, body.rate_limit_rps, source_type))
     return _fmt_connector(row)
 
 @router.get("/connectors", response_model=List[ConnectorOut])
 def list_connectors(claims=Depends(get_claims)):
     rows = q("""
         SELECT id, tenant_id, name, connector_type, auth_method, trust_tier,
-               certification_state, operational_state, endpoint_url, rate_limit_rps, created_at, updated_at
+               certification_state, operational_state, endpoint_url, rate_limit_rps, source_type, created_at, updated_at
         FROM connectors WHERE tenant_id=%s::uuid ORDER BY name
     """, (claims.tenant_id,))
     return [_fmt_connector(r) for r in rows]
@@ -58,7 +76,7 @@ def list_connectors(claims=Depends(get_claims)):
 def get_connector(connector_id: str, claims=Depends(get_claims)):
     row = q1("""
         SELECT id, tenant_id, name, connector_type, auth_method, trust_tier,
-               certification_state, operational_state, endpoint_url, rate_limit_rps, created_at, updated_at
+               certification_state, operational_state, endpoint_url, rate_limit_rps, source_type, created_at, updated_at
         FROM connectors WHERE id=%s::uuid AND tenant_id=%s::uuid
     """, (connector_id, claims.tenant_id))
     if not row:

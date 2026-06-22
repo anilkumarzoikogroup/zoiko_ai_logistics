@@ -83,10 +83,12 @@ class ValidationHandler:
         ).hexdigest()
 
         cur.execute("""
-            SELECT rate_type, COALESCE(base_rate, rate_value) AS rate_value, currency
+            SELECT id, carrier_id, rate_type, COALESCE(base_rate, rate_value) AS rate_value,
+                   currency, effective_on, expires_on, payload_hash
             FROM   contract_rates
             WHERE  tenant_id = %s
               AND  lane_hash = %s
+              AND  superseded_at IS NULL
               AND  COALESCE(effective_from, effective_on) <= %s
               AND  (COALESCE(effective_to, expires_on) IS NULL
                     OR COALESCE(effective_to, expires_on) >= %s)
@@ -95,16 +97,65 @@ class ValidationHandler:
 
         if not rates:
             cur.execute("""
-                SELECT rate_type, rate_value, currency
+                SELECT id, carrier_id, rate_type, rate_value, currency,
+                       effective_on, expires_on, payload_hash
                 FROM   contract_rates
                 WHERE  tenant_id  = %s
                   AND  carrier_id = %s
+                  AND  superseded_at IS NULL
                   AND  effective_on <= %s
                   AND  (expires_on IS NULL OR expires_on >= %s)
             """, (tenant_id, carrier_id, today, today))
             rates = cur.fetchall()
 
         conn.close()
+
+        # Rate version binding — detect a direct DB mutation. Recompute the
+        # content hash from what's in the row right now and compare against
+        # payload_hash, which was pinned at creation time (POST /contract-rates).
+        # A mismatch means the row's monetary fields were changed by something
+        # other than the API after creation — fail closed rather than silently
+        # trusting a contract rate that may have been tampered with.
+        for r in rates:
+            if not r.get("payload_hash"):
+                continue  # pre-existing row created before this column was wired up
+            expected_hash = "sha256:" + hashlib.sha256(
+                f"zoiko.contract_rate.v1:{tenant_id}:{r['carrier_id']}:{r['rate_type']}:"
+                f"{float(r['rate_value']):.4f}:{r['currency']}:{r['effective_on']}:{r['expires_on'] or ''}".encode()
+            ).hexdigest()
+            if expected_hash != r["payload_hash"]:
+                raise ValueError(
+                    f"Contract rate '{r['id']}' (carrier={r['carrier_id']}, "
+                    f"type={r['rate_type']}) failed integrity check — its payload_hash "
+                    f"no longer matches its content. This rate may have been mutated "
+                    f"directly in the database, bypassing the contract-rates API."
+                )
+
+        # Witness pack — pin the exact rate content actually used right now,
+        # independent of the live row. If the rate is later legitimately
+        # superseded (a new version), this snapshot still proves exactly
+        # what was relied upon at this moment. Best-effort: must never block
+        # validation if it fails.
+        for r in rates:
+            try:
+                from services.witness_pack_svc.handler import WitnessPackHandler
+                WitnessPackHandler(self.db_url, self.tenant_slug).create(
+                    tenant_id=tenant_id,
+                    source_record_id=str(source_record_id),
+                    subject_type="CONTRACT_RATE",
+                    subject_id=str(r["id"]),
+                    snapshot_payload={
+                        "carrier_id":   r["carrier_id"],
+                        "rate_type":    r["rate_type"],
+                        "rate_value":   f"{float(r['rate_value']):.4f}",
+                        "currency":     r["currency"],
+                        "effective_on": str(r["effective_on"]),
+                        "expires_on":   str(r["expires_on"]) if r["expires_on"] else None,
+                        "payload_hash": r.get("payload_hash"),
+                    },
+                )
+            except Exception:
+                pass
 
         rate_violations: list[RateViolation] = []
         expected_total  = 0.0

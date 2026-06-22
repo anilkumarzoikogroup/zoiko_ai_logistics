@@ -13,7 +13,15 @@ import base64
 import json
 from typing import Optional
 
+import requests
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
+
 from .claims import ZoikoClaims
+
+_JWKS_CACHE_TTL_SECONDS = 600  # re-fetch JWKS at most every 10 minutes
 
 
 class TokenExpiredError(Exception):
@@ -49,6 +57,8 @@ class TokenVerifier:
         self._jwks_url = jwks_url
         self._audience = audience
         self._issuer   = issuer
+        self._jwks_cache:    dict  = {}
+        self._jwks_cache_at: float = 0.0
 
     def verify(self, token: str, expected_audience: str = "*") -> ZoikoClaims:
         """
@@ -106,11 +116,95 @@ class TokenVerifier:
             raise TokenInvalidError("HS256 signature mismatch")
 
     def _verify_asymmetric(self, header_b64: str, payload_b64: str, sig_b64: str, alg: str) -> None:
-        # In Phase 1 this is a stub — real JWKS fetch wired in Phase 2
-        raise TokenInvalidError(
-            f"{alg} verification requires JWKS endpoint — not yet wired in Phase 1 dev mode. "
-            "Use HS256 with dev_secret for local testing."
-        )
+        """Verify RS256/ES256 against the OIDC provider's JWKS (fail-closed)."""
+        try:
+            header = json.loads(_b64_decode(header_b64))
+        except Exception as e:
+            raise TokenInvalidError(f"Cannot decode header for {alg} verification: {e}")
+
+        kid = header.get("kid")
+        if not kid:
+            raise TokenInvalidError(f"Token header missing 'kid' — required for {alg} verification")
+
+        jwk        = self._find_jwk(kid)
+        public_key = self._jwk_to_public_key(jwk)
+        message    = f"{header_b64}.{payload_b64}".encode()
+        signature  = _b64_decode(sig_b64)
+
+        try:
+            if alg == "RS256":
+                public_key.verify(signature, message, padding.PKCS1v15(), hashes.SHA256())
+            elif alg == "ES256":
+                # JWS encodes ECDSA signatures as raw r||s (32 bytes each for
+                # P-256) — cryptography's verify() expects DER, so re-encode.
+                if len(signature) != 64:
+                    raise TokenInvalidError(f"ES256 signature must be 64 bytes (r||s), got {len(signature)}")
+                r = int.from_bytes(signature[:32], "big")
+                s = int.from_bytes(signature[32:], "big")
+                public_key.verify(asym_utils.encode_dss_signature(r, s), message, ec.ECDSA(hashes.SHA256()))
+            else:
+                raise TokenInvalidError(f"Unsupported asymmetric algorithm: {alg}")
+        except InvalidSignature:
+            raise TokenInvalidError(f"{alg} signature verification failed")
+
+    # ── JWKS fetch + cache ──────────────────────────────────────────────────
+
+    def _fetch_jwks(self) -> dict:
+        """Fetch the JWKS document, cached for _JWKS_CACHE_TTL_SECONDS.
+        Fail-closed: no jwks_url configured or fetch failure (with no usable
+        stale cache) raises rather than silently permitting the token."""
+        now = time.time()
+        if self._jwks_cache and (now - self._jwks_cache_at) < _JWKS_CACHE_TTL_SECONDS:
+            return self._jwks_cache
+
+        if not self._jwks_url:
+            raise TokenInvalidError("RS256/ES256 verification requires jwks_url to be configured")
+
+        try:
+            resp = requests.get(self._jwks_url, timeout=5)
+            resp.raise_for_status()
+            jwks = resp.json()
+        except Exception as e:
+            if self._jwks_cache:
+                return self._jwks_cache  # serve stale rather than hard-fail on a transient outage
+            raise TokenInvalidError(f"Failed to fetch JWKS from {self._jwks_url}: {e}")
+
+        self._jwks_cache    = jwks
+        self._jwks_cache_at = now
+        return jwks
+
+    def _find_jwk(self, kid: str) -> dict:
+        jwks = self._fetch_jwks()
+        for key in jwks.get("keys", []):
+            if key.get("kid") == kid:
+                return key
+
+        # kid not found — could be key rotation; force one refresh before giving up
+        self._jwks_cache = {}
+        jwks = self._fetch_jwks()
+        for key in jwks.get("keys", []):
+            if key.get("kid") == kid:
+                return key
+
+        raise TokenInvalidError(f"No JWK found for kid={kid!r}")
+
+    @staticmethod
+    def _jwk_to_public_key(jwk: dict):
+        kty = jwk.get("kty")
+        if kty == "RSA":
+            n = int.from_bytes(_b64_decode(jwk["n"]), "big")
+            e = int.from_bytes(_b64_decode(jwk["e"]), "big")
+            return rsa.RSAPublicNumbers(e, n).public_key()
+        if kty == "EC":
+            curve = {
+                "P-256": ec.SECP256R1(), "P-384": ec.SECP384R1(), "P-521": ec.SECP521R1(),
+            }.get(jwk.get("crv"))
+            if curve is None:
+                raise TokenInvalidError(f"Unsupported EC curve: {jwk.get('crv')!r}")
+            x = int.from_bytes(_b64_decode(jwk["x"]), "big")
+            y = int.from_bytes(_b64_decode(jwk["y"]), "big")
+            return ec.EllipticCurvePublicNumbers(x, y, curve).public_key()
+        raise TokenInvalidError(f"Unsupported JWK key type: {kty!r}")
 
     # ── Token factory (dev / test helper) ─────────────────────────────────
 

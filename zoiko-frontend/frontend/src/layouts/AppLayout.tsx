@@ -5,7 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import axios from "axios";
 import { cn } from "@/utils/cn";
 import {
-  LayoutDashboard, FileText, FolderOpen,
+  LayoutDashboard, FileText, FolderOpen, FileWarning,
   FileClock, Truck, ShieldCheck, BookOpen,
   Key, Archive, ClipboardList,
   BarChart3, TrendingUp,
@@ -33,6 +33,8 @@ const NAV: NavGroup[] = [
       { label: "Dashboard",        icon: LayoutDashboard, to: "/"                  },
       { label: "Invoices & Cases", icon: FolderOpen,      to: "/cases"             },
       { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"         },
+      { label: "Carrier Claims",   icon: FileWarning,     to: "/claims"            },
+      { label: "Submit Claim",     icon: FileWarning,     to: "/claims/new"        },
       { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions"  },
       { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"      },
       { label: "Carriers",         icon: Truck,           to: "/carriers"          },

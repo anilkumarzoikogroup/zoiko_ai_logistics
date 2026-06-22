@@ -30,6 +30,7 @@ from typing import Any, Dict, Optional
 # zoiko_common/kafka/schemas.py (the outbox relay validates against that copy).
 REGISTERED_TOPICS = {
     "zoiko.source.record.received",    "zoiko.source.record.validated",   "zoiko.canonical.invoice.created",
+    "zoiko.canonical.claim.created",   # SC-002 — canonicalize_claim()
     "zoiko.case.opened",               "zoiko.case.updated",              "zoiko.case.closed",
     "zoiko.evidence.bundled",          "zoiko.finding.generated",         "zoiko.proposal.created",
     "zoiko.governance.decision.issued","zoiko.governance.token.issued",   "zoiko.governance.token.consumed",

@@ -147,6 +147,23 @@ def _check_webhook_id_replay(webhook_id: str, tenant_id: str) -> None:
 
 # ── IP allow-list enforcement ─────────────────────────────────────────────────
 
+def _safe_uuid_or_none(value: str) -> Optional[str]:
+    """
+    correlation_id/causation_id are UUID-typed columns, but carrier-supplied
+    IDs (X-Webhook-ID, X-Correlation-ID) are arbitrary strings in the real
+    world (Stripe uses 'evt_...', others use plain integers) — never assume
+    they're UUIDs. The real value is always preserved separately in
+    channel_metadata; this is just for the internal correlation columns.
+    """
+    if not value:
+        return None
+    try:
+        uuid.UUID(value)
+        return value
+    except (ValueError, AttributeError):
+        return None
+
+
 def _get_client_ip(request: Request) -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
     if forwarded:
@@ -201,6 +218,48 @@ def _load_webhook_config(tenant_id: str, source_type: str) -> dict:
     return dict(row)
 
 
+# ── Connector linkage — so a webhook delivery shows up in Ingestion Runs ──────
+
+def _find_connector_id(tenant_id: str, source_type: str) -> Optional[str]:
+    """
+    Look up the connector registered for this tenant + source_type slug
+    (Connectors page -> Add Connector -> Webhook). Returns None if no
+    connector is registered for this slug — the webhook still gets
+    processed, it just won't appear in the Ingestion Runs panel (e.g.
+    legacy signing configs set up without a connector record).
+    """
+    row = q1("SELECT id FROM connectors WHERE tenant_id = %s::uuid AND source_type = %s",
+              (tenant_id, source_type))
+    return str(row["id"]) if row else None
+
+
+def _record_ingestion_run(
+    connector_id: Optional[str],
+    tenant_id: str,
+    status: str,
+    received: int,
+    accepted: int,
+    rejected: int,
+    error_detail: str = "",
+) -> None:
+    """Best-effort — observability only, must never block webhook acceptance."""
+    if not connector_id:
+        return
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cur  = conn.cursor()
+        cur.execute("""
+            INSERT INTO ingestion_runs
+                (id, tenant_id, connector_id, status, records_received,
+                 records_accepted, records_rejected, completed_at, error_detail)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, NOW(), %s)
+        """, (uuid.uuid4(), tenant_id, connector_id, status, received, accepted, rejected, error_detail[:500]))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
 # ── POST /webhooks/ingest/{source_type} ───────────────────────────────────────
 
 @router.post("/webhooks/ingest/{source_type}", status_code=202)
@@ -228,91 +287,178 @@ async def receive_webhook(
     if not x_tenant_id:
         raise HTTPException(status_code=400, detail="X-Tenant-ID header required")
 
-    body = await request.body()
+    connector_id = _find_connector_id(x_tenant_id, source_type)
 
-    # 1. Content-Digest integrity check
-    if content_digest:
-        if content_digest.startswith("sha-256=:"):
-            expected_b64 = content_digest[len("sha-256=:"):-1]
-            actual = base64.b64encode(hashlib.sha256(body).digest()).decode()
-            if actual != expected_b64:
-                raise HTTPException(status_code=400, detail="Content-Digest mismatch — body corrupted in transit")
-
-    # 2. Timestamp replay protection
-    _check_timestamp(x_webhook_timestamp or "")
-
-    # 3. Load tenant webhook config (signing secret + IP allowlist)
-    signing_config = _load_webhook_config(x_tenant_id, source_type)
-
-    # 4. IP allow-list
-    client_ip = _get_client_ip(request)
-    _check_ip_allowlist(client_ip, signing_config)
-
-    # 5. HMAC-SHA-256 signature verification
-    dev_mode = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
-    if not _verify_webhook_signature(body, x_webhook_signature or "", signing_config["signing_secret"]):
-        if not dev_mode:
-            raise HTTPException(status_code=401, detail="Webhook signature verification failed")
-
-    # 6. Replay guard (webhook-id uniqueness)
-    _check_webhook_id_replay(x_webhook_id or str(uuid.uuid4()), x_tenant_id)
-
-    # 7. Parse body
     try:
-        payload = json.loads(body.decode("utf-8"))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Webhook body must be valid JSON")
+        body = await request.body()
 
-    # 8. Build webhook channel_metadata
-    channel_metadata = {
-        "source_system":      request.headers.get("X-Source-System", source_type),
-        "webhook_id":         x_webhook_id or "",
-        "webhook_timestamp":  x_webhook_timestamp or "",
-        "signature_header":   x_webhook_signature or "",
-        "source_ip":          client_ip,
-        "user_agent":         request.headers.get("User-Agent", ""),
-        "content_digest":     content_digest or "",
-        "hmac_verified":      True,
-        "replay_checked":     True,
-        "ip_checked":         bool((signing_config.get("ip_allowlist") or [])),
-    }
+        # 1. Content-Digest integrity check
+        if content_digest:
+            if content_digest.startswith("sha-256=:"):
+                expected_b64 = content_digest[len("sha-256=:"):-1]
+                actual = base64.b64encode(hashlib.sha256(body).digest()).decode()
+                if actual != expected_b64:
+                    raise HTTPException(status_code=400, detail="Content-Digest mismatch — body corrupted in transit")
 
-    # 9. Hand off to ingestion pipeline
-    try:
-        from services.ingestion_svc.handler import IngestionHandler
-        from services.ingestion_svc.models import ChannelEnum
+        # 2. Timestamp replay protection
+        _check_timestamp(x_webhook_timestamp or "")
 
-        handler = IngestionHandler(DB_URL, None)  # no kafka broker in webhook path
-        correlation_id  = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
-        idempotency_key = x_webhook_id or str(uuid.uuid4())
+        # 3. Load tenant webhook config (signing secret + IP allowlist)
+        signing_config = _load_webhook_config(x_tenant_id, source_type)
 
-        result = handler.ingest_invoice(
-            tenant_id       = x_tenant_id,
-            invoice         = payload,
-            idempotency_key = idempotency_key,
-            channel         = ChannelEnum.WEBHOOK,
-            channel_metadata= channel_metadata,
-            received_at     = datetime.now(timezone.utc),
-            received_by_user= None,
-            correlation_id  = correlation_id,
-            causation_id    = x_webhook_id or "",
-            data_residency_region = payload.get("data_residency_region", ""),
-            jurisdiction_code     = payload.get("jurisdiction_code", ""),
-            brand_id              = payload.get("brand_id", ""),
+        # 4. IP allow-list
+        client_ip = _get_client_ip(request)
+        _check_ip_allowlist(client_ip, signing_config)
+
+        # 5. HMAC-SHA-256 signature verification
+        dev_mode = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
+        if not _verify_webhook_signature(body, x_webhook_signature or "", signing_config["signing_secret"]):
+            if not dev_mode:
+                raise HTTPException(status_code=401, detail="Webhook signature verification failed")
+
+        # 6. Replay guard (webhook-id uniqueness)
+        _check_webhook_id_replay(x_webhook_id or str(uuid.uuid4()), x_tenant_id)
+
+        # 7. Parse body
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Webhook body must be valid JSON")
+
+        # 8. Build webhook channel_metadata
+        channel_metadata = {
+            "source_system":      request.headers.get("X-Source-System", source_type),
+            "webhook_id":         x_webhook_id or "",
+            "webhook_timestamp":  x_webhook_timestamp or "",
+            "signature_header":   x_webhook_signature or "",
+            "source_ip":          client_ip,
+            "user_agent":         request.headers.get("User-Agent", ""),
+            "content_digest":     content_digest or "",
+            "hmac_verified":      True,
+            "replay_checked":     True,
+            "ip_checked":         bool((signing_config.get("ip_allowlist") or [])),
+        }
+
+        # 9. Hand off to ingestion pipeline
+        try:
+            from services.ingestion_svc.handler import IngestionHandler
+            from services.ingestion_svc.models import ChannelEnum, InvoiceInput
+
+            handler = IngestionHandler(DB_URL, None)  # no kafka broker in webhook path
+            correlation_id  = _safe_uuid_or_none(request.headers.get("X-Correlation-ID", "")) or str(uuid.uuid4())
+            idempotency_key = x_webhook_id or str(uuid.uuid4())
+
+            try:
+                invoice = InvoiceInput(**{
+                    k: v for k, v in payload.items()
+                    if k in InvoiceInput.__dataclass_fields__
+                })
+            except TypeError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid webhook invoice payload: {exc}")
+
+            result = handler.ingest_invoice(
+                tenant_id       = x_tenant_id,
+                invoice         = invoice,
+                idempotency_key = idempotency_key,
+                channel         = ChannelEnum.WEBHOOK,
+                channel_metadata= channel_metadata,
+                received_at     = datetime.now(timezone.utc),
+                received_by_user= None,
+                correlation_id  = correlation_id,
+                causation_id    = _safe_uuid_or_none(x_webhook_id or ""),
+                data_residency_region = payload.get("data_residency_region") or "ap-south-1",
+                jurisdiction_code     = payload.get("jurisdiction_code") or None,
+                brand_id              = payload.get("brand_id") or None,
+            )
+
+            # 10. Continue the SAME pipeline /cases/submit uses — validate →
+            # canonicalize → open case — so a real carrier webhook actually
+            # produces a governed case instead of only a stored source record.
+            case_id    = None
+            case_state = None
+            try:
+                from services.validation_svc.handler    import ValidationHandler
+                from services.canonical_truth.handler   import CanonicalHandler
+                from services.case_orchestration.handler import CaseHandler
+                from services.api_gateway.app           import _BROKER, _run_evidence_and_reasoning
+
+                slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (x_tenant_id,))
+                slug     = slug_row["slug"] if slug_row else "default"
+                broker   = _BROKER
+
+                val_r = ValidationHandler(DB_URL, broker, slug).validate(
+                    x_tenant_id, result.source_record_id, invoice.invoice_number,
+                    invoice.carrier_id, invoice.total_amount, invoice.currency,
+                )
+                can_r = CanonicalHandler(DB_URL, broker, slug).canonicalize_invoice(
+                    x_tenant_id, result.source_record_id, invoice.invoice_number,
+                    invoice.carrier_id, invoice.total_amount, invoice.currency,
+                    invoice.route_origin, invoice.route_destination, invoice.weight_lbs,
+                    invoice_date=invoice.invoice_date,
+                    transport_mode=invoice.transport_mode,
+                    equipment_type=invoice.equipment_type,
+                    charge_lines=invoice.charge_lines,
+                )
+                case_r = CaseHandler(DB_URL, broker).open_case(
+                    x_tenant_id, can_r.canonical_invoice_id, actor_sub="system:webhook",
+                )
+                case_id    = str(case_r.case_id)
+                case_state = case_r.state
+
+                if case_r.is_new:
+                    diff = float(val_r.overcharge_amount) if val_r.overcharge_amount else 0.0
+                    import threading as _threading
+                    _threading.Thread(
+                        target=lambda: _run_evidence_and_reasoning(
+                            tenant_id=x_tenant_id, case_id=case_id, slug=slug,
+                            carrier=invoice.carrier_id, amount=diff, currency=invoice.currency,
+                            route=f"{invoice.route_origin} - {invoice.route_destination}",
+                            actor_sub="system:webhook", broker=broker,
+                        ),
+                        daemon=True, name=f"webhook-p3-{case_id}",
+                    ).start()
+            except Exception as case_exc:
+                # Source record is already safely stored — never fail webhook
+                # acceptance because case-opening hit an error. Surface it in
+                # the ingestion run so it's visible, not silent.
+                _record_ingestion_run(
+                    connector_id, x_tenant_id, "COMPLETED", received=1, accepted=1, rejected=0,
+                    error_detail=f"Stored but case pipeline failed: {case_exc}",
+                )
+                return JSONResponse(status_code=202, content={
+                    "accepted":              True,
+                    "source_record_id":      str(result.source_record_id),
+                    "deduplication_outcome": result.deduplication_outcome,
+                    "correlation_id":        correlation_id,
+                    "webhook_id":            x_webhook_id or "",
+                    "case_id":               None,
+                    "case_pipeline_error":   str(case_exc),
+                })
+
+            _record_ingestion_run(connector_id, x_tenant_id, "COMPLETED", received=1, accepted=1, rejected=0)
+
+            return JSONResponse(status_code=202, content={
+                "accepted":              True,
+                "source_record_id":      str(result.source_record_id),
+                "deduplication_outcome": result.deduplication_outcome,
+                "correlation_id":        correlation_id,
+                "webhook_id":            x_webhook_id or "",
+                "case_id":               case_id,
+                "case_state":            case_state,
+            })
+
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Webhook ingestion failed: {exc}")
+
+    except HTTPException as http_exc:
+        _record_ingestion_run(
+            connector_id, x_tenant_id, "FAILED",
+            received=1, accepted=0, rejected=1,
+            error_detail=f"HTTP {http_exc.status_code}: {http_exc.detail}",
         )
-
-        return JSONResponse(status_code=202, content={
-            "accepted":              True,
-            "source_record_id":      str(result.source_record_id),
-            "deduplication_outcome": result.deduplication_outcome,
-            "correlation_id":        correlation_id,
-            "webhook_id":            x_webhook_id or "",
-        })
-
-    except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Webhook ingestion failed: {exc}")
 
 
 # ── GET /webhooks/secrets/{tenant_id} ────────────────────────────────────────

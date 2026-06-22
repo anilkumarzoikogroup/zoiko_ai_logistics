@@ -140,7 +140,6 @@ def get_source_payload(
         from zoiko_common.crypto.aes_gcm import get_dek, decrypt as _aes_decrypt
         dek       = get_dek(str(claims.tenant_id))
         plaintext = _aes_decrypt(dek, bytes(row["ciphertext"]),
-                                  iv=bytes(row["raw_payload_iv"]) if row["raw_payload_iv"] else None,
                                   aad=row["raw_payload_aad"].encode() if row["raw_payload_aad"] else None)
     except Exception:
         # DEV_MODE — ciphertext is plaintext

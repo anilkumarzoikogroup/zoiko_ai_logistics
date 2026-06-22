@@ -95,7 +95,7 @@ demo-phase-3:
 	@cd backend/governance && ../../$(PY) demo_phase3.py
 
 demo-phase-4:
-	@cd backend/execution && ../../$(PY) demo_phase4.py
+	@cd backend/execution && ../../$(PY) scripts/demo_phase4.py
 
 demo-freight-overcharge:
 	@echo "==> Running SC-001: BlueDart bills Amazon India — overcharge detection pipeline"

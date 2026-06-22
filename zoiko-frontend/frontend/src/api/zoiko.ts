@@ -1,7 +1,7 @@
 import { api, api3, api4, USE_MOCK } from "./client";
 import * as mocks from "@/mocks/fixtures";
 import type {
-  Case, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
+  Case, Claim, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
   DecisionProposal, GovernanceToken, GovernanceDecision, CaseEvent,
   KafkaEvent, DashboardStats, SourceRecord, VarianceRecord, ACRBundle,
   ExecutionResult, RecoveryProof,
@@ -220,6 +220,44 @@ export const zoikoApi = {
       if (s.status === "error") throw new Error(s.error || "Pipeline failed");
     }
     throw new Error("Timed out waiting for case (90s)");
+  },
+
+  // ---------- Claims (SC-002) ----------
+  // Mirrors the Cases methods above exactly, on the same /claims spine.
+  async listClaimsPaged(filters?: { state?: string; page?: number; page_size?: number }): Promise<{ claims: Claim[]; total: number; page: number; pages: number }> {
+    if (USE_MOCK) { await delay(); return { claims: [], total: 0, page: 1, pages: 1 }; }
+    const { data } = await api.get<{ claims: Claim[]; total: number; page: number; pages: number }>("/claims", { params: filters });
+    return data;
+  },
+
+  async getClaim(id: string): Promise<Claim> {
+    if (USE_MOCK) { await delay(); throw new Error("Not available in mock mode"); }
+    const { data } = await api.get<Claim>(`/claims/${id}`);
+    return data;
+  },
+
+  async createClaim(payload: {
+    carrier: string; claim_type: string; claimed_amount: number; currency: string;
+    claim_reference?: string; description?: string; related_invoice_number?: string;
+  }): Promise<Claim> {
+    if (USE_MOCK) {
+      await delay(500);
+      throw new Error("Claim submission is not available in mock mode — set VITE_USE_MOCK=false");
+    }
+    // Same async submit + poll pattern as createCase() — avoids the
+    // ~15s blocking call that NAT/proxy connections drop.
+    const { data: job } = await api.post<{ job_id: string }>(
+      "/claims/submit-async", payload, { timeout: 10000 }
+    );
+    for (let i = 0; i < 45; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const { data: s } = await api.get<{ status: string; case: Claim | null; error: string | null }>(
+        `/claims/submit-status/${job.job_id}`, { timeout: 8000 }
+      );
+      if (s.status === "done" && s.case) return s.case;
+      if (s.status === "error") throw new Error(s.error || "Pipeline failed");
+    }
+    throw new Error("Timed out waiting for claim (90s)");
   },
 
   // ---------- Phase 2 artifacts ----------

@@ -3,7 +3,10 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from middleware.opa.client import OPAClient, MockOPAClient, OPADecision, OPAUnavailableError
+from middleware.opa.client import (
+    OPAClient, MockOPAClient, OPADecision, OPAUnavailableError,
+    FailClosedOPAClient, resolve_opa_client,
+)
 
 TENANT_ID = "tenant-abc-123"
 
@@ -121,3 +124,42 @@ class TestOPAUnavailable:
     def test_real_client_health_false_when_down(self):
         client = OPAClient(opa_url="http://localhost:19999", timeout=0.5)
         assert client.health() is False
+
+
+class TestFailClosedOPAClient:
+    """No real OPA configured in production must never silently allow."""
+
+    def test_evaluate_raises(self):
+        client = FailClosedOPAClient()
+        with pytest.raises(OPAUnavailableError):
+            client.evaluate("zoiko/freight_dispute", {})
+
+    def test_check_freight_dispute_raises(self):
+        client = FailClosedOPAClient()
+        with pytest.raises(OPAUnavailableError):
+            client.check_freight_dispute({"action": "APPROVE_PROPOSAL"})
+
+    def test_health_false(self):
+        assert FailClosedOPAClient().health() is False
+
+
+class TestResolveOPAClient:
+    """Single source of truth for client selection — this is the regression
+    guard for the bug where production (OPA_URL unset, dev_mode=False) used
+    to silently resolve to MockOPAClient(allow=True)."""
+
+    def test_opa_url_set_uses_real_client_regardless_of_dev_mode(self):
+        client = resolve_opa_client("http://localhost:8181", dev_mode=False)
+        assert isinstance(client, OPAClient)
+        assert not isinstance(client, (MockOPAClient, FailClosedOPAClient))
+
+    def test_no_url_and_dev_mode_uses_mock(self):
+        client = resolve_opa_client("", dev_mode=True)
+        assert isinstance(client, MockOPAClient)
+
+    def test_no_url_and_not_dev_mode_fails_closed(self):
+        """The production-default case: no OPA_URL, ZOIKO_DEV_MODE=false."""
+        client = resolve_opa_client("", dev_mode=False)
+        assert isinstance(client, FailClosedOPAClient)
+        with pytest.raises(OPAUnavailableError):
+            client.check_freight_dispute({"action": "ACCESS"})

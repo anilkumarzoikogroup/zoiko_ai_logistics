@@ -7,7 +7,7 @@ Implements the 8-gate pre-dispatch checklist before any credit/debit moves:
   Gate 2 — Token not expired (expires_at > now)
   Gate 3 — Token not consumed (Redis SET NX + DB status check)
   Gate 4 — Tenant binding correct (SHA-256 of tenant_id + decision_id)
-  Gate 5 — Scope matches authorized action (EXECUTE_CREDIT_MEMO)
+  Gate 5 — Scope matches authorized action (EXECUTE_CREDIT_MEMO, EXECUTE_DEBIT_NOTE, SETTLE_CLAIM)
   Gate 6 — Sanctions screening (stub — allow in dev/test)
   Gate 7 — FX rate lock acquired (stub — amount within 5% tolerance)
   Gate 8 — Connector certified (stub — carrier connector is ACTIVE)
@@ -41,7 +41,7 @@ from services.execution_gateway.models import (
 
 psycopg2.extras.register_uuid()
 
-_SCOPE_ALLOWED = {"EXECUTE_CREDIT_MEMO", "EXECUTE_DEBIT_NOTE"}
+_SCOPE_ALLOWED = {"EXECUTE_CREDIT_MEMO", "EXECUTE_DEBIT_NOTE", "SETTLE_CLAIM"}  # SETTLE_CLAIM = SC-002
 
 
 class ExecutionGateway:

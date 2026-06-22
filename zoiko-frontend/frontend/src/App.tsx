@@ -19,6 +19,9 @@ const Performance    = lazy(() => import("./features/dashboard/Performance"));
 const Cases          = lazy(() => import("./features/cases/Cases"));
 const NewCase        = lazy(() => import("./features/cases/NewCase"));
 const CaseDetail     = lazy(() => import("./features/cases/CaseDetail"));
+const Claims         = lazy(() => import("./features/claims/Claims"));
+const NewClaim       = lazy(() => import("./features/claims/NewClaim"));
+const ClaimDetail    = lazy(() => import("./features/claims/ClaimDetail"));
 const ExecuteRecovery= lazy(() => import("./features/cases/ExecuteRecovery"));
 const PaymentControl = lazy(() => import("./features/cases/PaymentControl"));
 const CarriersPage   = lazy(() => import("./features/carriers/CarriersPage"));
@@ -123,6 +126,11 @@ export default function App() {
         <Route path="/cases"     element={<Cases />} />
         <Route path="/cases/new" element={<NewCase />} />
         <Route path="/cases/:id" element={<CaseDetail />} />
+
+        {/* Claims (SC-002) */}
+        <Route path="/claims"     element={<Claims />} />
+        <Route path="/claims/new" element={<NewClaim />} />
+        <Route path="/claims/:id" element={<ClaimDetail />} />
 
         {/* Governance — role-gated */}
         <Route path="/analyst" element={

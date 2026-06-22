@@ -13,8 +13,8 @@ import sys, os, hashlib, uuid
 from dotenv import load_dotenv
 load_dotenv()
 
-sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "core", "packages", "zoiko-common"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "core", "packages", "zoiko-common"))
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 W  = "\033[97m"   # white

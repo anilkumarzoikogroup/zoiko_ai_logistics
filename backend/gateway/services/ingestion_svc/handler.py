@@ -28,11 +28,12 @@ from zoiko_common.crypto.jcs import canonicalize
 from shared.signer import sign
 from shared.redis_idem import mark_in_progress, mark_complete, get_status
 from services.ingestion_svc.models import (
-    InvoiceInput, IngestResult, ChannelEnum, DeduplicationOutcome,
+    InvoiceInput, ClaimInput, IngestResult, ChannelEnum, DeduplicationOutcome,
 )
 from services.ingestion_svc.dedup import compute_dedup_key, check_deduplication, write_dedup_index
 
 DOMAIN_TAG      = b"zoiko.ingestion.invoice.v1:"
+CLAIM_DOMAIN_TAG = b"zoiko.ingestion.claim.v1:"
 SCHEMA_VERSION  = "source-record.v1"
 DOMAIN_TAG_STR  = "zoiko/v1/source-record"
 DEV_MODE        = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
@@ -105,8 +106,9 @@ class IngestionHandler:
         try:
             from zoiko_common.crypto.aes_gcm import get_dek, encrypt as _aes_encrypt
             dek        = get_dek(tenant_id)
-            ciphertext, iv_bytes = _aes_encrypt(dek, canonical_bytes, aad=aad.encode())
-            dek_id     = getattr(dek, "id", f"dek-{tenant_id}-default")
+            ciphertext = _aes_encrypt(dek, canonical_bytes, aad=aad.encode())
+            iv_bytes   = ciphertext[:12]   # nonce — also embedded in ciphertext, kept here for the column
+            dek_id     = f"dek-{tenant_id}-default"
         except Exception as _enc_err:
             if not DEV_MODE:
                 raise RuntimeError(
@@ -321,6 +323,280 @@ class IngestionHandler:
             pass  # Outbox relay handles re-delivery
 
         # ── Step 8: Redis idempotency AFTER commit ──────────────────────────
+        mark_in_progress(tenant_id, idem_key)
+        mark_complete(tenant_id, idem_key)
+
+        return IngestResult(
+            source_record_id      = source_id,
+            canonical_hash        = raw_payload_hash.hex(),
+            idempotency_key       = idem_key,
+            tenant_id             = tenant_id,
+            deduplication_outcome = dedup_outcome,
+            correlation_id        = corr_id,
+            channel               = channel,
+        )
+
+    def ingest_claim(
+        self,
+        tenant_id: str,
+        claim: ClaimInput,
+        idempotency_key: str = None,
+        *,
+        channel: str = ChannelEnum.REST_API_PUSH,
+        channel_metadata: dict = None,
+        received_at: datetime = None,
+        received_by_user: str = None,
+        correlation_id: str = None,
+        causation_id: str = None,
+        data_residency_region: str = "ap-south-1",
+        jurisdiction_code: str = None,
+        brand_id: str = None,
+    ) -> IngestResult:
+        """SC-002 — mirrors ingest_invoice()'s pipeline exactly (hash-before-
+        encrypt, dedup, sign, lineage, outbox) but for a carrier claim
+        instead of an invoice. Does not touch ingest_invoice()."""
+        tenant_id   = str(tenant_id)
+        idem_key    = idempotency_key or str(uuid.uuid4())
+        recv_at     = received_at or datetime.now(timezone.utc)
+        corr_id     = correlation_id or str(uuid.uuid4())
+        ch_metadata = channel_metadata or {}
+
+        if get_status(tenant_id, idem_key) == "COMPLETE":
+            existing = _fetch_existing(self.db_url, tenant_id, idem_key)
+            if existing:
+                return existing
+
+        # ── Step 1: Build raw payload dict ──────────────────────────────────
+        payload_dict = {
+            "carrier_id":      claim.carrier_id,
+            "claim_reference": claim.claim_reference,
+            "claim_type":      claim.claim_type,
+            "claimed_amount":  str(claim.claimed_amount),
+            "currency":        claim.currency,
+        }
+        if claim.description:
+            payload_dict["description"] = claim.description
+        if claim.related_invoice_number:
+            payload_dict["related_invoice_number"] = claim.related_invoice_number
+
+        canonical_bytes = canonicalize(payload_dict)
+        payload_size    = len(canonical_bytes)
+
+        # ── Step 2: Hash BEFORE encryption ──────────────────────────────────
+        raw_payload_hash = hashlib.sha256(CLAIM_DOMAIN_TAG + canonical_bytes).digest()
+
+        # ── Step 3: Envelope-encrypt ─────────────────────────────────────────
+        aad = f"carrier_claim|{tenant_id}|{claim.claim_reference}"
+        iv_bytes = None
+        dek_id   = None
+        try:
+            from zoiko_common.crypto.aes_gcm import get_dek, encrypt as _aes_encrypt
+            dek        = get_dek(tenant_id)
+            ciphertext = _aes_encrypt(dek, canonical_bytes, aad=aad.encode())
+            iv_bytes   = ciphertext[:12]
+            dek_id     = f"dek-{tenant_id}-default"
+        except Exception as _enc_err:
+            if not DEV_MODE:
+                raise RuntimeError(
+                    f"AES-256-GCM encryption required in production: {_enc_err}"
+                ) from _enc_err
+            ciphertext = canonical_bytes
+
+        # ── Step 4: Sign source record ──────────────────────────────────────
+        signature_bytes, kid = sign(self.tenant_slug, raw_payload_hash)
+        signature_block = {
+            "alg":       "Ed25519",
+            "key_id":    kid,
+            "signature": base64.b64encode(signature_bytes).decode(),
+        }
+
+        source_id = uuid.uuid4()
+        now       = datetime.now(timezone.utc)
+
+        # ── Step 5: Compute deduplication key ──────────────────────────────
+        dedup_key = compute_dedup_key(
+            domain_tag          = DOMAIN_TAG_STR,
+            tenant_id           = tenant_id,
+            source_type         = "CLAIM",
+            source_type_version = "v1",
+            external_source_ref = claim.claim_reference,
+            payload_hash_hex    = raw_payload_hash.hex(),
+        )
+
+        # ── Step 6: DB transaction ──────────────────────────────────────────
+        conn = psycopg2.connect(self.db_url)
+        try:
+            cur = conn.cursor()
+
+            dedup_outcome, original_id = check_deduplication(
+                cur=cur,
+                tenant_id           = tenant_id,
+                external_source_ref = claim.claim_reference,
+                payload_hash_hex    = raw_payload_hash.hex(),
+            )
+
+            cur.execute("""
+                INSERT INTO source_records (
+                    id, tenant_id,
+                    schema_version, domain_tag,
+                    brand_id, jurisdiction_code,
+                    data_residency_region, data_classification, retention_class,
+                    channel, channel_metadata,
+                    source_type, source_type_version,
+                    external_source_ref,
+                    received_at, received_by_service, received_by_user,
+                    raw_payload_content_type, raw_payload_encoding,
+                    raw_payload_size_bytes, raw_payload_hash_alg,
+                    raw_payload_aad, raw_payload_dek_id,
+                    raw_payload_iv,
+                    canonical_hash, ciphertext,
+                    signature, kid,
+                    signature_block,
+                    deduplication_key, deduplication_outcome,
+                    deduplication_canonical_record_id,
+                    validation_status, record_status,
+                    correlation_id, causation_id,
+                    idempotency_key, created_at
+                ) VALUES (
+                    %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s,
+                    %s, %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s,
+                    %s,
+                    %s, %s,
+                    %s, %s,
+                    %s,
+                    %s, %s,
+                    %s,
+                    %s, %s,
+                    %s, %s,
+                    %s, %s
+                )
+                ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
+                RETURNING id
+            """, (
+                source_id, tenant_id,
+                SCHEMA_VERSION, DOMAIN_TAG_STR,
+                brand_id, jurisdiction_code,
+                data_residency_region, "confidential", "tier-A",
+                channel, json.dumps(ch_metadata),
+                "CLAIM", "v1",
+                claim.claim_reference,
+                recv_at, SERVICE_SPIFFE, received_by_user,
+                "application/json", "utf-8",
+                payload_size, "sha-256",
+                aad, dek_id,
+                iv_bytes,
+                raw_payload_hash, ciphertext,
+                signature_bytes, kid,
+                json.dumps(signature_block),
+                dedup_key, dedup_outcome,
+                original_id if dedup_outcome == DeduplicationOutcome.DUPLICATE_OF else None,
+                "PENDING", "SIGNED",
+                corr_id, causation_id,
+                idem_key, now,
+            ))
+
+            inserted = cur.fetchone()
+            if inserted is None:
+                conn.rollback()
+                conn.close()
+                return _fetch_existing(self.db_url, tenant_id, idem_key) or IngestResult(
+                    source_record_id = source_id,
+                    canonical_hash   = raw_payload_hash.hex(),
+                    idempotency_key  = idem_key,
+                    tenant_id        = tenant_id,
+                    deduplication_outcome = dedup_outcome,
+                )
+
+            write_dedup_index(
+                cur                 = cur,
+                tenant_id           = tenant_id,
+                dedup_key           = dedup_key,
+                outcome             = dedup_outcome,
+                source_record_id    = source_id,
+                original_id         = original_id,
+                external_source_ref = claim.claim_reference,
+                payload_hash_hex    = raw_payload_hash.hex(),
+                source_type         = "CLAIM",
+                source_type_version = "v1",
+            )
+
+            _write_state_transition(cur, tenant_id, source_id, "SIGNED", "PENDING_VALIDATION", SERVICE_SPIFFE)
+            cur.execute(
+                "UPDATE source_records SET record_status='PENDING_VALIDATION' WHERE id=%s",
+                (source_id,)
+            )
+
+            if dedup_outcome == DeduplicationOutcome.AMBIGUOUS and original_id:
+                cur.execute("""
+                    INSERT INTO ambiguity_queue
+                        (id, tenant_id, source_record_id, original_record_id,
+                         external_source_ref, reason, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    uuid.uuid4(), tenant_id, source_id, original_id,
+                    claim.claim_reference,
+                    "Same external_source_ref received with different payload hash",
+                    now,
+                ))
+
+            cur.execute("""
+                INSERT INTO lineage_records
+                    (id, tenant_id, entity_type, entity_id, parent_id,
+                     event_type, payload_hash, recorded_at)
+                VALUES (%s, %s, %s, %s, NULL, %s, %s, %s)
+            """, (
+                uuid.uuid4(), tenant_id, "CLAIM", source_id,
+                "INGESTED", raw_payload_hash, now,
+            ))
+
+            outbox_payload = {
+                "source_record_id":      str(source_id),
+                "tenant_id":             tenant_id,
+                "claim_reference":       claim.claim_reference,
+                "carrier_id":            claim.carrier_id,
+                "claimed_amount":        float(claim.claimed_amount),
+                "currency":              claim.currency,
+                "canonical_hash":        raw_payload_hash.hex(),
+                "channel":               channel,
+                "deduplication_outcome": dedup_outcome,
+                "correlation_id":        corr_id,
+            }
+            cur.execute("""
+                INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                uuid.uuid4(), tenant_id, "zoiko.source.record.received",
+                str(source_id), json.dumps(outbox_payload), now,
+            ))
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        try:
+            from kafka.producer import ZoikoProducer, KafkaMessage
+            ZoikoProducer(self.broker).publish(KafkaMessage(
+                topic           = "zoiko.source.record.received",
+                key             = str(source_id),
+                payload         = outbox_payload,
+                tenant_id       = tenant_id,
+                idempotency_key = idem_key,
+            ))
+        except Exception:
+            pass
+
         mark_in_progress(tenant_id, idem_key)
         mark_complete(tenant_id, idem_key)
 

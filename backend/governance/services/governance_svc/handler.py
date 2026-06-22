@@ -362,41 +362,64 @@ class GovernanceHandler:
                 ))
 
             # Case FSM transition: APPROVAL_PENDING → EXECUTION_READY or ABORTED
+            #
+            # Previously: if the proposal or case lookup came back empty, this
+            # block silently did nothing — the governance_decisions/approval_*
+            # rows above still committed as a "successful" decision while the
+            # case itself never left APPROVAL_PENDING, with no error raised
+            # anywhere. A decision recorded against a broken proposal/case FK
+            # chain is a data-integrity problem, not something to swallow.
             cur.execute(
                 "SELECT case_id FROM decision_proposals WHERE id=%s AND tenant_id=%s",
                 (uuid.UUID(proposal_id), tenant_id),
             )
             prop_row = cur.fetchone()
-            if prop_row:
-                case_id = prop_row["case_id"]
-                cur.execute(
-                    "SELECT state FROM cases WHERE id=%s AND tenant_id=%s",
-                    (case_id, tenant_id),
+            if not prop_row:
+                raise ValueError(
+                    f"Governance decision cannot be finalized — proposal '{proposal_id}' "
+                    f"has no matching decision_proposals row for tenant {tenant_id} "
+                    f"(orphaned proposal_id)"
                 )
-                case_row = cur.fetchone()
-                if case_row and case_row["state"] == "APPROVAL_PENDING":
-                    cur2.execute(
-                        "UPDATE cases SET state=%s WHERE id=%s AND tenant_id=%s",
-                        (outcome, case_id, tenant_id),
-                    )
-                    # APPEND-ONLY case_event
-                    cur2.execute("""
-                        INSERT INTO case_events
-                            (id, tenant_id, case_id, event_type, from_state, to_state,
-                             actor_sub, payload, occurred_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
-                    """, (
-                        uuid.uuid4(), tenant_id, case_id,
-                        f"GOVERNANCE_{outcome}",
-                        "APPROVAL_PENDING", outcome,
-                        actor_sub,
-                        json.dumps({
-                            "decision_id":    str(decision_id),
-                            "proposal_id":    proposal_id,
-                            "approval_level": approval_level,
-                        }),
-                        now,
-                    ))
+
+            case_id = prop_row["case_id"]
+            cur.execute(
+                "SELECT state FROM cases WHERE id=%s AND tenant_id=%s",
+                (case_id, tenant_id),
+            )
+            case_row = cur.fetchone()
+            if not case_row:
+                raise ValueError(
+                    f"Governance decision cannot be finalized — case '{case_id}' "
+                    f"referenced by proposal '{proposal_id}' does not exist for "
+                    f"tenant {tenant_id} (orphaned case_id)"
+                )
+
+            if case_row["state"] == "APPROVAL_PENDING":
+                cur2.execute(
+                    "UPDATE cases SET state=%s WHERE id=%s AND tenant_id=%s",
+                    (outcome, case_id, tenant_id),
+                )
+                # APPEND-ONLY case_event
+                cur2.execute("""
+                    INSERT INTO case_events
+                        (id, tenant_id, case_id, event_type, from_state, to_state,
+                         actor_sub, payload, occurred_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                """, (
+                    uuid.uuid4(), tenant_id, case_id,
+                    f"GOVERNANCE_{outcome}",
+                    "APPROVAL_PENDING", outcome,
+                    actor_sub,
+                    json.dumps({
+                        "decision_id":    str(decision_id),
+                        "proposal_id":    proposal_id,
+                        "approval_level": approval_level,
+                    }),
+                    now,
+                ))
+            # else: case already moved past APPROVAL_PENDING (e.g. a retried
+            # decide() call) — the decision is still recorded above, the FSM
+            # transition is intentionally a no-op here, not a silent failure.
 
             # Atomic outbox INSERT for governance decision
             outbox_decision_payload = {

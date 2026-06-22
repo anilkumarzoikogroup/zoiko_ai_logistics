@@ -25,7 +25,25 @@ class LocalKMSBackend:
     """
 
     def __init__(self, master_seed: bytes | None = None):
-        self._seed  = master_seed or os.urandom(32)
+        # Previously defaulted to os.urandom(32) — a fresh random seed on
+        # every instantiation. Since keys are derived as HMAC(seed,
+        # kms_resource), that meant the *same* kid produced a *different*
+        # key every time a new LocalKMSBackend() was created — including in
+        # a different process, or a second instance in the same process.
+        # A KMS's entire contract is that the same key id always resolves to
+        # the same key; signatures made by one instance could never be
+        # verified by another, which silently broke every offline/
+        # cross-process verification path (ACR verifier, transparency log).
+        # ZOIKO_KMS_DEV_SEED lets a deployment pin its own seed; otherwise
+        # fall back to a fixed (not random) dev constant so all instances
+        # within this codebase agree by default.
+        if master_seed is not None:
+            self._seed = master_seed
+        else:
+            env_seed = os.getenv("ZOIKO_KMS_DEV_SEED", "")
+            self._seed = hashlib.sha256(
+                env_seed.encode() if env_seed else b"zoiko-local-kms-dev-fixed-seed-v1"
+            ).digest()
         self._cache: dict[str, Ed25519PrivateKey] = {}
 
     # ── Signing ──────────────────────────────────────────────────────────────

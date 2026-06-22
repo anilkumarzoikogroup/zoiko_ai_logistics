@@ -2,24 +2,24 @@
 Reasoning Service — Agent Runtime orchestrates tool calls, records a reasoning
 trace, then computes confidence and produces a Finding + Decision Proposal.
 
-Agent Runtime flow (7 steps):
+Agent Runtime flow:
   1. read_evidence_bundle  — verify evidence exists (read-only DB call)
   2. read_contract_rates   — verify contract rates exist (read-only DB call)
   3. read_case_metadata    — confirm case state (read-only DB call)
-  4. RULE_ENGINE:fuel_charge   — apply SC-001 fuel surcharge rule
-  5. RULE_ENGINE:accessorial   — apply SC-001 accessorial charges rule
-  6. RULE_ENGINE:confidence    — compute weighted average (deterministic 0.96)
-  7. GROQ_AI:risk_assessment   — optional AI risk level + reasoning explanation
+  4..N. RULE_ENGINE:<rule_name> — one step per rule in the selected rule_bundle
+  N+1. RULE_ENGINE:confidence    — compute weighted average (deterministic)
+  N+2. GROQ_AI:risk_assessment   — optional AI risk level + reasoning explanation
 
-The SC-001 confidence formula is deterministic and must never change:
-  fuel_charge_confidence  = 1.00  (weight 0.50)
-  accessorial_confidence  = 0.92  (weight 0.50)
-  weighted_average        = 0.50 × 1.00 + 0.50 × 0.92 = 0.96
+rule_bundle selects which deterministic rule set applies — "SC001" (default,
+freight invoice overcharge) or "SC002" (carrier claim). Each bundle's formula
+is deterministic and must never change once shipped:
+  SC001: fuel_charge (1.00 × 0.50) + accessorial (0.92 × 0.50) = 0.96
+  SC002: liability_acknowledged (0.95 × 0.55) + amount_within_policy_cap (0.90 × 0.45) = 0.9275
 
-Step 7 adds ai_confidence and risk_level as supplementary fields.
-The official confidence (SC001_CONFIDENCE = 0.96) is NEVER changed by AI.
+The final GROQ_AI step adds ai_confidence and risk_level as supplementary
+fields. The official rule-engine confidence is NEVER changed by AI.
 
-All 7 steps are stored as a reasoning_trace row for audit replay.
+All steps are stored as a reasoning_trace row for audit replay.
 """
 import hashlib, json, uuid
 from datetime import datetime, timezone
@@ -42,6 +42,20 @@ SC001_CONFIDENCE = round(
     sum(r["confidence"] * r["weight"] for r in _RULES.values()), 4
 )  # = 0.96
 
+# ── SC-002 carrier claim rule weights — example bundle, illustrative starting
+# point for a real claims-adjustment rule owner to refine. Deterministic the
+# same way SC001_CONFIDENCE is. ───────────────────────────────────────────────
+_SC002_RULES = {
+    "liability_acknowledged":  {"confidence": 0.95, "weight": 0.55},
+    "amount_within_policy_cap": {"confidence": 0.90, "weight": 0.45},
+}
+SC002_CONFIDENCE = round(
+    sum(r["confidence"] * r["weight"] for r in _SC002_RULES.values()), 4
+)  # = 0.9275
+
+_RULE_BUNDLES = {"SC001": _RULES, "SC002": _SC002_RULES}
+_CONFIDENCE_BY_BUNDLE = {"SC001": SC001_CONFIDENCE, "SC002": SC002_CONFIDENCE}
+
 _AGENT_ID      = "zoiko.agent.freight_dispute.v1"
 _POLICY_VERSION = "v1.0.0"
 
@@ -61,8 +75,15 @@ class AgentRuntime:
         carrier:   str = "",
         route:     str = "",
         contract_rate: float = 0.0,
+        rule_bundle: str = "SC001",
     ) -> tuple[dict, list, list, list, dict]:
-        """Execute reasoning steps. Returns (rule_trace, steps, tools_used, evidence_refs, ai_result)."""
+        """Execute reasoning steps. Returns (rule_trace, steps, tools_used, evidence_refs, ai_result).
+
+        rule_bundle selects which deterministic rule set/weights apply
+        ("SC001" freight invoice overcharge, "SC002" carrier claim). Default
+        stays "SC001" so every existing call site is byte-identical to before."""
+        rules      = _RULE_BUNDLES[rule_bundle]
+        confidence = _CONFIDENCE_BY_BUNDLE[rule_bundle]
         steps: list[dict] = []
         tools_used: list[str] = []
         evidence_refs: list[str] = []
@@ -106,44 +127,35 @@ class AgentRuntime:
             "finding": f"Case state: {case_data.get('state', 'unknown')}",
         })
 
-        # Step 4 — fuel_charge rule
-        fuel = _RULES["fuel_charge"]
-        steps.append({
-            "step": 4, "tool": "RULE_ENGINE", "rule": "fuel_charge",
-            "input":      {"amount": amount, "currency": currency},
-            "confidence": fuel["confidence"],
-            "weight":     fuel["weight"],
-            "finding":    (
-                f"Fuel surcharge overcharge confirmed — "
-                f"confidence {fuel['confidence']*100:.0f}%, weight {fuel['weight']}"
-            ),
-        })
+        # Steps 4..N — one step per rule in the selected bundle (SC-001: fuel_charge,
+        # accessorial; SC-002: liability_acknowledged, amount_within_policy_cap)
+        step_num = 3
+        for rule_name, rule in rules.items():
+            step_num += 1
+            steps.append({
+                "step": step_num, "tool": "RULE_ENGINE", "rule": rule_name,
+                "input":      {"amount": amount, "currency": currency},
+                "confidence": rule["confidence"],
+                "weight":     rule["weight"],
+                "finding":    (
+                    f"{rule_name} confirmed — "
+                    f"confidence {rule['confidence']*100:.0f}%, weight {rule['weight']}"
+                ),
+            })
 
-        # Step 5 — accessorial rule
-        acc = _RULES["accessorial"]
-        steps.append({
-            "step": 5, "tool": "RULE_ENGINE", "rule": "accessorial",
-            "input":      {"amount": amount, "currency": currency},
-            "confidence": acc["confidence"],
-            "weight":     acc["weight"],
-            "finding":    (
-                f"Accessorial charges overcharge confirmed — "
-                f"confidence {acc['confidence']*100:.0f}%, weight {acc['weight']}"
-            ),
-        })
-
-        # Step 6 — weighted confidence + action decision
+        # Final rule step — weighted confidence + action decision
+        step_num += 1
         rule_trace = {
-            rule: {"confidence": v["confidence"], "weight": v["weight"]}
-            for rule, v in _RULES.items()
+            rule_name: {"confidence": v["confidence"], "weight": v["weight"]}
+            for rule_name, v in rules.items()
         }
-        rule_trace["weighted_average"] = SC001_CONFIDENCE
+        rule_trace["weighted_average"] = confidence
         steps.append({
-            "step": 6, "tool": "RULE_ENGINE", "rule": "compute_confidence",
-            "input":      {"rules": list(_RULES.keys())},
-            "confidence": SC001_CONFIDENCE,
+            "step": step_num, "tool": "RULE_ENGINE", "rule": "compute_confidence",
+            "input":      {"rules": list(rules.keys())},
+            "confidence": confidence,
             "finding":    (
-                f"Weighted confidence = {SC001_CONFIDENCE} → "
+                f"Weighted confidence = {confidence} → "
                 f"recommending action: {proposed_action}"
             ),
         })
@@ -189,8 +201,9 @@ class AgentRuntime:
                 ai_result["ai_reasoning"] = f"Groq unavailable: {_e}"
 
             tools_used.append("GROQ_AI:risk_assessment")
+            step_num += 1
             steps.append({
-                "step": 7, "tool": "GROQ_AI", "rule": "risk_assessment",
+                "step": step_num, "tool": "GROQ_AI", "rule": "risk_assessment",
                 "input":   {"carrier": carrier, "route": route, "amount": amount, "currency": currency},
                 "output":  ai_result,
                 "finding": f"AI risk: {ai_result['risk_level']} — confidence {ai_result['ai_confidence']}",
@@ -217,6 +230,7 @@ class ReasoningHandler:
         carrier:         str = "",
         route:           str = "",
         contract_rate:   float = 0.0,
+        rule_bundle:     str = "SC001",
     ) -> FindingResult:
         tenant_id = str(tenant_id)
         case_id   = str(case_id)
@@ -257,13 +271,15 @@ class ReasoningHandler:
             carrier=carrier,
             route=route,
             contract_rate=contract_rate,
+            rule_bundle=rule_bundle,
         )
+        confidence = rule_trace["weighted_average"]
 
         # ── Step 1 — finding record ──────────────────────────────────────────
         finding_payload = {
             "bundle_id":  bundle_id,
             "case_id":    case_id,
-            "confidence": str(SC001_CONFIDENCE),
+            "confidence": str(confidence),
             "rule_trace": rule_trace,
             "tenant_id":  tenant_id,
         }
@@ -294,7 +310,7 @@ class ReasoningHandler:
         governance_envelope = {
             "action_intent_id":   str(action_intent_id),
             "agent_id":           _AGENT_ID,
-            "confidence":         SC001_CONFIDENCE,
+            "confidence":         confidence,
             "evidence_refs":      evidence_refs,
             "policy_version":     _POLICY_VERSION,
             "reasoning_trace_id": str(trace_id),
@@ -317,7 +333,7 @@ class ReasoningHandler:
                 action_intent_id, tenant_id, uuid.UUID(case_id),
                 proposal_id, proposed_action,
                 _POLICY_VERSION, _AGENT_ID, now,
-                f"SC-001 weighted confidence {SC001_CONFIDENCE}: recommending {proposed_action}",
+                f"{rule_bundle} weighted confidence {confidence}: recommending {proposed_action}",
             ))
 
             # INSERT reasoning_trace
@@ -332,7 +348,7 @@ class ReasoningHandler:
                 json.dumps(steps),
                 tools_used,
                 evidence_refs,
-                SC001_CONFIDENCE,
+                confidence,
                 proposed_action,
                 _POLICY_VERSION,
                 now,
@@ -354,7 +370,7 @@ class ReasoningHandler:
                     ON CONFLICT (id) DO NOTHING
                 """, (
                     finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
-                    SC001_CONFIDENCE, json.dumps(rule_trace),
+                    confidence, json.dumps(rule_trace),
                     finding_hash, finding_sig, finding_kid, now,
                     ai_conf, ai_risk, ai_text,
                 ))
@@ -368,7 +384,7 @@ class ReasoningHandler:
                     ON CONFLICT (id) DO NOTHING
                 """, (
                     finding_id, tenant_id, uuid.UUID(case_id), uuid.UUID(bundle_id),
-                    SC001_CONFIDENCE, json.dumps(rule_trace),
+                    confidence, json.dumps(rule_trace),
                     finding_hash, finding_sig, finding_kid, now,
                 ))
 
@@ -390,7 +406,7 @@ class ReasoningHandler:
             finding_payload = {
                 "case_id":            case_id,
                 "finding_id":         str(finding_id),
-                "confidence":         SC001_CONFIDENCE,
+                "confidence":         confidence,
                 "proposal_id":        str(proposal_id),
                 "reasoning_trace_id": str(trace_id),
                 "agent_id":           _AGENT_ID,
@@ -404,7 +420,7 @@ class ReasoningHandler:
                 "currency":         currency,
                 "proposer_sub":     proposer_sub,
                 "action_intent_id": str(action_intent_id),
-                "confidence":       SC001_CONFIDENCE,
+                "confidence":       confidence,
             }
             cur.execute("""
                 INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
@@ -445,7 +461,7 @@ class ReasoningHandler:
             tenant_id           = tenant_id,
             case_id             = case_id,
             bundle_id           = bundle_id,
-            confidence          = SC001_CONFIDENCE,
+            confidence          = confidence,
             rule_trace          = rule_trace,
             proposed_action     = proposed_action,
             amount              = amount,

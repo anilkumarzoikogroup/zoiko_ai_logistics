@@ -65,9 +65,9 @@ services:
       - key: PYTHONIOENCODING
         value: utf-8
 
-      # ── Unused in production (leave blank) ────────────────────────────────
+      # ── OPA — real fail-closed policy server (see zoiko-opa service below) ──
       - key: OPA_URL
-        value: ""
+        value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
         value: ""
       - key: REDIS_URL
@@ -110,7 +110,7 @@ services:
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
-        value: ""
+        value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
         value: ""
       - key: REDIS_URL
@@ -149,8 +149,18 @@ services:
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
-        value: ""
+        value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
         value: ""
       - key: REDIS_URL
         value: ""
+
+  # ── OPA — fail-closed policy decision point for the three services above ───
+  - type: web
+    name: zoiko-opa
+    runtime: docker
+    dockerfilePath: ./backend/platform/opa/Dockerfile
+    dockerContext: ./backend/platform/opa
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
