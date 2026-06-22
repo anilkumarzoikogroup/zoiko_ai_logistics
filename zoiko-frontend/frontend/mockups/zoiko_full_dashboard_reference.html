@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Zoiko AI — L&amp;S Chain Platform (Reference UI)</title>
+<style>
+  :root{
+    --navy:#0f172a; --blue:#3b82f6; --purple:#8b5cf6; --teal:#06b6d4; --emerald:#10b981;
+    --bg:#f8fafc; --card:#ffffff; --border:#e2e8f0; --muted:#64748b;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--navy);display:flex;height:100vh;overflow:hidden;}
+
+  /* ───── Sidebar ───── */
+  .sidebar{width:230px;background:var(--navy);color:#fff;display:flex;flex-direction:column;flex-shrink:0;}
+  .brand{padding:20px 18px;font-weight:800;font-size:16px;border-bottom:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:8px;}
+  .brand .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--blue),var(--teal));display:inline-block;}
+  .nav{flex:1;padding:14px 10px;overflow-y:auto;}
+  .nav .section-label{font-size:10px;text-transform:uppercase;letter-spacing:.8px;color:#64748b;padding:14px 10px 6px;}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;font-size:13px;color:#cbd5e1;cursor:pointer;margin-bottom:2px;}
+  .nav-item:hover{background:rgba(255,255,255,.06);}
+  .nav-item.active{background:var(--blue);color:#fff;}
+  .nav-item .ic{width:16px;text-align:center;}
+  .sidebar-footer{padding:14px 18px;font-size:11px;color:#64748b;border-top:1px solid rgba(255,255,255,.08);}
+
+  /* ───── Main ───── */
+  .main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+  .topbar{height:58px;background:#fff;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 24px;flex-shrink:0;}
+  .topbar .tenant{font-size:13px;font-weight:700;}
+  .topbar .tenant span{display:block;font-size:11px;color:var(--muted);font-weight:400;}
+  .search{flex:1;max-width:380px;margin:0 24px;}
+  .search input{width:100%;padding:8px 14px;border:1px solid var(--border);border-radius:8px;font-size:13px;background:#f8fafc;}
+  .topbar-right{display:flex;align-items:center;gap:16px;}
+  .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--purple),var(--blue));color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;}
+
+  .content{flex:1;overflow-y:auto;padding:24px 28px;}
+  .view{display:none;}
+  .view.active{display:block;}
+
+  h1.page-title{font-size:19px;margin:0 0 4px;}
+  p.page-sub{font-size:13px;color:var(--muted);margin:0 0 20px;}
+
+  /* KPI cards */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px;}
+  .kpi{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px 18px;}
+  .kpi .label{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+  .kpi .val{font-size:24px;font-weight:800;margin-top:6px;}
+  .kpi .delta{font-size:11.5px;margin-top:4px;font-weight:600;}
+  .up{color:var(--emerald);} .down{color:#ef4444;}
+
+  .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:18px;}
+  .card h3{margin:0 0 14px;font-size:13.5px;}
+
+  /* slice chart bars */
+  .bars{display:flex;align-items:flex-end;gap:18px;height:160px;padding-top:10px;}
+  .bar-col{flex:1;display:flex;flex-direction:column;align-items:center;}
+  .bar{width:100%;border-radius:6px 6px 0 0;background:linear-gradient(180deg,var(--blue),#93c5fd);}
+  .bar-col .lbl{font-size:10.5px;color:var(--muted);margin-top:8px;text-align:center;}
+  .bar-col .n{font-size:11px;font-weight:700;margin-bottom:4px;}
+
+  /* slice filter chips */
+  .chips{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;}
+  .chip{font-size:12px;font-weight:600;padding:6px 13px;border-radius:999px;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--muted);}
+  .chip.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.3px;padding:8px 10px;border-bottom:1px solid var(--border);}
+  td{padding:11px 10px;border-bottom:1px solid #f1f5f9;}
+  tr:hover td{background:#f8fafc;}
+  .tag{font-size:10px;font-weight:700;padding:3px 9px;border-radius:6px;}
+  .t-inv{background:#dbeafe;color:#1d4ed8;} .t-claim{background:#ede9fe;color:#7c3aed;}
+  .t-sla{background:#fee2e2;color:#dc2626;} .t-supp{background:#dcfce7;color:#16a34a;}
+  .t-acc{background:#fef3c7;color:#b45309;} .t-proc{background:#cffafe;color:#0e7490;}
+  .t-inven{background:#f1f5f9;color:#475569;}
+  .pill{font-size:10px;font-weight:700;padding:3px 10px;border-radius:999px;border:1px solid;}
+  .p-amber{background:#fef3c7;color:#b45309;border-color:#fde68a;}
+  .p-blue{background:#dbeafe;color:#1d4ed8;border-color:#bfdbfe;}
+  .p-emerald{background:#d1fae5;color:#047857;border-color:#a7f3d0;}
+  .p-red{background:#fee2e2;color:#b91c1c;border-color:#fecaca;}
+  .conf{font-weight:700;}
+  .plain{color:var(--muted);font-size:12px;max-width:340px;line-height:1.5;}
+
+  /* Case detail pipeline stepper */
+  .stepper{display:flex;align-items:center;margin:18px 0 6px;}
+  .step{flex:1;text-align:center;position:relative;}
+  .step .circle{width:30px;height:30px;border-radius:50%;background:var(--emerald);color:#fff;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;font-size:14px;font-weight:700;}
+  .step.pending .circle{background:#e2e8f0;color:#94a3b8;}
+  .step .lbl{font-size:10.5px;color:var(--muted);font-weight:600;}
+  .step::after{content:"";position:absolute;top:15px;left:50%;width:100%;height:2px;background:var(--border);z-index:-1;}
+  .step:last-child::after{display:none;}
+
+  .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px;}
+  .kv{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:12.5px;}
+  .kv b{color:var(--navy);}
+  .kv span{color:var(--muted);}
+
+  .evidence-item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:12px;}
+  .hash{font-family:monospace;font-size:10.5px;color:var(--muted);background:#f1f5f9;padding:2px 7px;border-radius:5px;}
+
+  .connector-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
+  .connector{background:#fff;border:1px solid var(--border);border-radius:10px;padding:16px;}
+  .connector .name{font-weight:700;font-size:13px;}
+  .connector .type{font-size:11px;color:var(--muted);margin:2px 0 10px;}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;}
+
+  .gov-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid #f1f5f9;}
+  .gov-actions button{font-size:11.5px;font-weight:700;padding:6px 13px;border-radius:7px;border:none;cursor:pointer;margin-left:6px;}
+  .btn-approve{background:var(--emerald);color:#fff;}
+  .btn-reject{background:#fee2e2;color:#b91c1c;}
+
+  .acr-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid #f1f5f9;font-size:12.5px;}
+  .verify-btn{font-size:11px;font-weight:700;padding:5px 12px;border-radius:7px;border:1px solid var(--border);background:#fff;cursor:pointer;color:var(--blue);}
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="brand"><span class="logo"></span> Zoiko AI</div>
+  <div class="nav">
+    <div class="section-label">Overview</div>
+    <div class="nav-item active" data-view="dashboard"><span class="ic">▦</span> Dashboard</div>
+
+    <div class="section-label">Governed Spine</div>
+    <div class="nav-item" data-view="queue"><span class="ic">☰</span> Case Queue</div>
+    <div class="nav-item" data-view="detail"><span class="ic">⊙</span> Case Detail</div>
+    <div class="nav-item" data-view="governance"><span class="ic">⚖</span> Governance &amp; Approvals</div>
+    <div class="nav-item" data-view="execution"><span class="ic">⇄</span> Execution &amp; Connectors</div>
+    <div class="nav-item" data-view="acr"><span class="ic">✓</span> ACR / Audit Certificates</div>
+
+    <div class="section-label">Slices</div>
+    <div class="nav-item" data-view="queue" data-chip="Invoice Overcharge"><span class="ic">●</span> Invoice Overcharge</div>
+    <div class="nav-item" data-view="queue" data-chip="Carrier Claim"><span class="ic">●</span> Carrier Claim</div>
+    <div class="nav-item" data-view="queue" data-chip="SLA Penalty"><span class="ic">●</span> SLA Penalty</div>
+    <div class="nav-item" data-view="queue" data-chip="Supplier Scorecard"><span class="ic">●</span> Supplier Scorecard</div>
+  </div>
+  <div class="sidebar-footer">Tenant: Acme Logistics Inc<br>v1.0 reference UI</div>
+</div>
+
+<div class="main">
+  <div class="topbar">
+    <div class="tenant">Acme Logistics Inc <span>Logistics &amp; Supply Chain workspace</span></div>
+    <div class="search"><input placeholder="Search cases, carriers, suppliers, invoices..."></div>
+    <div class="topbar-right">
+      <span style="font-size:18px;color:var(--muted);">🔔</span>
+      <div class="avatar">VK</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- DASHBOARD -->
+    <div class="view active" id="view-dashboard">
+      <h1 class="page-title">Dashboard</h1>
+      <p class="page-sub">One governed spine, every slice — overview across the whole L&amp;S Chain platform</p>
+
+      <div class="kpis">
+        <div class="kpi"><div class="label">Open Cases</div><div class="val">128</div><div class="delta up">▲ 12 this week</div></div>
+        <div class="kpi"><div class="label">Overcharge Caught</div><div class="val">₹18.4L</div><div class="delta up">▲ 8.2%</div></div>
+        <div class="kpi"><div class="label">Recovered</div><div class="val">₹14.1L</div><div class="delta up">▲ 5.6%</div></div>
+        <div class="kpi"><div class="label">Avg Resolution</div><div class="val">3.2 days</div><div class="delta down">▼ 0.4 days</div></div>
+      </div>
+
+      <div class="card">
+        <h3>Cases by Slice Type</h3>
+        <div class="bars">
+          <div class="bar-col"><div class="n">96</div><div class="bar" style="height:140px;background:linear-gradient(180deg,#3b82f6,#93c5fd)"></div><div class="lbl">Invoice<br>Overcharge</div></div>
+          <div class="bar-col"><div class="n">14</div><div class="bar" style="height:32px;background:linear-gradient(180deg,#8b5cf6,#c4b5fd)"></div><div class="lbl">Carrier<br>Claim</div></div>
+          <div class="bar-col"><div class="n">9</div><div class="bar" style="height:22px;background:linear-gradient(180deg,#ef4444,#fca5a5)"></div><div class="lbl">SLA<br>Penalty</div></div>
+          <div class="bar-col"><div class="n">5</div><div class="bar" style="height:14px;background:linear-gradient(180deg,#10b981,#6ee7b7)"></div><div class="lbl">Supplier<br>Scorecard</div></div>
+          <div class="bar-col"><div class="n">3</div><div class="bar" style="height:10px;background:linear-gradient(180deg,#f59e0b,#fcd34d)"></div><div class="lbl">Accessorial<br>Dispute</div></div>
+          <div class="bar-col"><div class="n">1</div><div class="bar" style="height:6px;background:linear-gradient(180deg,#06b6d4,#67e8f9)"></div><div class="lbl">Procurement<br>Anomaly</div></div>
+          <div class="bar-col"><div class="n">0</div><div class="bar" style="height:3px;background:#e2e8f0"></div><div class="lbl">Inventory<br>Exception</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Recent Activity</h3>
+        <div class="kv"><b>CASE-2026-0091</b><span>ACR certified · 4 min ago</span></div>
+        <div class="kv"><b>CLAIM-0014</b><span>Filed against Carrier XYZ · 22 min ago</span></div>
+        <div class="kv"><b>CASE-2026-0089</b><span>Governance approved · 1 hr ago</span></div>
+      </div>
+    </div>
+
+    <!-- CASE QUEUE -->
+    <div class="view" id="view-queue">
+      <h1 class="page-title">Case Queue</h1>
+      <p class="page-sub">Every slice flows through the same queue — filter by type, not by separate apps</p>
+
+      <div class="chips" id="chips">
+        <div class="chip active">All</div>
+        <div class="chip">Invoice Overcharge</div>
+        <div class="chip">Carrier Claim</div>
+        <div class="chip">SLA Penalty</div>
+        <div class="chip">Supplier Scorecard</div>
+        <div class="chip">Accessorial Dispute</div>
+        <div class="chip">Procurement Anomaly</div>
+        <div class="chip">Inventory Exception</div>
+      </div>
+
+      <div class="card" style="padding:0;">
+        <table>
+          <tr><th>Case ID</th><th>Slice</th><th>Subject</th><th>Amount</th><th>Status</th><th>What's Happening (Plain English)</th></tr>
+          <tr><td>CASE-2026-0091</td><td><span class="tag t-inv">Invoice Overcharge</span></td><td>BlueDart · Dallas→Atlanta</td><td>₹4,500</td><td><span class="pill p-amber">Governance Pending</span></td><td class="plain">BlueDart billed more than the signed contract rate allows. System caught it, now waiting for a manager to approve filing the claim.</td></tr>
+          <tr><td>CASE-2026-0090</td><td><span class="tag t-inv">Invoice Overcharge</span></td><td>FedEx · Mumbai→Pune</td><td>₹1,200</td><td><span class="pill p-blue">Executing</span></td><td class="plain">Same kind of overcharge, already approved — system is now actually sending the claim to FedEx.</td></tr>
+          <tr><td>CLAIM-0014</td><td><span class="tag t-claim">Carrier Claim</span></td><td>Carrier XYZ · Damaged pallet</td><td>₹18,000</td><td><span class="pill p-amber">Filed</span></td><td class="plain">A pallet arrived damaged. We've filed a claim asking the carrier to pay for the damage; waiting on their response.</td></tr>
+          <tr><td>SLA-0042</td><td><span class="tag t-sla">SLA Penalty</span></td><td>Carrier ABC · +2 days late</td><td>₹950</td><td><span class="pill p-amber">Under Review</span></td><td class="plain">Carrier promised delivery by Tuesday, it showed up Thursday. Contract has a late-fee clause — system is checking if we're owed a credit.</td></tr>
+          <tr><td>SUPP-0007</td><td><span class="tag t-supp">Supplier Scorecard</span></td><td>Supplier Nexa Traders</td><td>Score 72/100</td><td><span class="pill p-blue">Tracking</span></td><td class="plain">Not a one-time dollar issue — this supplier's on-time delivery and quality have been slipping over the last 30 days, so we're watching the trend.</td></tr>
+          <tr><td>ACC-0031</td><td><span class="tag t-acc">Accessorial Dispute</span></td><td>Residential fee · unauthorized</td><td>₹600</td><td><span class="pill p-amber">Disputed</span></td><td class="plain">Carrier added a "residential delivery" surcharge, but this lane was never approved for that fee. Disputing just this one line item.</td></tr>
+          <tr><td>CASE-2026-0088</td><td><span class="tag t-inv">Invoice Overcharge</span></td><td>DHL · Chennai→Bengaluru</td><td>₹2,800</td><td><span class="pill p-emerald">Closed</span></td><td class="plain">Same overcharge pattern as above — claim was filed, DHL accepted it in full, money recovered, case closed and certified.</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <!-- CASE DETAIL -->
+    <div class="view" id="view-detail">
+      <h1 class="page-title">CASE-2026-0091 <span class="tag t-inv">Invoice Overcharge</span></h1>
+      <p class="page-sub">BlueDart · INV-88213 · Dallas, TX → Atlanta, GA</p>
+
+      <div class="card">
+        <h3>Governed Pipeline</h3>
+        <div class="stepper">
+          <div class="step"><div class="circle">✓</div><div class="lbl">Evidence<br>Bundled</div></div>
+          <div class="step"><div class="circle">✓</div><div class="lbl">Finding<br>Generated</div></div>
+          <div class="step"><div class="circle">✓</div><div class="lbl">Governance<br>ALLOW</div></div>
+          <div class="step"><div class="circle">✓</div><div class="lbl">Token<br>Issued</div></div>
+          <div class="step"><div class="circle">✓</div><div class="lbl">Execution<br>Dispatched</div></div>
+          <div class="step"><div class="circle">✓</div><div class="lbl">Reconciled</div></div>
+          <div class="step pending"><div class="circle">!</div><div class="lbl">ACR<br>Certified</div></div>
+        </div>
+      </div>
+
+      <div class="detail-grid">
+        <div class="card">
+          <h3>Case Summary</h3>
+          <div class="kv"><b>Contract Rate</b><span>USD 1,500.00</span></div>
+          <div class="kv"><b>Invoice Total</b><span>USD 1,720.00</span></div>
+          <div class="kv"><b>Overcharge</b><span>USD 220.00</span></div>
+          <div class="kv"><b>Reason</b><span>Fuel surcharge + accessorial</span></div>
+          <div class="kv"><b>Confidence</b><span>0.96</span></div>
+          <div class="kv"><b>Expected Action</b><span>Submit carrier claim</span></div>
+        </div>
+        <div class="card">
+          <h3>Evidence Bundle</h3>
+          <div class="evidence-item">📄 Source Invoice <span class="hash">sha256:a1f3...9c2e</span></div>
+          <div class="evidence-item">📦 Canonical Shipment <span class="hash">sha256:7be0...1d44</span></div>
+          <div class="evidence-item">📑 Contract Rate Version <span class="hash">sha256:33aa...0f9b</span></div>
+          <div class="evidence-item">🧮 Rule Trace <span class="hash">sha256:c910...e2aa</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- GOVERNANCE -->
+    <div class="view" id="view-governance">
+      <h1 class="page-title">Governance &amp; Approvals</h1>
+      <p class="page-sub">Four-eyes review — approver can never be the same person who proposed the action</p>
+
+      <div class="card">
+        <div class="gov-row">
+          <div><b>CASE-2026-0091</b> · Submit carrier claim for USD 220.00<br><span style="font-size:11.5px;color:var(--muted)">Proposed by R. Sharma · Policy: freight-claims-policy@2026.05.01</span></div>
+          <div class="gov-actions"><button class="btn-approve">Approve</button><button class="btn-reject">Reject</button></div>
+        </div>
+        <div class="gov-row">
+          <div><b>SLA-0042</b> · Issue SLA credit of ₹950<br><span style="font-size:11.5px;color:var(--muted)">Proposed by R. Sharma · Policy: sla-penalty-policy@2026.04.10</span></div>
+          <div class="gov-actions"><button class="btn-approve">Approve</button><button class="btn-reject">Reject</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- EXECUTION -->
+    <div class="view" id="view-execution">
+      <h1 class="page-title">Execution &amp; Connectors</h1>
+      <p class="page-sub">Where governed decisions actually leave the building</p>
+
+      <div class="connector-grid">
+        <div class="connector"><div class="name">BlueDart API</div><div class="type">Carrier connector</div><span class="dot" style="background:#10b981"></span>Connected</div>
+        <div class="connector"><div class="name">MockCarrier</div><div class="type">SC-001 fixture</div><span class="dot" style="background:#f59e0b"></span>Mock only</div>
+        <div class="connector"><div class="name">TMS</div><div class="type">Transport mgmt</div><span class="dot" style="background:#94a3b8"></span>Not connected</div>
+        <div class="connector"><div class="name">WMS</div><div class="type">Warehouse mgmt</div><span class="dot" style="background:#94a3b8"></span>Not connected</div>
+        <div class="connector"><div class="name">ERP / GL</div><div class="type">Finance posting</div><span class="dot" style="background:#94a3b8"></span>Not connected</div>
+        <div class="connector"><div class="name">Sanctions Screen</div><div class="type">Compliance gate</div><span class="dot" style="background:#10b981"></span>Connected</div>
+      </div>
+    </div>
+
+    <!-- ACR -->
+    <div class="view" id="view-acr">
+      <h1 class="page-title">ACR / Audit Certificates</h1>
+      <p class="page-sub">Cryptographically signed proof that the certified action actually happened</p>
+
+      <div class="card">
+        <div class="acr-row"><div><b>CASE-2026-0088</b> · DHL Chennai→Bengaluru</div><span class="pill p-emerald">CERTIFIED</span><button class="verify-btn">Verify</button></div>
+        <div class="acr-row"><div><b>CASE-2026-0091</b> · BlueDart Dallas→Atlanta</div><span class="pill p-red">DEFECT — wrong artifact hash</span><button class="verify-btn">Verify</button></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+const items = document.querySelectorAll(".nav-item");
+items.forEach(item=>{
+  item.addEventListener("click", ()=>{
+    items.forEach(i=>i.classList.remove("active"));
+    item.classList.add("active");
+    document.querySelectorAll(".view").forEach(v=>v.classList.remove("active"));
+    document.getElementById("view-"+item.dataset.view).classList.add("active");
+
+    if(item.dataset.chip){
+      document.querySelectorAll(".chip").forEach(c=>{
+        c.classList.toggle("active", c.textContent.trim()===item.dataset.chip);
+      });
+    }
+  });
+});
+document.querySelectorAll(".chip").forEach(chip=>{
+  chip.addEventListener("click", ()=>{
+    document.querySelectorAll(".chip").forEach(c=>c.classList.remove("active"));
+    chip.classList.add("active");
+  });
+});
+</script>
+</body>
+</html>

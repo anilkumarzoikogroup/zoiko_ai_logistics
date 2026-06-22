@@ -65,9 +65,9 @@ services:
       - key: PYTHONIOENCODING
         value: utf-8
 
-      # ── Unused in production (leave blank) ────────────────────────────────
+      # ── OPA — real fail-closed policy server (see zoiko-opa service below) ──
       - key: OPA_URL
-        value: ""
+        value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
         value: ""
       - key: REDIS_URL
@@ -79,7 +79,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: python -m uvicorn services.api_gateway.app:app --app-dir /app/backend/execution --host 0.0.0.0 --port $PORT --workers 2
+    dockerCommand: "sh -c 'cd /app/backend/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -110,7 +110,7 @@ services:
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
-        value: ""
+        value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
         value: ""
       - key: REDIS_URL
@@ -122,7 +122,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: python -m uvicorn services.api_gateway.app:app --app-dir /app/backend/governance --host 0.0.0.0 --port $PORT --workers 2
+    dockerCommand: "sh -c 'cd /app/backend/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -149,8 +149,18 @@ services:
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
-        value: ""
+        value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
         value: ""
       - key: REDIS_URL
         value: ""
+
+  # ── OPA — fail-closed policy decision point for the three services above ───
+  - type: web
+    name: zoiko-opa
+    runtime: docker
+    dockerfilePath: ./backend/platform/opa/Dockerfile
+    dockerContext: ./backend/platform/opa
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)

@@ -110,8 +110,11 @@ class OPAClient:
 
 class MockOPAClient(OPAClient):
     """
-    In-memory OPA mock for unit tests.
+    In-memory OPA mock for unit tests and local/dev convenience.
     Pre-load decisions with .set_decision(); default is allow=True.
+
+    NEVER wire this up for a production environment (ZOIKO_DEV_MODE=false) —
+    use resolve_opa_client() below instead of constructing clients directly.
     """
 
     def __init__(self):
@@ -136,3 +139,46 @@ class MockOPAClient(OPAClient):
                     return c["input"]
             return None
         return self._calls[-1]["input"] if self._calls else None
+
+
+class FailClosedOPAClient(OPAClient):
+    """
+    Used when no real OPA server is configured outside of dev/test mode.
+
+    Per SCAP v3.0 ("policy is fail-closed; no consequential action without
+    a governance decision"), a production deployment with no OPA_URL set
+    must never silently allow — it must behave exactly as if OPA were
+    unreachable: every check raises OPAUnavailableError, which callers
+    already convert to HTTP 503.
+    """
+
+    def __init__(self):
+        pass
+
+    def evaluate(self, policy_path: str, input_data: Dict[str, Any]) -> OPADecision:
+        raise OPAUnavailableError(
+            f"No OPA_URL configured for policy '{policy_path}' outside dev/test mode — "
+            "failing closed. Set OPA_URL or ZOIKO_DEV_MODE=true."
+        )
+
+    def health(self) -> bool:
+        return False
+
+
+def resolve_opa_client(opa_url: str, dev_mode: bool) -> OPAClient:
+    """
+    Single source of truth for which OPA client a service should use.
+
+      OPA_URL set            -> real OPAClient(opa_url), fail-closed on unreachable
+      OPA_URL unset + dev    -> MockOPAClient(), allow=True (local/test convenience)
+      OPA_URL unset + prod   -> FailClosedOPAClient(), every check raises -> 503
+
+    This replaces the old `OPAClient(OPA_URL) if OPA_URL else MockOPAClient()`
+    pattern, which silently allowed every request in production whenever
+    OPA_URL was left unset — the opposite of "non-bypassable governance."
+    """
+    if opa_url:
+        return OPAClient(opa_url)
+    if dev_mode:
+        return MockOPAClient()
+    return FailClosedOPAClient()

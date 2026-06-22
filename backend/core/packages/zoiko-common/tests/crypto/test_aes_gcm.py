@@ -60,3 +60,24 @@ class TestAESGCM:
         _, _, get_dek = self._mod()
         assert get_dek("t1") == get_dek("t1")
         assert get_dek("t1") != get_dek("t2")
+
+    def test_aad_roundtrip(self):
+        encrypt, decrypt, get_dek = self._mod()
+        dek = get_dek("tenant-aad-1")
+        aad = b"carrier_invoice|tenant-aad-1|BD-001"
+        ct  = encrypt(dek, b"invoice payload", aad=aad)
+        assert decrypt(dek, ct, aad=aad) == b"invoice payload"
+
+    def test_aad_mismatch_raises(self):
+        encrypt, decrypt, get_dek = self._mod()
+        dek = get_dek("tenant-aad-2")
+        ct  = encrypt(dek, b"invoice payload", aad=b"carrier_invoice|tenant-aad-2|BD-001")
+        with pytest.raises(ValueError):
+            decrypt(dek, ct, aad=b"carrier_invoice|tenant-aad-2|BD-999")
+
+    def test_missing_aad_on_decrypt_raises_if_encrypted_with_aad(self):
+        encrypt, decrypt, get_dek = self._mod()
+        dek = get_dek("tenant-aad-3")
+        ct  = encrypt(dek, b"invoice payload", aad=b"some-context")
+        with pytest.raises(ValueError):
+            decrypt(dek, ct)   # no aad passed

@@ -1,4 +1,4 @@
-# Zoiko AI Logistics — Unified Backend Image (All Phases)
+# Zoiko AI Logistics — Unified Backend Image (gateway + governance + execution)
 
 
 # ── Stage 1: install all Python dependencies ──────────────────────────────────
@@ -18,12 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install internal packages so every phase can import them without relying
+# Install internal packages so every service can import them without relying
 # purely on paths.py (belt-and-suspenders approach)
-COPY phase-0/packages/zoiko-common/ ./phase-0/packages/zoiko-common/
-COPY phase-1/packages/zoiko-kms/    ./phase-1/packages/zoiko-kms/
-RUN pip install --no-cache-dir -e ./phase-0/packages/zoiko-common \
- && pip install --no-cache-dir -e ./phase-1/packages/zoiko-kms
+COPY backend/core/packages/zoiko-common/  ./backend/core/packages/zoiko-common/
+COPY backend/platform/packages/zoiko-kms/ ./backend/platform/packages/zoiko-kms/
+RUN pip install --no-cache-dir -e ./backend/core/packages/zoiko-common \
+ && pip install --no-cache-dir -e ./backend/platform/packages/zoiko-kms
 
 # ── Stage 2: lean runtime image ───────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -50,15 +50,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=deps /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
 
-# ── Copy all phases ───────────────────────────────────────────────────────────
-COPY phase-0/ ./phase-0/
-COPY phase-1/ ./phase-1/
-COPY phase-2/ ./phase-2/
-COPY phase-3/ ./phase-3/
-COPY phase-4/ ./phase-4/
-COPY opa/     ./opa/
+# ── Copy backend services + shared config ──────────────────────────────────────
+COPY backend/      ./backend/
+COPY opa/          ./opa/
+COPY alembic.ini   ./alembic.ini
 
-# Startup script — runs Phase 2 (8000) + Phase 4 (8001) together
+# Startup script — runs gateway (8000) + execution (8001) together
 COPY start.sh /app/start.sh
 RUN chmod +x /app/start.sh
 
@@ -67,7 +64,7 @@ RUN useradd -r -u 1001 -s /sbin/nologin zoiko \
  && chown -R zoiko /app
 USER zoiko
 
-EXPOSE 8000 8001
+EXPOSE 8000 8001 8002
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1

@@ -52,38 +52,52 @@ class CaseHandler:
     def open_case(
         self,
         tenant_id: str,
-        canonical_invoice_id: uuid.UUID,
+        canonical_invoice_id: uuid.UUID = None,
         actor_sub: str = "system",
+        *,
+        claim_id: uuid.UUID = None,
     ) -> CaseResult:
-        tenant_id            = str(tenant_id)
-        canonical_invoice_id = uuid.UUID(str(canonical_invoice_id))
+        """Open a case against either an invoice (SC-001, default) or a claim
+        (SC-002 — pass claim_id= instead). Exactly one of canonical_invoice_id /
+        claim_id must be set, matching the chk_cases_subject DB constraint.
+        Existing callers that only pass canonical_invoice_id are unaffected."""
+        tenant_id = str(tenant_id)
+        if (canonical_invoice_id is None) == (claim_id is None):
+            raise ValueError("open_case requires exactly one of canonical_invoice_id or claim_id")
+
+        case_type = "CARRIER_CLAIM" if claim_id is not None else "INVOICE_OVERCHARGE"
+        canonical_invoice_id = uuid.UUID(str(canonical_invoice_id)) if canonical_invoice_id is not None else None
+        claim_id              = uuid.UUID(str(claim_id)) if claim_id is not None else None
         now                  = datetime.now(timezone.utc)
 
         conn = psycopg2.connect(self.db_url)
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-            # UNIQUE (tenant_id, invoice_id) — idempotent
+            # UNIQUE per subject (tenant_id, invoice_id) or (tenant_id, claim_id) — idempotent
             case_id = uuid.uuid4()
-            cur.execute("""
-                INSERT INTO cases (id, tenant_id, invoice_id, state, opened_at)
-                VALUES (%s, %s, %s, 'NEW', %s)
-                ON CONFLICT (tenant_id, invoice_id) DO NOTHING
+            conflict_col = "invoice_id" if case_type == "INVOICE_OVERCHARGE" else "claim_id"
+            cur.execute(f"""
+                INSERT INTO cases (id, tenant_id, invoice_id, claim_id, case_type, state, opened_at)
+                VALUES (%s, %s, %s, %s, %s, 'NEW', %s)
+                ON CONFLICT (tenant_id, {conflict_col}) WHERE {conflict_col} IS NOT NULL DO NOTHING
                 RETURNING id, state, opened_at
-            """, (case_id, tenant_id, canonical_invoice_id, now))
+            """, (case_id, tenant_id, canonical_invoice_id, claim_id, case_type, now))
             row = cur.fetchone()
 
             is_new = row is not None
             if not is_new:
                 cur.execute(
-                    "SELECT id, state, opened_at FROM cases WHERE tenant_id=%s AND invoice_id=%s",
-                    (tenant_id, canonical_invoice_id),
+                    f"SELECT id, state, opened_at FROM cases WHERE tenant_id=%s AND {conflict_col}=%s",
+                    (tenant_id, canonical_invoice_id if case_type == "INVOICE_OVERCHARGE" else claim_id),
                 )
                 row = cur.fetchone()
                 case_id = row["id"]
 
             if is_new:
                 # APPEND-ONLY: log the CASE_OPENED event
+                event_payload = {"invoice_id": str(canonical_invoice_id)} if case_type == "INVOICE_OVERCHARGE" \
+                    else {"claim_id": str(claim_id)}
                 cur.execute("""
                     INSERT INTO case_events
                         (id, tenant_id, case_id, event_type, from_state, to_state,
@@ -92,7 +106,7 @@ class CaseHandler:
                 """, (
                     uuid.uuid4(), tenant_id, case_id,
                     actor_sub,
-                    json.dumps({"invoice_id": str(canonical_invoice_id)}),
+                    json.dumps(event_payload),
                     now,
                 ))
 
@@ -107,7 +121,9 @@ class CaseHandler:
                 key       = str(case_id),
                 payload   = {
                     "case_id":    str(case_id),
-                    "invoice_id": str(canonical_invoice_id),
+                    "invoice_id": str(canonical_invoice_id) if canonical_invoice_id else None,
+                    "claim_id":   str(claim_id) if claim_id else None,
+                    "case_type":  case_type,
                     "state":      "NEW",
                 },
                 tenant_id = tenant_id,
@@ -120,6 +136,8 @@ class CaseHandler:
             state      = "NEW" if is_new else row["state"],
             opened_at  = now if is_new else row["opened_at"],
             is_new     = is_new,
+            case_type  = case_type,
+            claim_id   = claim_id,
         )
 
     def transition_state(

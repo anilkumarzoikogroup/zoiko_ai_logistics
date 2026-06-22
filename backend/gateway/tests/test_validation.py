@@ -126,4 +126,4 @@ class TestValidationIntegration:
         h = ValidationHandler(db_url, broker, test_tenant["slug"])
         result = h.validate(test_tenant["id"], ing.source_record_id, ing.idempotency_key, "UNKNOWN-CARRIER", 500.0)
         assert result.status == "WARN"
-        assert any(v.rule == "NO_CONTRACT_RATE" for v in result.rule_violations)
+        assert any(v.rule == "R003_NO_CONTRACT_RATE" for v in result.rule_violations)

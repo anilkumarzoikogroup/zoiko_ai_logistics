@@ -10,15 +10,16 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from middleware.oidc.token_verifier import TokenVerifier, TokenExpiredError, TokenInvalidError
 from middleware.oidc.claims import ZoikoClaims
-from middleware.opa.client import OPAClient, MockOPAClient, OPAUnavailableError
+from middleware.opa.client import OPAUnavailableError, resolve_opa_client
 
-DEV_SECRET = os.getenv("ZOIKO_DEV_SECRET", "").encode()
-ISSUER     = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
-OPA_URL    = os.getenv("OPA_URL", "")
+DEV_SECRET     = os.getenv("ZOIKO_DEV_SECRET", "").encode()
+ISSUER         = os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com")
+OPA_URL        = os.getenv("OPA_URL", "")
+ZOIKO_DEV_MODE = os.getenv("ZOIKO_DEV_MODE", "false").lower() == "true"
 
 _security = HTTPBearer(auto_error=True)
 _verifier = TokenVerifier(dev_secret=DEV_SECRET, issuer=ISSUER)
-_opa      = OPAClient(OPA_URL) if OPA_URL else MockOPAClient()
+_opa      = resolve_opa_client(OPA_URL, ZOIKO_DEV_MODE)
 
 
 def get_claims(

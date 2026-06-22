@@ -1,11 +1,8 @@
 """Evaluation & Drift Service: evaluation runs, metrics, drift signals."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import List, Optional
 
 from services.api_gateway.auth import get_claims
 from shared.db import q, q1

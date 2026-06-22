@@ -40,6 +40,16 @@ allow if {
     input.tenant_id == input.claim_tenant_id
 }
 
+# ── Allow: generic authenticated access (get_claims dependency) ───────────────
+# This is the action sent on every gateway/governance request, not just the
+# fine-grained governance actions above. Tenant binding between the JWT and
+# the X-Tenant-ID header is already verified in Python before this call — this
+# rule only confirms the caller carries at least one assigned role.
+allow if {
+    input.action == "ACCESS"
+    count(input.roles) > 0
+}
+
 # ── Allow: execution gateway with valid EXECUTE token ────────────────────────
 allow if {
     input.action == "EXECUTE_RECOVERY"
@@ -83,4 +93,10 @@ violations[msg] if {
     input.action == "PROPOSE_RECOVERY"
     not "analyst" in input.roles
     msg := "Role required: analyst"
+}
+
+violations[msg] if {
+    input.action == "ACCESS"
+    count(input.roles) == 0
+    msg := "No role assigned to this principal"
 }

@@ -104,7 +104,6 @@ class ObservabilityHandler:
 
     def alerts(self, tenant_id: str) -> List[Dict[str, Any]]:
         """Returns list of currently firing alert conditions."""
-        now = datetime.now(timezone.utc)
         active_alerts: List[Dict[str, Any]] = []
 
         # Alert 1 — residency violation detected

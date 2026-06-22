@@ -4,7 +4,6 @@ Manages legal hold lifecycle: create, release, check, by-scope.
 Legal hold blocks purge, crypto-shred and destructive archive lifecycle.
 """
 import uuid
-from datetime import datetime, timezone
 from typing import Optional, List
 
 import paths  # noqa: F401
@@ -31,7 +30,6 @@ class LegalHoldHandler:
     ) -> LegalHoldResult:
         hold_id   = str(uuid.uuid4())
         evidence_id = str(uuid.uuid4())
-        now       = datetime.now(timezone.utc).isoformat()
 
         _db.q("""
             INSERT INTO legal_hold_records

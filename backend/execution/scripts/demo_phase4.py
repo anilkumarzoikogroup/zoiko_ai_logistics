@@ -14,6 +14,7 @@ Usage:
 """
 import os, sys
 from dotenv import load_dotenv
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import paths  # noqa: F401
 
 load_dotenv()

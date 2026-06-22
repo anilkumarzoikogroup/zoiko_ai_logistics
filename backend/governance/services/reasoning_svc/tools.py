@@ -3,7 +3,7 @@
 Read-only tools (ALLOWED):
   read_evidence_bundle  — fetches evidence items for a bundle
   read_contract_rates   — fetches applicable contract rates
-  read_case_metadata    — fetches case state and invoice metadata
+  read_case_metadata    — fetches case state and subject metadata (invoice or claim)
 
 Forbidden tools (DENIED — these require the Execution Gateway):
   call_carrier_api        — only Execution Gateway may call carrier APIs
@@ -40,7 +40,7 @@ _REGISTRY: dict[str, dict] = {
     "read_case_metadata": {
         "allowed": True,
         "requires_approval": False,
-        "description": "Read case state and invoice metadata (read-only)",
+        "description": "Read case state and subject metadata — invoice or claim (read-only)",
     },
     "call_carrier_api": {
         "allowed": False,
@@ -122,6 +122,7 @@ def _read_contract_rates(db_url: str, tenant_id: str, carrier_id: str = None) ->
                 cur.execute(
                     "SELECT carrier_id, rate_type, rate_value, currency "
                     "FROM contract_rates WHERE tenant_id=%s AND carrier_id=%s "
+                    "AND superseded_at IS NULL "
                     "AND (expires_on IS NULL OR expires_on >= CURRENT_DATE) "
                     "ORDER BY effective_on DESC",
                     (tenant_id, carrier_id),
@@ -130,6 +131,7 @@ def _read_contract_rates(db_url: str, tenant_id: str, carrier_id: str = None) ->
                 cur.execute(
                     "SELECT carrier_id, rate_type, rate_value, currency "
                     "FROM contract_rates WHERE tenant_id=%s "
+                    "AND superseded_at IS NULL "
                     "AND (expires_on IS NULL OR expires_on >= CURRENT_DATE) "
                     "ORDER BY effective_on DESC",
                     (tenant_id,),
@@ -143,17 +145,36 @@ def _read_contract_rates(db_url: str, tenant_id: str, carrier_id: str = None) ->
 
 
 def _read_case_metadata(db_url: str, case_id: str, tenant_id: str) -> dict:
+    """Reads case state + subject metadata. Branches on cases.case_type since
+    SC-001 cases join canonical_invoices (via invoice_id) and SC-002 cases join
+    claims (via claim_id) — the two subject tables have no common parent."""
     try:
         conn = psycopg2.connect(db_url)
         try:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(
-                "SELECT c.state, ci.carrier_id, ci.total_amount, ci.currency "
-                "FROM cases c "
-                "JOIN canonical_invoices ci ON ci.id = c.invoice_id "
-                "WHERE c.id=%s AND c.tenant_id=%s",
+                "SELECT case_type FROM cases WHERE id=%s AND tenant_id=%s",
                 (uuid.UUID(case_id), tenant_id),
             )
+            case_row = cur.fetchone()
+            case_type = (case_row or {}).get("case_type", "INVOICE_OVERCHARGE")
+
+            if case_type == "CARRIER_CLAIM":
+                cur.execute(
+                    "SELECT c.state, cl.carrier_id, cl.claimed_amount AS total_amount, cl.currency "
+                    "FROM cases c "
+                    "JOIN claims cl ON cl.id = c.claim_id "
+                    "WHERE c.id=%s AND c.tenant_id=%s",
+                    (uuid.UUID(case_id), tenant_id),
+                )
+            else:
+                cur.execute(
+                    "SELECT c.state, ci.carrier_id, ci.total_amount, ci.currency "
+                    "FROM cases c "
+                    "JOIN canonical_invoices ci ON ci.id = c.invoice_id "
+                    "WHERE c.id=%s AND c.tenant_id=%s",
+                    (uuid.UUID(case_id), tenant_id),
+                )
             row = cur.fetchone()
         finally:
             conn.close()

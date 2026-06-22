@@ -1,4 +1,8 @@
-# Zoiko AI Logistics — Unified Backend (Phase 2 + Phase 4 on port 8000)
+# Zoiko AI Logistics — Backend image (Render)
+#
+# This single image contains all three backend services (gateway, governance,
+# execution). Which one runs is decided by CMD — Render services override this
+# via `dockerCommand` in render.yaml. Default CMD runs the API gateway.
 
 # ── Stage 1: install dependencies ─────────────────────────────────────────────
 FROM python:3.11-slim AS deps
@@ -16,10 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY phase-0/packages/zoiko-common/ ./phase-0/packages/zoiko-common/
-COPY phase-1/packages/zoiko-kms/    ./phase-1/packages/zoiko-kms/
-RUN pip install --no-cache-dir -e ./phase-0/packages/zoiko-common \
- && pip install --no-cache-dir -e ./phase-1/packages/zoiko-kms
+COPY backend/core/packages/zoiko-common/  ./backend/core/packages/zoiko-common/
+COPY backend/platform/packages/zoiko-kms/ ./backend/platform/packages/zoiko-kms/
+RUN pip install --no-cache-dir -e ./backend/core/packages/zoiko-common \
+ && pip install --no-cache-dir -e ./backend/platform/packages/zoiko-kms
 
 # ── Stage 2: lean runtime ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -44,12 +48,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=deps /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
 COPY --from=deps /usr/local/bin/ /usr/local/bin/
 
-COPY phase-0/ ./phase-0/
-COPY phase-1/ ./phase-1/
-COPY phase-2/ ./phase-2/
-COPY phase-3/ ./phase-3/
-COPY phase-4/ ./phase-4/
-COPY opa/     ./opa/
+COPY backend/      ./backend/
+COPY opa/          ./opa/
+COPY alembic.ini   ./alembic.ini
 
 RUN useradd -r -u 1001 -s /sbin/nologin zoiko \
  && chown -R zoiko /app
@@ -60,5 +61,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
-# Phase 2 app now includes Phase 4 routes — single port, Render-ready
-CMD ["sh", "-c", "cd /app/phase-2 && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]
+# Default: API Gateway on $PORT (Render injects PORT)
+CMD ["sh", "-c", "cd /app/backend/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]

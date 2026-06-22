@@ -36,7 +36,7 @@ from services.api_gateway.models import (
     CanonicalizeRequest, CanonicalizeResponse,
     OpenCaseRequest, OpenCaseResponse,
     TransitionRequest, TransitionResponse,
-    SubmitCaseRequest, UIProposalRequest, UIDecideRequest,
+    SubmitCaseRequest, SubmitClaimRequest, UIProposalRequest, UIDecideRequest,
     ContractRateRequest,
     LoginRequest, RegisterRequest, RegisterResponse,
     UsersListResponse, UserItem,
@@ -49,7 +49,7 @@ from services.api_gateway.models import (
 from shared.db import q, q1
 from zoiko_common.crypto.jcs import canonicalize as _jcs
 from services.ingestion_svc.handler    import IngestionHandler
-from services.ingestion_svc.models     import InvoiceInput
+from services.ingestion_svc.models     import InvoiceInput, ClaimInput
 from services.validation_svc.handler  import ValidationHandler
 from services.canonical_truth.handler import CanonicalHandler
 from services.case_orchestration.handler import CaseHandler, ConflictError
@@ -404,7 +404,6 @@ def login(body: LoginRequest):
 def setup_first_user(body: dict):
     """One-time setup: creates the first tenant + admin user. Returns 409 if any user already exists."""
     import bcrypt as _bcrypt, psycopg2 as _pg
-    from middleware.oidc.token_verifier import TokenVerifier
 
     existing = q1("SELECT COUNT(*) AS cnt FROM users")
     if existing and int(existing["cnt"]) > 0:
@@ -2471,6 +2470,36 @@ def _cases_q(where: str, params: tuple, limit: int = 50, offset: int = 0) -> lis
     return [_r(row) for row in rows]
 
 
+def _claims_q(where: str, params: tuple, limit: int = 50, offset: int = 0) -> list[dict]:
+    """SC-002 — mirrors _cases_q() exactly but joins claims instead of
+    canonical_invoices. Does not touch _cases_q()."""
+    rows = q(f"""
+        SELECT
+            c.id::text                                                   AS id,
+            c.tenant_id::text                                            AS tenant_id,
+            c.state,
+            'CARRIER_CLAIM'                                              AS case_type,
+            cl.carrier_id                                                AS carrier,
+            cl.claim_reference                                           AS shipment_ref,
+            cl.claim_type                                                AS claim_type,
+            cl.claimed_amount::float                                     AS amount,
+            cl.currency,
+            COALESCE(cl.claimed_amount - cl.approved_amount, 0)::float   AS diff,
+            COALESCE((
+                SELECT f.confidence::float
+                FROM   findings f WHERE f.case_id = c.id LIMIT 1
+            ), 0)                                                        AS confidence,
+            c.opened_at,
+            c.opened_at                                                  AS updated_at
+        FROM  cases c
+        JOIN  claims cl ON cl.id = c.claim_id
+        {where}
+        ORDER BY c.opened_at DESC
+        LIMIT %s OFFSET %s
+    """, params + (limit, offset))
+    return [_r(row) for row in rows]
+
+
 # ── Dashboard stats ────────────────────────────────────────────────────────────
 
 @v1_router.get("/dashboard/stats", tags=["ui"])
@@ -2546,6 +2575,52 @@ def ui_get_case(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     )
     if not rows:
         raise HTTPException(status_code=404, detail="Case not found")
+    return rows[0]
+
+
+# ── Claims list + detail (SC-002) ───────────────────────────────────────────────
+
+@v1_router.get("/claims", tags=["ui"])
+def ui_list_claims(
+    state: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """Mirrors ui_list_cases() but joins claims instead of canonical_invoices."""
+    tid    = claims.tenant_id
+    limit  = max(1, min(page_size, 200))
+    offset = (max(1, page) - 1) * limit
+
+    if state:
+        total_row = q1(
+            "SELECT COUNT(*) AS cnt FROM cases c JOIN claims cl ON cl.id=c.claim_id "
+            "WHERE c.tenant_id=%s::uuid AND c.state=%s", (tid, state))
+        rows      = _claims_q("WHERE c.tenant_id=%s::uuid AND c.state=%s", (tid, state), limit=limit, offset=offset)
+    else:
+        total_row = q1(
+            "SELECT COUNT(*) AS cnt FROM cases c JOIN claims cl ON cl.id=c.claim_id "
+            "WHERE c.tenant_id=%s::uuid", (tid,))
+        rows      = _claims_q("WHERE c.tenant_id=%s::uuid", (tid,), limit=limit, offset=offset)
+
+    total = int(total_row["cnt"]) if total_row else 0
+    return {
+        "claims":    rows,
+        "total":     total,
+        "page":      page,
+        "page_size": limit,
+        "pages":     max(1, (total + limit - 1) // limit),
+    }
+
+
+@v1_router.get("/claims/{case_id}", tags=["ui"])
+def ui_get_claim(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    rows = _claims_q(
+        "WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid",
+        (claims.tenant_id, case_id),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Claim case not found")
     return rows[0]
 
 
@@ -2954,9 +3029,11 @@ def ui_kafka_events(claims: ZoikoClaims = Depends(get_claims)):
 def ui_list_contract_rates(claims: ZoikoClaims = Depends(get_claims)):
     rows = q("""
         SELECT id::text, carrier_id AS carrier, rate_type, rate_value::float,
-               currency, effective_on::text, expires_on::text
+               currency, effective_on::text, expires_on::text,
+               version, supersedes_id::text, source_document_id::text
         FROM   contract_rates
         WHERE  tenant_id = %s::uuid
+          AND  superseded_at IS NULL
         ORDER  BY carrier_id, rate_type
     """, (claims.tenant_id,))
     return [_r(r) for r in rows]
@@ -2967,22 +3044,68 @@ def ui_create_contract_rate(
     body: ContractRateRequest,
     claims: ZoikoClaims = Depends(get_claims),
 ):
+    """
+    Inserts a new contract rate. If an active rate already exists for the
+    same (carrier_id, rate_type), the old row is superseded rather than
+    overwritten — corrections create a new version, the prior version
+    stays queryable for replay/audit.
+    """
+    prior = q1("""
+        SELECT id::text, version FROM contract_rates
+        WHERE  tenant_id = %s::uuid AND carrier_id = %s AND rate_type = %s
+          AND  superseded_at IS NULL
+    """, (claims.tenant_id, body.carrier_id, body.rate_type))
+
     rid = uuid.uuid4()
+    next_version = (prior["version"] + 1) if prior else 1
+
+    # payload_hash binds the rate's monetary content at creation time so
+    # validation_svc can detect a direct DB mutation later (e.g. someone
+    # running UPDATE contract_rates SET rate_value=... outside this API).
+    # The column already existed but was only ever populated once by an old
+    # backfill migration over carrier_id+rate_type — it never covered
+    # rate_value/currency/dates and nothing ever re-checked it on read.
+    # rate_value is stored as NUMERIC(18,4) — psycopg2 reads it back as Decimal
+    # (e.g. Decimal('1000.0000')), which str()-formats differently from a raw
+    # Python float (1000.0). Both sides must format to the same fixed
+    # precision or every freshly-created rate would fail its own check.
+    rate_payload_hash = "sha256:" + hashlib.sha256(
+        f"zoiko.contract_rate.v1:{claims.tenant_id}:{body.carrier_id}:{body.rate_type}:"
+        f"{float(body.rate_value):.4f}:{body.currency}:{body.effective_on}:{body.expires_on or ''}".encode()
+    ).hexdigest()
+
     _raw_exec("""
         INSERT INTO contract_rates
-            (id, tenant_id, carrier_id, rate_type, rate_value, currency, effective_on, expires_on)
-        VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s)
+            (id, tenant_id, carrier_id, rate_type, rate_value, currency,
+             effective_on, expires_on, version, supersedes_id, source_document_id,
+             payload_hash)
+        VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (rid, claims.tenant_id, body.carrier_id, body.rate_type,
-          body.rate_value, body.currency, body.effective_on, body.expires_on))
+          body.rate_value, body.currency, body.effective_on, body.expires_on,
+          next_version, prior["id"] if prior else None, body.source_document_id,
+          rate_payload_hash))
+
+    if prior:
+        _raw_exec(
+            "UPDATE contract_rates SET superseded_at = NOW() WHERE id = %s::uuid",
+            (prior["id"],),
+        )
+
     return {"id": str(rid), "carrier_id": body.carrier_id, "rate_type": body.rate_type,
             "rate_value": body.rate_value, "currency": body.currency,
-            "effective_on": body.effective_on}
+            "effective_on": body.effective_on, "version": next_version,
+            "supersedes_id": prior["id"] if prior else None}
 
 
 @v1_router.delete("/contract-rates/{rate_id}", tags=["ui"])
 def ui_delete_contract_rate(rate_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """
+    Soft-delete only: marks the rate superseded rather than removing the
+    row, so a past overcharge calculation can always be traced back to
+    the exact rate that was in effect when it ran.
+    """
     _raw_exec(
-        "DELETE FROM contract_rates WHERE id=%s::uuid AND tenant_id=%s::uuid",
+        "UPDATE contract_rates SET superseded_at = NOW() WHERE id=%s::uuid AND tenant_id=%s::uuid AND superseded_at IS NULL",
         (rate_id, claims.tenant_id),
     )
     return {"deleted": rate_id}
@@ -3925,6 +4048,18 @@ async def extract_contract_rates(
     content = await file.read()
     if len(content) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_FILE_BYTES // 1024 // 1024} MB.")
+
+    # Store the source document's checksum so every rate extracted from it
+    # can be traced back to exactly this file — never the AI's word alone.
+    content_hash = hashlib.sha256(content).hexdigest()
+    document_id  = uuid.uuid4()
+    _raw_exec("""
+        INSERT INTO documents
+            (id, tenant_id, document_type, file_name, mime_type, content_hash, size_bytes)
+        VALUES (%s, %s::uuid, 'CONTRACT', %s, %s, %s, %s)
+    """, (document_id, claims.tenant_id, file.filename or "", file.content_type or "",
+          content_hash, len(content)))
+
     text = ""
     try:
         import pdfplumber, io
@@ -3937,12 +4072,18 @@ async def extract_contract_rates(
         raise HTTPException(status_code=422, detail="Could not extract text from file.")
 
     try:
+        import time as _time
         from groq import Groq as _Groq
         _groq = _Groq(api_key=groq_key)
 
+        prompt_version = "contract-rate-extraction-v1"
+        model_name     = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+        input_text     = text[:4000]
+        input_hash     = hashlib.sha256(input_text.encode()).hexdigest()
+
         prompt = (
             "You are a freight contract analyst. Extract ALL rate entries from this carrier contract.\n\n"
-            f"CONTRACT TEXT:\n{text[:4000]}\n\n"
+            f"CONTRACT TEXT:\n{input_text}\n\n"
             "Return ONLY a JSON array of rate objects. Each object must have:\n"
             '- "carrier_id": carrier name (string)\n'
             '- "rate_type": one of "fuel_charge", "accessorial", "base_rate", "surcharge"\n'
@@ -3953,13 +4094,26 @@ async def extract_contract_rates(
             "Extract every distinct rate you can find. Return ONLY the JSON array."
         )
 
+        _t0 = _time.monotonic()
         chat = _groq.chat.completions.create(
-            model=os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
+            model=model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=1000,
         )
+        latency_ms = int((_time.monotonic() - _t0) * 1000)
         raw = chat.choices[0].message.content.strip()
+        output_hash = hashlib.sha256(raw.encode()).hexdigest()
+
+        # Log this model call before doing anything else with its output, so the
+        # audit trail exists even if downstream parsing/validation rejects it.
+        _raw_exec("""
+            INSERT INTO model_calls
+                (id, tenant_id, purpose, model_id, model_version, prompt_version,
+                 input_hash, output_hash, latency_ms)
+            VALUES (%s, %s::uuid, 'contract_rate_extraction', %s, %s, %s, %s, %s, %s)
+        """, (uuid.uuid4(), claims.tenant_id, "groq:" + model_name, "", prompt_version,
+              input_hash, output_hash, latency_ms))
 
         # Extract JSON array from response
         import re as _re3
@@ -3972,16 +4126,25 @@ async def extract_contract_rates(
         except json.JSONDecodeError as _je:
             raise HTTPException(status_code=422, detail=f"AI returned malformed JSON: {_je}")
 
-        # Validate and sanitise each rate
+        # Schema-validate and sanitise each rate — malformed rows are dropped,
+        # never persisted as-is. No numeric output is trusted without this check.
         valid_types = {"fuel_charge", "accessorial", "base_rate", "surcharge"}
         cleaned = []
         for r in rates:
+            if not isinstance(r, dict):
+                continue
             if not r.get("carrier_id") or not r.get("rate_value"):
+                continue
+            try:
+                rate_value = float(r.get("rate_value", 0))
+            except (TypeError, ValueError):
+                continue
+            if rate_value <= 0:
                 continue
             cleaned.append({
                 "carrier_id":   str(r.get("carrier_id", "")).strip(),
                 "rate_type":    r.get("rate_type", "base_rate") if r.get("rate_type") in valid_types else "base_rate",
-                "rate_value":   float(r.get("rate_value", 0)),
+                "rate_value":   rate_value,
                 "currency":     str(r.get("currency", "INR")).strip().upper()[:3],
                 "effective_on": str(r.get("effective_on", datetime.now(timezone.utc).date())),
                 "expires_on":   r.get("expires_on"),
@@ -3991,6 +4154,7 @@ async def extract_contract_rates(
             "extracted_rates": cleaned,
             "count": len(cleaned),
             "parsed_by": "groq_ai",
+            "source_document_id": str(document_id),
             "message": f"Found {len(cleaned)} rate(s). Review and click Save to add them.",
         }
 
@@ -4130,7 +4294,7 @@ def send_dispute_letter_email(
         raise HTTPException(status_code=422, detail="dispute_letter is required")
 
     lines = letter.split("\n")
-    subject_line = next((l for l in lines if l.startswith("Subject:")), "Freight Overcharge Dispute")
+    subject_line = next((line for line in lines if line.startswith("Subject:")), "Freight Overcharge Dispute")
     subject  = _re.sub(r"^Subject:\s*", "", subject_line).strip() or "Freight Overcharge Dispute"
     body_text = _re.sub(r"^Subject:.*\n\n?", "", letter, count=1).strip()
 
@@ -4227,10 +4391,14 @@ def _run_evidence_and_reasoning(
         for itype, content in items_content:
             item_hash = hashlib.sha256(DOMAIN_TAG + content).digest()
             sig, kid  = _sign(slug, item_hash)
+            # sig/kid were computed above but never stored — only the bundle-
+            # level signature existed, so no single evidence item was
+            # independently verifiable. Store them on the item row too.
             cur.execute("""
-                INSERT INTO evidence_items (id, tenant_id, bundle_id, item_type, entity_id, item_hash, added_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (uuid.uuid4(), tenant_id, bundle_id, itype, uuid.uuid4(), item_hash, now))
+                INSERT INTO evidence_items
+                    (id, tenant_id, bundle_id, item_type, entity_id, item_hash, signature, kid, added_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (uuid.uuid4(), tenant_id, bundle_id, itype, uuid.uuid4(), item_hash, sig, kid, now))
             leaf_hashes.append(item_hash)
 
         # Recompute Merkle root
@@ -4292,6 +4460,131 @@ def _run_evidence_and_reasoning(
                               payload={"case_id": case_id, "bundle_id": str(bundle_id)}, tenant_id=tenant_id))
     prod.publish(KafkaMessage(topic="zoiko.finding.generated", key=case_id,
                               payload={"case_id": case_id, "confidence": SC001}, tenant_id=tenant_id))
+
+
+def _run_evidence_and_reasoning_claim(
+    tenant_id: str, case_id: str, slug: str,
+    carrier: str, amount: float, currency: str, claim_type: str,
+    actor_sub: str, broker,
+) -> None:
+    """SC-002 — mirrors _run_evidence_and_reasoning() exactly (claim-shaped
+    evidence items + SC002 rule weights) but does not touch the SC-001
+    function above. Add 4 evidence items, run reasoning, advance case to
+    FINDING_GENERATED."""
+    import psycopg2, psycopg2.extras, hashlib, json
+    from shared.signer import sign as _sign
+    from zoiko_common.crypto.merkle import MerkleTree
+    from zoiko_common.crypto.jcs import canonicalize as _jcs
+    from services.case_orchestration.handler import CaseHandler
+
+    DOMAIN_TAG = b"zoiko.evidence.item.v1:"
+    MERKLE_DOM = "zoiko/v1/evidence-item"
+
+    # Step 1 — transition NEW → EVIDENCE_PENDING
+    CaseHandler(DB_URL, broker).transition_state(tenant_id, case_id, "EVIDENCE_PENDING", actor_sub)
+
+    # Step 2 — add 4 synthetic evidence items (claim-shaped)
+    items_content = [
+        ("CLAIM_FORM",   f"Carrier claim form — {claim_type} claim against {carrier}".encode()),
+        ("PROOF_OF_LOSS", f"Proof of loss documentation — claimed amount {amount:.2f} {currency}".encode()),
+        ("BOL",          f"Bill of Lading — shipment carrier {carrier}".encode()),
+        ("CORRESPONDENCE", f"Carrier correspondence thread — {claim_type} claim {carrier}".encode()),
+    ]
+
+    now = datetime.now(timezone.utc)
+    psycopg2.extras.register_uuid()
+    conn = psycopg2.connect(DB_URL)
+    try:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+        lock_key = int(uuid.UUID(case_id)) % (2**31)
+        cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
+        cur.execute(
+            "SELECT id FROM evidence_bundles WHERE tenant_id=%s AND case_id=%s LIMIT 1",
+            (tenant_id, uuid.UUID(case_id)),
+        )
+        existing = cur.fetchone()
+        if existing:
+            bundle_id = existing["id"] if isinstance(existing, dict) else existing[0]
+        else:
+            bundle_id = uuid.uuid4()
+            ph = hashlib.sha256(DOMAIN_TAG + b"placeholder").digest()
+            sig0, kid0 = _sign(slug, ph)
+            cur.execute("""
+                INSERT INTO evidence_bundles (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (bundle_id, tenant_id, uuid.UUID(case_id), ph, sig0, kid0, now))
+
+        leaf_hashes = []
+        for itype, content in items_content:
+            item_hash = hashlib.sha256(DOMAIN_TAG + content).digest()
+            sig, kid  = _sign(slug, item_hash)
+            cur.execute("""
+                INSERT INTO evidence_items
+                    (id, tenant_id, bundle_id, item_type, entity_id, item_hash, signature, kid, added_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (uuid.uuid4(), tenant_id, bundle_id, itype, uuid.uuid4(), item_hash, sig, kid, now))
+            leaf_hashes.append(item_hash)
+
+        _tree = MerkleTree(MERKLE_DOM)
+        for _h in leaf_hashes:
+            _tree.append(_h)
+        merkle_root = _tree.root()
+        root_sig, root_kid = _sign(slug, merkle_root)
+        cur.execute(
+            "UPDATE evidence_bundles SET bundle_hash=%s, signature=%s, kid=%s, completeness_status='COMPLETE' WHERE id=%s",
+            (merkle_root, root_sig, root_kid, bundle_id)
+        )
+
+        # Step 3 — reasoning: SC-002 confidence = 0.9275 (liability_acknowledged + amount_within_policy_cap)
+        SC002 = 0.9275
+        rule_trace = {
+            "liability_acknowledged":   {"confidence": 0.95, "weight": 0.55},
+            "amount_within_policy_cap": {"confidence": 0.90, "weight": 0.45},
+            "weighted_average":         SC002,
+        }
+        finding_payload = {"bundle_id": str(bundle_id), "case_id": case_id,
+                           "confidence": str(SC002), "rule_trace": rule_trace, "tenant_id": tenant_id}
+        finding_bytes = _jcs(finding_payload)
+        finding_hash  = hashlib.sha256(b"zoiko.finding.v1:" + finding_bytes).digest()
+        f_sig, f_kid  = _sign(slug, finding_hash)
+        finding_id = uuid.uuid4()
+        cur.execute("""
+            INSERT INTO findings
+                (id, tenant_id, case_id, bundle_id, confidence, rule_trace, finding_hash, signature, kid, created_at,
+                 ai_confidence, risk_level, ai_reasoning)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, NULL, NULL, NULL)
+        """, (finding_id, tenant_id, uuid.UUID(case_id), bundle_id, SC002, json.dumps(rule_trace), finding_hash, f_sig, f_kid, now))
+
+        prop_payload = {"amount": str(amount), "case_id": case_id, "currency": currency,
+                        "finding_hash": finding_hash.hex(), "proposed_action": "SETTLE_CLAIM",
+                        "proposer_sub": actor_sub, "tenant_id": tenant_id}
+        prop_bytes = _jcs(prop_payload)
+        prop_hash  = hashlib.sha256(b"zoiko.proposal.v1:" + prop_bytes).digest()
+        p_sig, p_kid = _sign(slug, prop_hash)
+        cur.execute("""
+            INSERT INTO decision_proposals
+                (id, tenant_id, case_id, finding_id, proposed_action, amount, currency,
+                 proposer_sub, proposal_hash, signature, kid, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (uuid.uuid4(), tenant_id, uuid.UUID(case_id), finding_id,
+              "SETTLE_CLAIM", amount, currency, actor_sub, prop_hash, p_sig, p_kid, now))
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Step 4 — transition EVIDENCE_PENDING → FINDING_GENERATED
+    CaseHandler(DB_URL, broker).transition_state(tenant_id, case_id, "FINDING_GENERATED", actor_sub)
+
+    # Kafka events
+    from kafka.producer import ZoikoProducer, KafkaMessage
+    prod = ZoikoProducer(broker)
+    prod.publish(KafkaMessage(topic="zoiko.evidence.bundled", key=case_id,
+                              payload={"case_id": case_id, "bundle_id": str(bundle_id)}, tenant_id=tenant_id))
+    prod.publish(KafkaMessage(topic="zoiko.finding.generated", key=case_id,
+                              payload={"case_id": case_id, "confidence": SC002}, tenant_id=tenant_id))
 
 
 # ── Job store for async submit ────────────────────────────────────────────────
@@ -4465,6 +4758,111 @@ def ui_submit_case_async(
     return {"job_id": job_id, "status": "pending"}
 
 
+@v1_router.post("/claims/submit-async", tags=["ui"], status_code=202)
+def ui_submit_claim_async(
+    body: SubmitClaimRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+    _ff: None = Depends(require_feature_flag("SC_002_ENABLED")),
+):
+    """SC-002 — mirrors ui_submit_case_async() exactly: non-blocking submit,
+    runs ingest -> canonical -> case -> evidence -> reasoning(SC002) in a
+    background thread, returns job_id immediately. Poll
+    GET /claims/submit-status/{job_id} every 2s until status='done'."""
+    import threading as _th, uuid as _u
+    job_id = str(_u.uuid4())
+    _SUBMIT_JOBS[job_id] = {"status": "pending", "case": None, "error": None}
+    _persist_job(job_id, "pending", None, None)
+
+    _tenant = str(claims.tenant_id)
+    _sub    = claims.sub
+    _ikey   = idempotency_key
+    _body   = body
+
+    def _run():
+        try:
+            claim_ref = _body.claim_reference.strip() if _body.claim_reference.strip() else f"UI-CLAIM-{_u.uuid4().hex[:8].upper()}"
+            slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (_tenant,))
+            slug = slug_row["slug"] if slug_row else "default"
+            broker = _BROKER
+
+            claim_in = ClaimInput(
+                carrier_id=_body.carrier, claim_reference=claim_ref,
+                claim_type=_body.claim_type, claimed_amount=float(_body.claimed_amount),
+                currency=_body.currency, description=_body.description,
+                related_invoice_number=_body.related_invoice_number,
+            )
+            ing_r = IngestionHandler(DB_URL, broker, slug).ingest_claim(_tenant, claim_in, _ikey)
+            can_r = CanonicalHandler(DB_URL, broker, slug).canonicalize_claim(
+                        _tenant, ing_r.source_record_id, claim_ref,
+                        _body.carrier, _body.claim_type, float(_body.claimed_amount), _body.currency,
+                    )
+            case_r = CaseHandler(DB_URL, broker).open_case(_tenant, claim_id=can_r.claim_id, actor_sub=_sub)
+
+            if not case_r.is_new:
+                existing = q1(
+                    "SELECT state, opened_at FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+                    (str(case_r.case_id), _tenant),
+                )
+                now_str = datetime.now(timezone.utc).isoformat()
+                _case_data = {
+                    "id": str(case_r.case_id), "tenant_id": _tenant,
+                    "state": existing["state"] if existing else case_r.state,
+                    "case_type": "CARRIER_CLAIM",
+                    "carrier": _body.carrier, "shipment_ref": claim_ref,
+                    "amount": float(_body.claimed_amount), "currency": _body.currency,
+                    "diff": 0.0, "confidence": 0.0,
+                    "opened_at": (existing["opened_at"].isoformat() if existing else now_str),
+                    "updated_at": now_str,
+                    "duplicate": True,
+                    "deduplication_outcome": ing_r.deduplication_outcome,
+                }
+                _SUBMIT_JOBS[job_id] = {"status": "done", "case": _case_data, "error": None}
+                _persist_job(job_id, "done", _case_data, None)
+                return
+
+            try:
+                _run_evidence_and_reasoning_claim(
+                    tenant_id=_tenant, case_id=str(case_r.case_id), slug=slug,
+                    carrier=_body.carrier, amount=float(_body.claimed_amount), currency=_body.currency,
+                    claim_type=_body.claim_type, actor_sub=_sub, broker=broker,
+                )
+            except Exception:
+                import traceback; traceback.print_exc()
+            now_str = datetime.now(timezone.utc).isoformat()
+            _case_data = {
+                "id": str(case_r.case_id), "tenant_id": _tenant,
+                "state": "FINDING_GENERATED", "case_type": "CARRIER_CLAIM",
+                "carrier": _body.carrier, "shipment_ref": claim_ref,
+                "amount": float(_body.claimed_amount), "currency": _body.currency,
+                "diff": 0.0, "confidence": 0.9275,
+                "opened_at": now_str, "updated_at": now_str,
+                "duplicate": False,
+                "deduplication_outcome": ing_r.deduplication_outcome,
+            }
+            _SUBMIT_JOBS[job_id] = {"status": "done", "case": _case_data, "error": None}
+            _persist_job(job_id, "done", _case_data, None)
+        except Exception as exc:
+            import traceback; traceback.print_exc()
+            _SUBMIT_JOBS[job_id] = {"status": "error", "case": None, "error": str(exc)}
+            _persist_job(job_id, "error", None, str(exc))
+
+    _th.Thread(target=_run, daemon=True, name=f"claim-submit-{job_id[:8]}").start()
+    return {"job_id": job_id, "status": "pending"}
+
+
+@v1_router.get("/claims/submit-status/{job_id}", tags=["ui"])
+def get_claim_submit_status(job_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """Poll this endpoint after /claims/submit-async until status='done'.
+    Thin alias over the same generic job store ui_submit_case_async uses."""
+    job = _SUBMIT_JOBS.get(job_id) or _load_job_from_db(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    if job_id not in _SUBMIT_JOBS:
+        _SUBMIT_JOBS[job_id] = job
+    return job
+
+
 @v1_router.get("/cases/submit-status/{job_id}", tags=["ui"])
 def get_submit_status(job_id: str, claims: ZoikoClaims = Depends(get_claims)):
     """Poll this endpoint after submit-async until status='done'."""
@@ -4612,6 +5010,109 @@ def ui_submit_case(
     }
 
 
+@v1_router.post("/claims/submit", tags=["ui"], status_code=201)
+def ui_submit_claim(
+    request: Request,
+    body: SubmitClaimRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+    _ff: None = Depends(require_feature_flag("SC_002_ENABLED")),
+):
+    """SC-002 — full pipeline for a carrier claim: ingest → canonical → open
+    case → evidence → AI finding (SC002 rule bundle). Mirrors ui_submit_case()
+    exactly, on the same spine, but for a claim instead of an invoice.
+
+    Sync def for the same reason as ui_submit_case — keeps the event loop
+    free during the ~15 sequential psycopg2 calls against the cloud DB.
+    """
+    claim_ref = body.claim_reference.strip() if body.claim_reference.strip() else f"UI-CLAIM-{uuid.uuid4().hex[:8].upper()}"
+
+    slug_row = q1("SELECT slug FROM tenants WHERE id=%s::uuid", (claims.tenant_id,))
+    slug = slug_row["slug"] if slug_row else "default"
+
+    broker = _BROKER
+
+    from services.api_gateway.routers.ingestion import _capture_rest_push_metadata
+    ch_metadata = _capture_rest_push_metadata(request, idempotency_key)
+    channel = "ui_entry" if request.headers.get("X-UI-Submit") else "rest_api_push"
+
+    claim_in = ClaimInput(
+        carrier_id=body.carrier, claim_reference=claim_ref,
+        claim_type=body.claim_type, claimed_amount=float(body.claimed_amount),
+        currency=body.currency, description=body.description,
+        related_invoice_number=body.related_invoice_number,
+    )
+    ing_r  = IngestionHandler(DB_URL, broker, slug).ingest_claim(
+        str(claims.tenant_id), claim_in, idempotency_key,
+        channel=channel,
+        channel_metadata=ch_metadata,
+        received_by_user=str(claims.sub) if claims.sub else None,
+        correlation_id=request.headers.get("X-Correlation-ID"),
+    )
+    can_r  = CanonicalHandler(DB_URL, broker, slug).canonicalize_claim(
+                 str(claims.tenant_id), ing_r.source_record_id, claim_ref,
+                 body.carrier, body.claim_type, float(body.claimed_amount), body.currency,
+             )
+    case_r = CaseHandler(DB_URL, broker).open_case(
+                 str(claims.tenant_id), claim_id=can_r.claim_id, actor_sub=claims.sub)
+
+    if not case_r.is_new:
+        existing = q1(
+            "SELECT state, opened_at FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+            (str(case_r.case_id), claims.tenant_id),
+        )
+        return {
+            "id":                     str(case_r.case_id),
+            "tenant_id":              str(claims.tenant_id),
+            "state":                  existing["state"] if existing else case_r.state,
+            "case_type":              "CARRIER_CLAIM",
+            "carrier":                body.carrier,
+            "claim_reference":        claim_ref,
+            "claimed_amount":         float(body.claimed_amount),
+            "currency":               body.currency,
+            "confidence":             0.0,
+            "opened_at":              (existing["opened_at"].isoformat() if existing else case_r.opened_at.isoformat()),
+            "updated_at":             datetime.now(timezone.utc).isoformat(),
+            "duplicate":              True,
+            "deduplication_outcome":  ing_r.deduplication_outcome,
+        }
+
+    import threading as _threading
+
+    def _bg():
+        try:
+            _run_evidence_and_reasoning_claim(
+                tenant_id  = str(claims.tenant_id),
+                case_id    = str(case_r.case_id),
+                slug       = slug,
+                carrier    = body.carrier,
+                amount     = float(body.claimed_amount),
+                currency   = body.currency,
+                claim_type = body.claim_type,
+                actor_sub  = claims.sub,
+                broker     = broker,
+            )
+        except Exception:
+            import traceback; traceback.print_exc()
+
+    _threading.Thread(target=_bg, daemon=True, name=f"sc002-{case_r.case_id}").start()
+
+    now_str = datetime.now(timezone.utc).isoformat()
+    return {
+        "id":              str(case_r.case_id),
+        "tenant_id":       str(claims.tenant_id),
+        "state":           "EVIDENCE_PENDING",
+        "case_type":       "CARRIER_CLAIM",
+        "carrier":         body.carrier,
+        "claim_reference": claim_ref,
+        "claimed_amount":  float(body.claimed_amount),
+        "currency":        body.currency,
+        "confidence":      0.0,
+        "opened_at":       now_str,
+        "updated_at":      now_str,
+    }
+
+
 # ── Route registration ────────────────────────────────────────────────────────
 # Spec §9.2: all routes are versioned under /v1/
 
@@ -4739,7 +5240,7 @@ def inline_execute(body: ExecuteRequest, claims: ZoikoClaims = Depends(get_claim
 
     # Gate 5 — scope
     scope = token.get("scope") or "EXECUTE_CREDIT_MEMO"
-    if scope not in ("EXECUTE_CREDIT_MEMO", "CREDIT_MEMO", "EXECUTE_DEBIT_NOTE"):
+    if scope not in ("EXECUTE_CREDIT_MEMO", "CREDIT_MEMO", "EXECUTE_DEBIT_NOTE", "SETTLE_CLAIM"):  # SETTLE_CLAIM = SC-002
         raise HTTPException(status_code=422, detail=f"Gate 5 failed: scope '{scope}' not authorized")
     gates.append({"gate": 5, "name": "scope_authorized",    "passed": True, "detail": f"Scope '{scope}' authorized"})
 

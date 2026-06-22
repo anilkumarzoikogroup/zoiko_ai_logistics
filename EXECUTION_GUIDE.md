@@ -13,9 +13,9 @@ DB password default: `1234`
 | **Core CLI demo** | `backend/core/scripts/demo_sc001.py` | `py backend/core/scripts/demo_sc001.py` |
 | **Platform tests** | `backend/platform/tests/` | `py -m pytest tests/ packages/zoiko-kms/tests/` |
 | **Gateway demo** | `backend/gateway/demo_phase2.py` | `py demo_phase2.py` |
-| **Gateway smoke test** | `backend/gateway/smoke_test_gateway.py` | `py smoke_test_gateway.py` |
+| **Gateway smoke test** | `backend/gateway/tests/smoke_test_gateway.py` | `py tests/smoke_test_gateway.py` |
 | **Governance demo** | `backend/governance/demo_phase3.py` | `py demo_phase3.py` |
-| **Execution demo** | `backend/execution/demo_phase4.py` | `py demo_phase4.py` |
+| **Execution demo** | `backend/execution/scripts/demo_phase4.py` | `py scripts/demo_phase4.py` |
 
 ---
 
@@ -186,7 +186,7 @@ cd ..\..
 cd backend\execution
 $env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
 $env:PYTHONIOENCODING = "utf-8"
-py demo_phase4.py
+py scripts\demo_phase4.py
 cd ..\..
 ```
 
@@ -226,7 +226,7 @@ cd backend\gateway; py demo_phase2.py; cd ..\..
 cd backend\governance; py demo_phase3.py; cd ..\..
 
 # Execution: 8-gate → reconcile → ACR CLOSED
-cd backend\execution; py demo_phase4.py; cd ..\..
+cd backend\execution; py scripts\demo_phase4.py; cd ..\..
 ```
 
 ---

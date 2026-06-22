@@ -11,3 +11,5 @@ class CaseResult:
     state: str
     opened_at: datetime
     is_new: bool = True          # False if case already existed (idempotent)
+    case_type: str = "INVOICE_OVERCHARGE"
+    claim_id: UUID = None

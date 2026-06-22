@@ -43,9 +43,12 @@ def get_dek(tenant_id: str) -> bytes:
     return _derive_dek(tenant_id)
 
 
-def encrypt(dek: bytes, plaintext: bytes) -> bytes:
+def encrypt(dek: bytes, plaintext: bytes, aad: bytes | None = None) -> bytes:
     """
     AES-256-GCM encrypt.
+    aad (optional) — additional authenticated data, bound into the tag but
+    not encrypted (e.g. tenant_id + invoice_number context). Caller must
+    pass the same aad to decrypt(), or authentication fails.
     Returns: nonce(12) + ciphertext(len(plaintext)) + tag(16)
     """
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -53,13 +56,14 @@ def encrypt(dek: bytes, plaintext: bytes) -> bytes:
         raise ValueError(f"DEK must be 32 bytes, got {len(dek)}")
     nonce = os.urandom(12)
     aesgcm = AESGCM(dek)
-    ct_and_tag = aesgcm.encrypt(nonce, plaintext, None)   # no AAD
+    ct_and_tag = aesgcm.encrypt(nonce, plaintext, aad)
     return nonce + ct_and_tag
 
 
-def decrypt(dek: bytes, ciphertext: bytes) -> bytes:
+def decrypt(dek: bytes, ciphertext: bytes, aad: bytes | None = None) -> bytes:
     """
     AES-256-GCM decrypt.
+    aad (optional) — must match the aad passed to encrypt(), or this raises.
     Expects: nonce(12) + ciphertext + tag(16)
     Raises ValueError on authentication failure.
     """
@@ -72,7 +76,7 @@ def decrypt(dek: bytes, ciphertext: bytes) -> bytes:
     ct_and_tag = ciphertext[12:]
     aesgcm     = AESGCM(dek)
     try:
-        return aesgcm.decrypt(nonce, ct_and_tag, None)
+        return aesgcm.decrypt(nonce, ct_and_tag, aad)
     except Exception as e:
         raise ValueError(f"AES-GCM authentication failed: {e}") from e
 

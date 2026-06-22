@@ -82,6 +82,36 @@ export interface Case {
   deduplication_outcome?: string;
 }
 
+// SC-002 — carrier claim case states (parallel to CaseState, no FK overlap with invoices)
+export type ClaimState =
+  | "NEW"
+  | "EVIDENCE_PENDING"
+  | "FINDING_GENERATED"
+  | "APPROVAL_PENDING"
+  | "EXECUTION_READY"
+  | "DISPATCHED"
+  | "OUTCOME_RECORDED"
+  | "CLOSED"
+  | "ABORTED";
+
+export interface Claim {
+  id: string;
+  tenant_id: string;
+  state: ClaimState;
+  case_type: "CARRIER_CLAIM";
+  carrier: string;
+  shipment_ref: string;   // claim_reference
+  claim_type: string;
+  amount: number;
+  currency: string;
+  diff: number;
+  confidence?: number;
+  opened_at: string;
+  updated_at: string;
+  duplicate?: boolean;
+  deduplication_outcome?: string;
+}
+
 export interface CaseEvent {
   id: string;
   case_id: string;

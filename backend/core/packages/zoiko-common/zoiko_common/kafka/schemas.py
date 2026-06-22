@@ -57,6 +57,7 @@ REGISTERED_TOPICS = set(TOPICS.values())
 PRODUCER_TOPICS: set = {
     # Core pipeline
     "zoiko.source.record.received",     "zoiko.source.record.validated",    "zoiko.canonical.invoice.created",
+    "zoiko.canonical.claim.created",    # SC-002 — canonicalize_claim()
     "zoiko.case.opened",                "zoiko.case.updated",               "zoiko.case.closed",
     "zoiko.evidence.bundled",           "zoiko.finding.generated",          "zoiko.proposal.created",
     "zoiko.governance.decision.issued", "zoiko.governance.token.issued",    "zoiko.governance.token.consumed",

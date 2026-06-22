@@ -228,13 +228,14 @@ class AuditACRHandler:
                 """, (acr_id, supersedes_acr_id, tenant_id))
 
             # Write audit_worm_index row (APPEND-ONLY)
+            worm_bucket = self._resolve_worm_bucket()
             cur.execute("""
                 INSERT INTO audit_worm_index
                     (id, tenant_id, acr_id, worm_bucket, object_name, object_hash, indexed_at)
                 VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s)
             """, (
                 uuid.uuid4(), tenant_id, acr_id,
-                "dev-bucket",
+                worm_bucket,
                 f"acr/{acr_id}.json",
                 acr_hash,
                 now,
@@ -296,6 +297,17 @@ class AuditACRHandler:
         except Exception:
             pass
 
+        # Append to the transparency log — best-effort, must never block ACR
+        # issuance. The ACR itself already committed above; a transparency
+        # log failure here is an observability gap, not a correctness one.
+        try:
+            from services.transparency_log_svc.handler import TransparencyLogHandler
+            TransparencyLogHandler(self._db_url, self._tenant_slug).append(
+                tenant_id, str(acr_id), merkle_root.hex(),
+            )
+        except Exception:
+            pass
+
         return ACRResult(
             acr_id        = str(acr_id),
             case_id       = case_id,
@@ -308,6 +320,22 @@ class AuditACRHandler:
             closure_reason   = closure_reason,
             recovered_amount = recovered_amount,
             currency         = currency,
+        )
+
+    def _resolve_worm_bucket(self) -> str:
+        """Real WORM object-storage bucket name, fail-closed in production.
+        Previously hardcoded to 'dev-bucket' for every tenant/environment —
+        every ACR's WORM index entry pointed at the same fake bucket name
+        regardless of where it actually runs."""
+        import os
+        bucket = os.getenv("ZOIKO_WORM_BUCKET", "")
+        if bucket:
+            return bucket
+        if os.getenv("ZOIKO_DEV_MODE", "").lower() == "true":
+            return "dev-bucket"
+        raise ValueError(
+            "ZOIKO_WORM_BUCKET is required in production — no WORM storage "
+            "bucket configured for this environment"
         )
 
     def get_acr(self, case_id: str, tenant_id: str) -> Optional[dict]:
@@ -331,39 +359,82 @@ class AuditACRHandler:
     # ── Artifact collection ─────────────────────────────────────────────────────
 
     def _collect_artifacts(self, case_id: str, tenant_id: str) -> list[dict]:
-        """Collect the 8 audit artifacts for a case from the DB."""
+        """Collect the 8 audit artifacts for a case from the DB.
+
+        Artifacts #1/#2 branch on cases.case_type — SC-001 cases join
+        canonical_invoices (via invoice_id), SC-002 cases join claims (via
+        claim_id). Artifacts #3-8 are already generic on case_id."""
         artifacts = []
 
-        # 1. Source record hash
-        row = _db.q1(
+        case_type_row = _db.q1(
             db_url=self._db_url,
-            sql="""
-                SELECT encode(sr.canonical_hash,'hex') AS hash
-                FROM source_records sr
-                JOIN canonical_invoices ci ON ci.source_record_id = sr.id
-                JOIN cases c ON c.invoice_id = ci.id
-                WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1
-            """,
+            sql="SELECT case_type FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid LIMIT 1",
             params=(case_id, tenant_id),
         )
-        if row:
-            artifacts.append({"name": "source_record_hash", "hash": row["hash"],
-                               "domain_tag": "zoiko.ingestion.invoice.v1:"})
+        case_type = (case_type_row or {}).get("case_type", "INVOICE_OVERCHARGE")
 
-        # 2. Canonical invoice hash
-        row = _db.q1(
-            db_url=self._db_url,
-            sql="""
-                SELECT encode(ci.canonical_hash,'hex') AS hash
-                FROM canonical_invoices ci
-                JOIN cases c ON c.invoice_id = ci.id
-                WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1
-            """,
-            params=(case_id, tenant_id),
-        )
-        if row:
-            artifacts.append({"name": "canonical_invoice_hash", "hash": row["hash"],
-                               "domain_tag": "zoiko.canonical.invoice.v1:"})
+        if case_type == "CARRIER_CLAIM":
+            # 1. Source record hash
+            row = _db.q1(
+                db_url=self._db_url,
+                sql="""
+                    SELECT encode(sr.canonical_hash,'hex') AS hash
+                    FROM source_records sr
+                    JOIN claims cl ON cl.source_record_id = sr.id
+                    JOIN cases c ON c.claim_id = cl.id
+                    WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1
+                """,
+                params=(case_id, tenant_id),
+            )
+            if row:
+                artifacts.append({"name": "source_record_hash", "hash": row["hash"],
+                                   "domain_tag": "zoiko.ingestion.claim.v1:"})
+
+            # 2. Canonical claim hash
+            row = _db.q1(
+                db_url=self._db_url,
+                sql="""
+                    SELECT encode(cl.claim_hash,'hex') AS hash
+                    FROM claims cl
+                    JOIN cases c ON c.claim_id = cl.id
+                    WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1
+                """,
+                params=(case_id, tenant_id),
+            )
+            if row:
+                artifacts.append({"name": "canonical_claim_hash", "hash": row["hash"],
+                                   "domain_tag": "zoiko.canonical.claim.v1:"})
+        else:
+            # 1. Source record hash
+            row = _db.q1(
+                db_url=self._db_url,
+                sql="""
+                    SELECT encode(sr.canonical_hash,'hex') AS hash
+                    FROM source_records sr
+                    JOIN canonical_invoices ci ON ci.source_record_id = sr.id
+                    JOIN cases c ON c.invoice_id = ci.id
+                    WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1
+                """,
+                params=(case_id, tenant_id),
+            )
+            if row:
+                artifacts.append({"name": "source_record_hash", "hash": row["hash"],
+                                   "domain_tag": "zoiko.ingestion.invoice.v1:"})
+
+            # 2. Canonical invoice hash
+            row = _db.q1(
+                db_url=self._db_url,
+                sql="""
+                    SELECT encode(ci.canonical_hash,'hex') AS hash
+                    FROM canonical_invoices ci
+                    JOIN cases c ON c.invoice_id = ci.id
+                    WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1
+                """,
+                params=(case_id, tenant_id),
+            )
+            if row:
+                artifacts.append({"name": "canonical_invoice_hash", "hash": row["hash"],
+                                   "domain_tag": "zoiko.canonical.invoice.v1:"})
 
         # 3. Evidence bundle hash
         row = _db.q1(
@@ -428,15 +499,17 @@ class AuditACRHandler:
             artifacts.append({"name": "token_hash", "hash": row["hash"],
                                "domain_tag": "zoiko.token.v1:"})
 
-        # 8. Execution envelope hash
+        # 8. Execution envelope hash — use the envelope's own env_hash column
+        # (SHA-256 over token_id:case_id:scope:gate_results, computed honestly
+        # by the execution gateway at dispatch time). The previous query hashed
+        # 'domain_tag + envelope id' instead — the envelope's own primary key,
+        # which never changes regardless of content — so it certified nothing
+        # about what was actually executed. encode()/hex on a BYTEA column
+        # matches the same "hash" shape every other artifact query returns.
         row = _db.q1(
             db_url=self._db_url,
             sql="""
-                SELECT encode(
-                    digest(
-                        'zoiko.execution.envelope.v1:' || id::text,
-                        'sha256'
-                    ), 'hex') AS hash
+                SELECT encode(env_hash, 'hex') AS hash
                 FROM execution_envelopes
                 WHERE case_id=%s::uuid AND tenant_id=%s::uuid
                 ORDER BY dispatched_at DESC LIMIT 1
@@ -461,14 +534,15 @@ class AuditACRHandler:
         issued_at: datetime,
     ) -> dict:
         """Build the offline-verifiable JSON bundle."""
+        # Previously called KeyHierarchy.get_public_key(), which does not
+        # exist on that class — every call silently hit the except branch
+        # and every ACR ever issued shipped an empty public key, making the
+        # offline verifier (verifier.py) permanently unable to check any
+        # signature. LocalKMSBackend.public_key_der(kid) is the real method.
         try:
-            from zoiko_kms.hierarchy import KeyHierarchy
-            kh = KeyHierarchy()
-            pub = kh.get_public_key(acr_kid)
-            pub_b64 = base64.b64encode(pub.public_bytes(
-                encoding=__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding", "PublicFormat"]).Encoding.DER,
-                format=__import__("cryptography.hazmat.primitives.serialization", fromlist=["Encoding", "PublicFormat"]).PublicFormat.SubjectPublicKeyInfo,
-            )).decode()
+            from zoiko_kms.local_backend import LocalKMSBackend
+            pub_der = LocalKMSBackend().public_key_der(acr_kid)
+            pub_b64 = base64.b64encode(pub_der).decode()
         except Exception:
             pub_b64 = ""
 

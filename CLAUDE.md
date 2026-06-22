@@ -92,8 +92,8 @@ zoiko-logistics/
 │   │   ├── services/crypto_shred_svc/ ← handler.py (tenant key destruction, legal-hold aware)
 │   │   ├── services/observability_svc/ ← handler.py (C07 observability dashboard data)
 │   │   ├── shared/db.py             ← DB helpers (q, q1)
-│   │   ├── paths.py                 ← sys.path bootstrap (import first)
-│   │   └── Dockerfile               ← Multi-stage, non-root, port 8000
+│   │   └── paths.py                 ← sys.path bootstrap (import first)
+│   │       (no per-service Dockerfile — built from root Dockerfile/Dockerfile.backend, working_dir=/app/backend/gateway)
 │   │
 │   ├── governance/                  ← Evidence, reasoning, tokens, SoD (port 8002)
 │   │   ├── services/evidence_svc/   ← handler.py (growing/append-only Merkle bundle)
@@ -101,8 +101,8 @@ zoiko-logistics/
 │   │   ├── services/governance_svc/ ← handler.py (SoD + case FSM)
 │   │   ├── services/token_svc/      ← handler.py (tenant-bound token, 15-min TTL)
 │   │   ├── shared/redis_token.py    ← Redis CONSUMED lock (also used by execution)
-│   │   ├── paths.py                 ← sys.path bootstrap (import first)
-│   │   └── Dockerfile               ← Multi-stage, non-root, port 8002
+│   │   └── paths.py                 ← sys.path bootstrap (import first)
+│   │       (no per-service Dockerfile — built from root Dockerfile/Dockerfile.backend, dockerCommand cd's into /app/backend/governance)
 │   │
 │   ├── execution/                   ← 8-gate execution, reconciliation, recovery, ACR (port 8001)
 │   │   ├── services/execution_gateway/ ← handler.py (8-gate check), models.py
@@ -117,8 +117,8 @@ zoiko-logistics/
 │   │   │   ├── recovery_proof_svc/     ← handler.py (rollup proof, acr_ready flag)
 │   │   │   └── recovery_exceptions_svc/← handler.py (stuck/aged recovery exceptions)
 │   │   ├── services/api_gateway/    ← app.py — /v1/execute, /v1/reconcile, /v1/recovery/*, /v1/cases/{id}/acr
-│   │   ├── paths.py                 ← sys.path bootstrap (import first)
-│   │   └── Dockerfile               ← Multi-stage, non-root, port 8001
+│   │   └── paths.py                 ← sys.path bootstrap (import first)
+│   │       (no per-service Dockerfile — built from root Dockerfile/Dockerfile.backend, dockerCommand cd's into /app/backend/execution)
 │   │
 │   └── api/                         ← Frontend-facing reverse proxy (port 8080, optional)
 │       └── app.py                   ← Routes /v1/* to gateway/governance/execution

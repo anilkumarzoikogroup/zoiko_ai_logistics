@@ -79,12 +79,17 @@ class EvidenceHandler:
                 """, (bundle_id, tenant_id, uuid.UUID(case_id), placeholder, signature, kid, now))
 
             # Step 4 — APPEND-ONLY insert of evidence_item
+            # signature/kid were already computed in Step 2 — store them so
+            # this item is independently verifiable, not just folded into the
+            # bundle-level signature.
             item_id = uuid.uuid4()
             cur.execute("""
                 INSERT INTO evidence_items
-                    (id, tenant_id, bundle_id, item_type, entity_id, item_hash, added_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (item_id, tenant_id, bundle_id, item_type, entity_id, item_hash, now))
+                    (id, tenant_id, bundle_id, item_type, entity_id, item_hash,
+                     signature, kid, added_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (item_id, tenant_id, bundle_id, item_type, entity_id, item_hash,
+                  signature, kid, now))
 
             # Step 5 — recompute Merkle root over ALL items in bundle
             cur.execute(

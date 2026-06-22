@@ -32,7 +32,7 @@ VERIFIER=""
 
 for candidate in \
   "$SCRIPT_DIR/verifier.py" \
-  "$SCRIPT_DIR/phase-4/services/audit_acr_svc/verifier.py"; do
+  "$SCRIPT_DIR/backend/execution/services/audit_acr_svc/verifier.py"; do
   if [ -f "$candidate" ]; then
     VERIFIER="$candidate"
     break
@@ -46,7 +46,7 @@ fi
 
 # Ensure zoiko-common is importable
 REPO_ROOT="$(cd "$SCRIPT_DIR" && git rev-parse --show-toplevel 2>/dev/null || echo "$SCRIPT_DIR")"
-export PYTHONPATH="$REPO_ROOT/phase-0/packages/zoiko-common:$REPO_ROOT/phase-1:$REPO_ROOT/phase-1/packages/zoiko-kms:$REPO_ROOT/phase-4:${PYTHONPATH:-}"
+export PYTHONPATH="$REPO_ROOT/backend/core/packages/zoiko-common:$REPO_ROOT/backend/platform:$REPO_ROOT/backend/platform/packages/zoiko-kms:$REPO_ROOT/backend/execution:${PYTHONPATH:-}"
 
 echo "Verifying: $ACR_FILE"
 echo "Verifier:  $VERIFIER"

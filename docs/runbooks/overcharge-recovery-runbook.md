@@ -49,7 +49,7 @@ Expected output:
 ## Step 3 — Execute recovery (Phase 4)
 
 ```powershell
-cd phase-4; py demo_phase4.py
+cd backend\execution; py scripts\demo_phase4.py
 ```
 
 Expected output:

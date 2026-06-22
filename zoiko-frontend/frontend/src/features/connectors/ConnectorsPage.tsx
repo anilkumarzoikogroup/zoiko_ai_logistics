@@ -21,6 +21,7 @@ interface Connector {
   operational_state: string;
   endpoint_url: string;
   rate_limit_rps: number;
+  source_type: string;
   created_at: string;
 }
 
@@ -115,7 +116,7 @@ function ConnectorCard({ connector, onDelete, onSync, onStateChange }: {
   const typeInfo = CONNECTOR_TYPES.find(t => t.type === connector.connector_type) ?? CONNECTOR_TYPES[0];
   const TypeIcon = typeInfo.icon;
   const isWebhook = connector.connector_type === "Webhook" || connector.auth_method === "WEBHOOK_HMAC";
-  const webhookUrl = `${window.location.origin}/api/v1/webhooks/ingest/${connector.connector_type.toLowerCase()}`;
+  const webhookUrl = `${window.location.origin}/api/v1/webhooks/ingest/${connector.source_type}`;
 
   const { data: runs = [] } = useQuery<IngestionRun[]>({
     queryKey: ["ingestion-runs", connector.id],
@@ -153,6 +154,9 @@ function ConnectorCard({ connector, onDelete, onSync, onStateChange }: {
             <p className="text-[14px] font-bold text-slate-800">{connector.name}</p>
             <span className="text-[10px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded font-semibold">{connector.connector_type}</span>
             <span className="text-[10px] text-slate-400 bg-slate-50 px-2 py-0.5 rounded">{connector.auth_method}</span>
+            {isWebhook && (
+              <span className="text-[10px] text-blue-500 bg-blue-50 px-2 py-0.5 rounded font-mono">/{connector.source_type}</span>
+            )}
             <CertBadge state={connector.certification_state} />
           </div>
           <div className="flex items-center gap-3 mt-1 flex-wrap">
@@ -352,7 +356,11 @@ function ConnectorCard({ connector, onDelete, onSync, onStateChange }: {
 }
 
 // ── New Connector Form ────────────────────────────────────────────────────────
-const BLANK_FORM = { name: "", connector_type: "API", auth_method: "API_KEY", trust_tier: "T2", endpoint_url: "", rate_limit_rps: 10 };
+const BLANK_FORM = { name: "", connector_type: "API", auth_method: "API_KEY", trust_tier: "T2", endpoint_url: "", rate_limit_rps: 10, source_type: "" };
+
+function slugify(name: string): string {
+  return name.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+}
 
 function NewConnectorForm({ onClose, onCreate }: {
   onClose: () => void;
@@ -464,7 +472,7 @@ function NewConnectorForm({ onClose, onCreate }: {
           </div>
 
           {form.connector_type === "Webhook" && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 space-y-1">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 space-y-2">
               <p className="text-[11px] font-bold text-amber-700 flex items-center gap-1.5">
                 <Info className="h-3.5 w-3.5" /> Webhook setup
               </p>
@@ -472,6 +480,18 @@ function NewConnectorForm({ onClose, onCreate }: {
                 After creating this connector, you'll get a <strong>webhook URL</strong> to give your carrier.
                 They POST invoice payloads to it — Zoiko verifies HMAC signatures and ingests automatically.
               </p>
+              <div>
+                <label className="block text-[11px] font-semibold text-amber-700 mb-1">URL slug (must be unique)</label>
+                <input
+                  className="w-full border border-amber-200 rounded-lg px-3 py-2 text-[12px] font-mono focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                  placeholder={form.name ? slugify(form.name) : "e.g. fedex, dhl-india"}
+                  value={form.source_type}
+                  onChange={e => setForm(f => ({ ...f, source_type: e.target.value }))}
+                />
+                <p className="text-[10px] text-amber-600 mt-1 font-mono">
+                  {window.location.origin}/api/v1/webhooks/ingest/{form.source_type || (form.name ? slugify(form.name) : "...")}
+                </p>
+              </div>
             </div>
           )}
 

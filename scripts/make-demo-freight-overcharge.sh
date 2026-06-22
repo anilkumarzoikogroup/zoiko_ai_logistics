@@ -29,7 +29,7 @@ for i in $(seq 1 "$ROUNDS"); do
     echo "==> SC-001 run $i/$ROUNDS"
     if $PYTHON "$REPO_ROOT/phase-2/demo_phase2.py" && \
        $PYTHON "$REPO_ROOT/phase-3/demo_phase3.py" && \
-       $PYTHON "$REPO_ROOT/phase-4/demo_phase4.py"; then
+       $PYTHON "$REPO_ROOT/backend/execution/scripts/demo_phase4.py"; then
         PASS=$((PASS+1))
         echo "    [PASS] Run $i"
     else

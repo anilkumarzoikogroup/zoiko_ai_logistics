@@ -25,14 +25,12 @@ GET    /lineage:by-canonical?canonical_invoice_id= — transform audit trail for
 """
 import base64
 import hashlib
-import json
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 import psycopg2
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 import paths  # noqa: F401
 from services.api_gateway.auth import get_claims
@@ -142,7 +140,6 @@ def get_source_payload(
         from zoiko_common.crypto.aes_gcm import get_dek, decrypt as _aes_decrypt
         dek       = get_dek(str(claims.tenant_id))
         plaintext = _aes_decrypt(dek, bytes(row["ciphertext"]),
-                                  iv=bytes(row["raw_payload_iv"]) if row["raw_payload_iv"] else None,
                                   aad=row["raw_payload_aad"].encode() if row["raw_payload_aad"] else None)
     except Exception:
         # DEV_MODE — ciphertext is plaintext
