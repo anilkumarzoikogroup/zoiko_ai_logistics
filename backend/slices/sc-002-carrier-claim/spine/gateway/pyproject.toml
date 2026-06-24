@@ -1,0 +1,17 @@
+[build-system]
+requires      = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name        = "zoiko-phase2"
+version     = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "psycopg2-binary",
+    "fastapi",
+    "httpx",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

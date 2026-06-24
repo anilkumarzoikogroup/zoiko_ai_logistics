@@ -1,4 +1,4 @@
-import { api, api3, api4, USE_MOCK } from "./client";
+import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, USE_MOCK } from "./client";
 import * as mocks from "@/mocks/fixtures";
 import type {
   Case, Claim, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
@@ -223,22 +223,37 @@ export const zoikoApi = {
   },
 
   // ---------- Claims (SC-002) ----------
-  // Mirrors the Cases methods above exactly, on the same /claims spine.
+  // SC-002 is a fully separate backend (backend/slices/sc-002-carrier-claim/spine/),
+  // not a route on the SC-001 backend — every claims call below uses apiClaim*
+  // (port 8010/8011/8012), never api/api3/api4 (SC-001, port 8000/8001/8002).
   async listClaimsPaged(filters?: { state?: string; page?: number; page_size?: number }): Promise<{ claims: Claim[]; total: number; page: number; pages: number }> {
     if (USE_MOCK) { await delay(); return { claims: [], total: 0, page: 1, pages: 1 }; }
-    const { data } = await api.get<{ claims: Claim[]; total: number; page: number; pages: number }>("/claims", { params: filters });
+    const { data } = await apiClaim.get<{ claims: Claim[]; total: number; page: number; pages: number }>("/claims", { params: filters });
     return data;
   },
 
   async getClaim(id: string): Promise<Claim> {
     if (USE_MOCK) { await delay(); throw new Error("Not available in mock mode"); }
-    const { data } = await api.get<Claim>(`/claims/${id}`);
+    const { data } = await apiClaim.get<Claim>(`/claims/${id}`);
+    return data;
+  },
+
+  async getClaimLines(id: string): Promise<{ id: string; line_number: number; description: string; claimed_amount: number; currency: string; created_at: string }[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await apiClaim.get(`/claims/${id}/lines`);
+    return data;
+  },
+
+  async negotiateClaim(id: string, body: { action: "COUNTER" | "ACCEPT" | "PARTIALLY_ACCEPT" | "REJECT"; approved_amount?: number; note?: string }): Promise<{ case_id: string; negotiation_status: string; approved_amount: number | null }> {
+    if (USE_MOCK) { await delay(); throw new Error("Not available in mock mode"); }
+    const { data } = await apiClaim.post(`/claims/${id}/negotiate`, body);
     return data;
   },
 
   async createClaim(payload: {
     carrier: string; claim_type: string; claimed_amount: number; currency: string;
     claim_reference?: string; description?: string; related_invoice_number?: string;
+    lines?: { description: string; claimed_amount: number }[];
   }): Promise<Claim> {
     if (USE_MOCK) {
       await delay(500);
@@ -246,18 +261,87 @@ export const zoikoApi = {
     }
     // Same async submit + poll pattern as createCase() — avoids the
     // ~15s blocking call that NAT/proxy connections drop.
-    const { data: job } = await api.post<{ job_id: string }>(
+    const { data: job } = await apiClaim.post<{ job_id: string }>(
       "/claims/submit-async", payload, { timeout: 10000 }
     );
     for (let i = 0; i < 45; i++) {
       await new Promise(r => setTimeout(r, 2000));
-      const { data: s } = await api.get<{ status: string; case: Claim | null; error: string | null }>(
+      const { data: s } = await apiClaim.get<{ status: string; case: Claim | null; error: string | null }>(
         `/claims/submit-status/${job.job_id}`, { timeout: 8000 }
       );
       if (s.status === "done" && s.case) return s.case;
       if (s.status === "error") throw new Error(s.error || "Pipeline failed");
     }
     throw new Error("Timed out waiting for claim (90s)");
+  },
+
+  // ---------- Claims (SC-002) — governance/execution pipeline ----------
+  // Mirrors the generic case methods below (getCaseEvents, getEvidence, getFinding,
+  // getProposal, proposeRecovery, approveDecision, getTokenForCase, executeRecovery,
+  // getAcr, downloadAcr) but routed to SC-002's own gateway/governance/execution —
+  // a claim id only exists in SC-002's case_type=CARRIER_CLAIM branch.
+  async getClaimEvents(claimId: string): Promise<CaseEvent[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await apiClaim.get<CaseEvent[]>(`/cases/${claimId}/events`);
+    return data;
+  },
+
+  async getClaimEvidence(claimId: string): Promise<EvidenceBundle> {
+    if (USE_MOCK) { await delay(); return mocks.mockEvidenceBundle; }
+    const { data } = await apiClaim.get<EvidenceBundle>(`/cases/${claimId}/evidence`);
+    return data;
+  },
+
+  async getClaimFinding(claimId: string): Promise<Finding> {
+    if (USE_MOCK) { await delay(); return mocks.mockFinding; }
+    const { data } = await apiClaim.get<Finding>(`/cases/${claimId}/finding`);
+    return data;
+  },
+
+  async getClaimProposal(claimId: string): Promise<DecisionProposal> {
+    if (USE_MOCK) { await delay(); return mocks.mockProposal; }
+    const { data } = await apiClaim.get<DecisionProposal>(`/cases/${claimId}/proposal`);
+    return data;
+  },
+
+  async proposeClaimSettlement(claimId: string, payload: { action: string; amount: number; currency: string }): Promise<DecisionProposal> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await apiClaim.post<DecisionProposal>(`/cases/${claimId}/proposal`, payload);
+    return data;
+  },
+
+  async approveClaimDecision(claimId: string, payload: { decision: "EXECUTION_READY" | "ABORTED"; note?: string }): Promise<GovernanceDecision> {
+    if (USE_MOCK) { await delay(700); throw new Error("Not available in mock mode"); }
+    const { data } = await apiClaim.post<GovernanceDecision>(`/cases/${claimId}/decide`, payload);
+    return data;
+  },
+
+  async getClaimToken(claimId: string): Promise<GovernanceToken | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    const { data } = await apiClaim.get<GovernanceToken | null>(`/cases/${claimId}/token`);
+    return data;
+  },
+
+  async executeClaimRecovery(tokenId: string, claimId: string, amount: number, currency: string): Promise<ExecutionResult> {
+    if (USE_MOCK) { await delay(1200); throw new Error("Not available in mock mode"); }
+    const { data } = await apiClaim.post<ExecutionResult>("/execute", { token_id: tokenId, case_id: claimId, amount, currency });
+    return data;
+  },
+
+  async getClaimAcr(claimId: string): Promise<ACRBundle | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    try {
+      const { data } = await apiClaim.get<ACRBundle>(`/cases/${claimId}/acr`);
+      return data;
+    } catch {
+      return null;
+    }
+  },
+
+  async downloadClaimAcr(claimId: string): Promise<Blob> {
+    if (USE_MOCK) { await delay(800); return new Blob(["mock acr zip"], { type: "application/zip" }); }
+    const response = await apiClaim.get(`/cases/${claimId}/acr/download`, { responseType: "blob" });
+    return response.data as Blob;
   },
 
   // ---------- Phase 2 artifacts ----------

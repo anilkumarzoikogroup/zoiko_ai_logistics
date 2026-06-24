@@ -1,0 +1,177 @@
+"""
+Canonical Truth Service — takes a validated source_record and produces the single
+authoritative canonical_invoice + canonical_shipment rows that all downstream
+services (evidence, reasoning, governance) treat as ground truth.
+"""
+import json
+import hashlib
+import uuid
+from datetime import datetime, timezone
+
+import paths  # noqa: F401
+import psycopg2
+import shared.db  # noqa: F401 — registers UUID adapter
+from zoiko_common.crypto.jcs import canonicalize
+from shared.signer import sign
+
+from services.canonical_truth.models import CanonicalResult
+
+DOMAIN_TAG = b"zoiko.canonical.invoice.v1:"
+
+
+class CanonicalHandler:
+    def __init__(self, db_url: str, kafka_broker, tenant_slug: str = "default"):
+        self.db_url      = db_url
+        self.broker      = kafka_broker
+        self.tenant_slug = tenant_slug
+
+    def canonicalize_invoice(
+        self, tenant_id: str, source_record_id: uuid.UUID, invoice_number: str,
+        carrier_id: str, total_amount: float, currency: str, origin_city: str,
+        dest_city: str, weight_lbs: float = 0.0,
+        invoice_date: str = "", transport_mode: str = "",
+        equipment_type: str = "", charge_lines: list = None,
+    ) -> CanonicalResult:
+        tenant_id        = str(tenant_id)
+        source_record_id = uuid.UUID(str(source_record_id))
+        canonical_dict = {
+            "carrier_id":      carrier_id,
+            "currency":        currency,
+            "invoice_number":  invoice_number,
+            "source_record_id": str(source_record_id),
+            "tenant_id":       tenant_id,
+            "total_amount":    str(total_amount),
+        }
+        canonical_bytes = canonicalize(canonical_dict)
+        canonical_hash  = hashlib.sha256(DOMAIN_TAG + canonical_bytes).digest()
+        signature, kid  = sign(self.tenant_slug, canonical_hash)
+
+        inv_id       = uuid.uuid4()
+        ship_id      = uuid.uuid4()
+        now          = datetime.now(timezone.utc)
+        charge_lines = charge_lines or []
+
+        conn = psycopg2.connect(self.db_url)
+        try:
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT canonical_hash FROM canonical_invoices
+                WHERE  tenant_id = %s AND invoice_number = %s
+                ORDER  BY created_at DESC LIMIT 1
+            """, (tenant_id, invoice_number))
+            pred_row = cur.fetchone()
+            predecessor_version_hash = bytes(pred_row[0]) if pred_row else None
+
+            cur.execute("""
+                INSERT INTO canonical_invoices
+                    (id, tenant_id, source_record_id, invoice_number, carrier_id,
+                     total_amount, currency, canonical_hash, signature, kid,
+                     predecessor_version_hash, created_at,
+                     invoice_date, transport_mode, charge_lines)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, invoice_number) DO NOTHING
+                RETURNING id
+            """, (
+                inv_id, tenant_id, source_record_id,
+                invoice_number, carrier_id, total_amount, currency,
+                canonical_hash, signature, kid,
+                predecessor_version_hash, now,
+                invoice_date, transport_mode,
+                json.dumps(charge_lines),
+            ))
+            row = cur.fetchone()
+            if row is None:
+                cur.execute(
+                    "SELECT id FROM canonical_invoices WHERE tenant_id=%s AND invoice_number=%s",
+                    (tenant_id, invoice_number),
+                )
+                inv_id = cur.fetchone()[0]
+
+            cur.execute("""
+                INSERT INTO canonical_shipments
+                    (id, tenant_id, invoice_id, origin_city, dest_city,
+                     weight_lbs, mode, equipment_type, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (invoice_id) DO NOTHING
+            """, (
+                ship_id, tenant_id, inv_id, origin_city, dest_city,
+                weight_lbs,
+                transport_mode or "TRUCKLOAD",
+                equipment_type or "",
+                now,
+            ))
+
+            input_hash  = hashlib.sha256(b"zoiko.ingestion.invoice.v1:" + canonical_bytes).hexdigest()
+            output_hash = canonical_hash.hex()
+
+            reference_data_snapshot = json.dumps({
+                "carrier_invoice_normalizer": "v1.0.0",
+                "currency_table":             "iso-4217-v2026.01",
+                "transform_applied_at":       now.isoformat(),
+            })
+
+            canonical_records_json = json.dumps([
+                {"type": "invoice",  "id": str(inv_id),   "payload_hash": "sha256:" + output_hash},
+                {"type": "shipment", "id": str(ship_id),  "payload_hash": "sha256:" + output_hash},
+            ])
+
+            cur.execute("""
+                INSERT INTO lineage_records
+                    (id, tenant_id, entity_type, entity_id, parent_id,
+                     event_type, payload_hash, recorded_at,
+                     transform_id, transform_version,
+                     transform_input_hash, transform_output_hash,
+                     reference_data_snapshot, transformed_at, transformed_by,
+                     canonical_records, lineage_domain_tag)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                uuid.uuid4(), tenant_id, "CANONICAL_INVOICE", inv_id, source_record_id,
+                "CANONICALIZED", canonical_hash, now,
+                "carrier-invoice-normalizer", "v1.0.0",
+                input_hash, output_hash,
+                reference_data_snapshot, now, "spiffe://zoiko/system/canonical-truth",
+                canonical_records_json, "zoiko/v1/lineage-record",
+            ))
+
+            cur.execute("""
+                UPDATE source_records
+                SET record_status = 'PROCESSED', lineage_id = %s
+                WHERE id = %s AND tenant_id = %s
+            """, (uuid.uuid4(), source_record_id, tenant_id))
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        try:
+            from kafka.producer import ZoikoProducer, KafkaMessage
+            ZoikoProducer(self.broker).publish(KafkaMessage(
+                topic     = "zoiko.canonical.invoice.created",
+                key       = str(inv_id),
+                payload   = {
+                    "canonical_invoice_id": str(inv_id),
+                    "invoice_number":       invoice_number,
+                    "carrier_id":           carrier_id,
+                    "total_amount":         float(total_amount),
+                    "canonical_hash":       canonical_hash.hex(),
+                    "transform_version":    "v1.0.0",
+                },
+                tenant_id = tenant_id,
+            ))
+        except Exception:
+            pass
+
+        return CanonicalResult(
+            canonical_invoice_id  = inv_id,
+            canonical_shipment_id = ship_id,
+            source_record_id      = source_record_id,
+            tenant_id             = tenant_id,
+            invoice_number        = invoice_number,
+            carrier_id            = carrier_id,
+            total_amount          = float(total_amount),
+            canonical_hash        = canonical_hash.hex(),
+        )

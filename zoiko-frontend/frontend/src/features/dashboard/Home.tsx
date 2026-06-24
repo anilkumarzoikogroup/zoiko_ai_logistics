@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "@/store";
@@ -10,12 +11,39 @@ import {
 import {
   TrendingUp, TrendingDown, CheckCircle2, Clock, Zap, FileText,
   AlertTriangle, ChevronRight, ShieldCheck, Award, ArrowRight,
-  IndianRupee, BarChart3, Users, Truck,
+  IndianRupee, BarChart3, Users, Truck, FileWarning,
+  LayoutGrid, Building2, Package, ShoppingCart, Boxes, ChevronDown,
 } from "lucide-react";
-import type { Case, GovernanceToken } from "@/types";
+import type { Case, Claim, GovernanceToken } from "@/types";
+
+// A row from either backend, tagged so the merged dashboard can tell them apart —
+// SC-001 (invoices, port 8000) and SC-002 (claims, port 8010) are independent
+// backends sharing the same `cases` table shape, so the fields line up exactly.
+type SliceTag = "Invoices" | "Claims";
+type ActivityRow = (Case | Claim) & { slice: SliceTag };
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 const CARRIER_COLORS = ["#3b82f6","#8b5cf6","#f59e0b","#10b981","#ef4444","#06b6d4"];
+
+const SLICE_BADGE: Record<SliceTag, { bg: string; text: string }> = {
+  Invoices: { bg: "#dbeafe", text: "#2563eb" },
+  Claims:   { bg: "#ede9fe", text: "#7c3aed" },
+};
+
+// Tab row above the dashboard — "All"/"Invoices"/"Claims" filter real data;
+// the rest are future slices with no backend yet, shown as a coming-soon state.
+type TabKey = "All" | "Invoices" | "Claims" | "Shipments" | "Suppliers" | "Accessorials" | "Procurement" | "Inventory";
+const TABS: { key: TabKey; icon: React.ElementType }[] = [
+  { key: "All",          icon: LayoutGrid },
+  { key: "Invoices",     icon: FileText },
+  { key: "Claims",       icon: FileWarning },
+  { key: "Shipments",    icon: Truck },
+  { key: "Suppliers",    icon: Building2 },
+  { key: "Accessorials", icon: Package },
+  { key: "Procurement",  icon: ShoppingCart },
+  { key: "Inventory",    icon: Boxes },
+];
+const LIVE_TABS: TabKey[] = ["All", "Invoices", "Claims"];
 
 // ── Customer-friendly state labels ────────────────────────────────────────────
 const STATE_LABEL: Record<string, string> = {
@@ -43,7 +71,7 @@ const STATE_COLOR: Record<string, { bg: string; text: string }> = {
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function carrierBreakdown(cases: Case[]) {
+function carrierBreakdown(cases: ActivityRow[]) {
   const map: Record<string, { overcharge: number; total: number; count: number }> = {};
   for (const c of cases) {
     if (!c.carrier) continue;
@@ -64,7 +92,7 @@ function carrierBreakdown(cases: Case[]) {
     }));
 }
 
-function monthlyRecovery(cases: Case[]) {
+function monthlyRecovery(cases: ActivityRow[]) {
   const map: Record<string, { billed: number; recovered: number }> = {};
   for (const c of cases) {
     const m = new Date(c.opened_at).toLocaleString("default", { month: "short" });
@@ -176,46 +204,64 @@ export default function Home() {
   const user = useAppSelector(s => s.auth.user) || localStorage.getItem("zoiko_user") || "User";
   const role = useAppSelector(s => s.auth.role) || localStorage.getItem("zoiko_role") || "analyst";
 
-  const { data: cases = [],  isLoading } = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases(),   refetchInterval: 5000 });
+  const { data: cases = [],  isLoading: casesLoading }  = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases(),   refetchInterval: 5000 });
+  const { data: claimsPaged, isLoading: claimsLoading } = useQuery({ queryKey: ["claims-dashboard"], queryFn: () => zoikoApi.listClaimsPaged({ page_size: 100 }), refetchInterval: 5000 });
   const { data: tokens = [] }            = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens(), refetchInterval: 10000 });
   const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats,            refetchInterval: 10000 });
+  const [activeTab, setActiveTab] = useState<TabKey>("All");
+  const [showSubmitMenu, setShowSubmitMenu] = useState(false);
 
   // ── Derived metrics ──────────────────────────────────────────────────────────
-  const allCases        = cases as Case[];
+  const isLoading        = casesLoading || claimsLoading;
+  const invoiceRows: ActivityRow[] = (cases as Case[]).map(c => ({ ...c, slice: "Invoices" as const }));
+  const claimRows:   ActivityRow[] = (claimsPaged?.claims ?? []).map(c => ({ ...c, slice: "Claims" as const }));
+  const allActivityUnfiltered: ActivityRow[] = [...invoiceRows, ...claimRows]
+    .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
+  // The whole dashboard below reacts to the selected tab — "All" shows everything,
+  // "Invoices"/"Claims" filter to that slice, the rest have no backend yet.
+  const allActivity: ActivityRow[] =
+    activeTab === "All" ? allActivityUnfiltered :
+    activeTab === "Invoices" || activeTab === "Claims" ? allActivityUnfiltered.filter(c => c.slice === activeTab) :
+    [];
   const allTokens       = tokens as GovernanceToken[];
-  const carriers        = carrierBreakdown(allCases);
-  const trend           = monthlyRecovery(allCases);
+  const carriers        = carrierBreakdown(allActivity);
+  const trend           = monthlyRecovery(allActivity);
 
-  const totalInvoices   = stats?.total_cases      ?? allCases.length;
-  const totalOvercharge = allCases.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const totalRecovered  = allCases.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state))
+  const totalSubmitted  = activeTab === "All" ? (stats?.total_cases ?? invoiceRows.length) + claimRows.length : allActivity.length;
+  const totalOvercharge = allActivity.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const totalRecovered  = allActivity.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state))
                                    .reduce((s, c) => s + (c.diff ?? 0), 0);
   const successRate     = totalOvercharge > 0
     ? Math.round((totalRecovered / totalOvercharge) * 100)
     : 0;
 
-  // Role-based action items
-  const needsProposal   = allCases.filter(c => c.state === "FINDING_GENERATED");
-  const needsApproval   = allCases.filter(c => c.state === "APPROVAL_PENDING");
-  const readyToExecute  = allCases.filter(c => c.state === "EXECUTION_READY");
+  // Role-based action items — invoices route to the existing Analyst/Manager/Execute
+  // queues; claims are self-contained (propose/approve/execute happen inline on
+  // ClaimDetail), so they get their own action card pointing at /claims instead.
+  const needsProposal   = invoiceRows.filter(c => c.state === "FINDING_GENERATED");
+  const needsApproval   = invoiceRows.filter(c => c.state === "APPROVAL_PENDING");
+  const readyToExecute  = invoiceRows.filter(c => c.state === "EXECUTION_READY");
   const activeTokens    = allTokens.filter(t => t.status === "ACTIVE");
+  const claimsNeedingAttention = claimRows.filter(c => !["CLOSED","ABORTED"].includes(c.state) && c.state !== "DISPATCHED" && c.state !== "OUTCOME_RECORDED");
 
   const pendingApprovalAmt = needsApproval.reduce((s, c) => s + (c.diff ?? 0), 0);
   const proposalAmt        = needsProposal.reduce((s, c) => s + (c.diff ?? 0), 0);
   const executeAmt         = readyToExecute.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const claimsAttentionAmt = claimsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
 
   const hasActions = needsProposal.length > 0 || needsApproval.length > 0
-                  || readyToExecute.length > 0 || activeTokens.length > 0;
+                  || readyToExecute.length > 0 || activeTokens.length > 0
+                  || claimsNeedingAttention.length > 0;
 
-  const recentCases = allCases.slice(0, 8);
-  const openCases   = allCases.filter(c => !["CLOSED","ABORTED"].includes(c.state));
+  const recentActivity = allActivity.slice(0, 8);
+  const openCases   = allActivity.filter(c => !["CLOSED","ABORTED"].includes(c.state));
 
   // Funnel data
   const funnelData = [
-    { label: "Submitted",          value: allCases.length,                                                             color: "#3b82f6" },
-    { label: "AI Analyzed",        value: allCases.filter(c => !["NEW","EVIDENCE_PENDING"].includes(c.state)).length, color: "#8b5cf6" },
-    { label: "Awaiting Approval",  value: allCases.filter(c => c.state === "APPROVAL_PENDING").length,                color: "#f59e0b" },
-    { label: "Recovered",          value: allCases.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)).length, color: "#10b981" },
+    { label: "Submitted",          value: allActivity.length,                                                             color: "#3b82f6" },
+    { label: "AI Analyzed",        value: allActivity.filter(c => !["NEW","EVIDENCE_PENDING"].includes(c.state)).length, color: "#8b5cf6" },
+    { label: "Awaiting Approval",  value: allActivity.filter(c => c.state === "APPROVAL_PENDING").length,                color: "#f59e0b" },
+    { label: "Recovered",          value: allActivity.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)).length, color: "#10b981" },
   ];
 
   const firstName = user.split(" ")[0];
@@ -235,20 +281,86 @@ export default function Home() {
             {role === "admin"   && "Freight overcharge recovery overview"}
           </p>
         </div>
-        <button
-          onClick={() => nav("/cases/new")}
-          style={{
-            display: "flex", alignItems: "center", gap: 7,
-            padding: "9px 18px", background: "#2563eb", color: "#fff",
-            border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700,
-            cursor: "pointer", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
-          }}
-        >
-          <FileText style={{ width: 15, height: 15 }} />
-          Submit Invoice
-        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            onClick={() => setShowSubmitMenu(s => !s)}
+            style={{
+              display: "flex", alignItems: "center", gap: 7,
+              padding: "9px 18px", background: "#2563eb", color: "#fff",
+              border: "none", borderRadius: 8, fontSize: 13, fontWeight: 700,
+              cursor: "pointer", boxShadow: "0 2px 8px rgba(37,99,235,0.3)",
+            }}
+          >
+            <FileText style={{ width: 15, height: 15 }} />
+            Submit New
+            <ChevronDown style={{ width: 14, height: 14 }} />
+          </button>
+          {showSubmitMenu && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 10 }} onClick={() => setShowSubmitMenu(false)} />
+              <div style={{
+                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 11,
+                background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 170, overflow: "hidden",
+              }}>
+                <button
+                  onClick={() => { setShowSubmitMenu(false); nav("/cases/new"); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <FileText style={{ width: 14, height: 14, color: "#2563eb" }} /> Submit Invoice
+                </button>
+                <button
+                  onClick={() => { setShowSubmitMenu(false); nav("/claims/new"); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <FileWarning style={{ width: 14, height: 14, color: "#7c3aed" }} /> Submit Claim
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
+      {/* ── Tab row ───────────────────────────────────────────────────────── */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 6 }}>
+        {TABS.map(({ key, icon: Icon }) => {
+          const active = activeTab === key;
+          const live = LIVE_TABS.includes(key);
+          return (
+            <button
+              key={key}
+              onClick={() => setActiveTab(key)}
+              title={live ? undefined : "Coming soon — no backend slice yet"}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "7px 13px", borderRadius: 7, border: "none",
+                background: active ? "#2563eb" : "transparent",
+                color: active ? "#fff" : live ? "#475569" : "#94a3b8",
+                fontSize: 12.5, fontWeight: 700, cursor: "pointer",
+                transition: "background 0.15s, color 0.15s",
+              }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
+            >
+              <Icon style={{ width: 14, height: 14 }} />
+              {key}
+            </button>
+          );
+        })}
+      </div>
+
+      {!LIVE_TABS.includes(activeTab) ? (
+        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 56, textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+          {(() => { const Icon = TABS.find(t => t.key === activeTab)!.icon; return <Icon style={{ width: 36, height: 36, color: "#cbd5e1", margin: "0 auto 12px" }} />; })()}
+          <p style={{ fontSize: 15, fontWeight: 700, color: "#475569", margin: 0 }}>{activeTab} — coming soon</p>
+          <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>This slice doesn't have a backend yet. Check back once it's built.</p>
+        </div>
+      ) : (
+      <>
       {/* ── Action Required ───────────────────────────────────────────────── */}
       {hasActions && (
         <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
@@ -269,6 +381,7 @@ export default function Home() {
             {(role === "manager" || role === "admin") && activeTokens.length > 0 && (
               <ActionCard icon={Clock}      title="Active governance tokens expiring" count={activeTokens.length} amount={activeTokens.reduce((s,t)=>s+t.amount,0)} actionLabel="Execute Now" to="/execute" color="#dc2626" />
             )}
+            <ActionCard icon={FileWarning} title="Claims need attention" count={claimsNeedingAttention.length} amount={claimsAttentionAmt} actionLabel="Review Claims" to="/claims" color="#7c3aed" />
           </div>
         </div>
       )}
@@ -276,9 +389,9 @@ export default function Home() {
       {/* ── 4 KPI cards ───────────────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
         <KpiCard
-          label="Invoices Submitted"
-          value={totalInvoices.toLocaleString("en-IN")}
-          sub={`${openCases.length} in progress`}
+          label="Cases Submitted"
+          value={totalSubmitted.toLocaleString("en-IN")}
+          sub={`${openCases.length} in progress · ${invoiceRows.length} invoices, ${claimRows.length} claims`}
           icon={FileText}
           accent="#3b82f6"
           onClick={() => nav("/cases")}
@@ -286,7 +399,7 @@ export default function Home() {
         <KpiCard
           label="Overcharges Detected"
           value={formatCurrency(totalOvercharge)}
-          sub={`${carriers.length} carrier${carriers.length !== 1 ? "s" : ""}`}
+          sub={`${carriers.length} counterpart${carriers.length !== 1 ? "ies" : "y"}`}
           subUp={false}
           icon={TrendingDown}
           accent="#ef4444"
@@ -294,7 +407,7 @@ export default function Home() {
         <KpiCard
           label="Amount Recovered"
           value={formatCurrency(totalRecovered)}
-          sub={`${allCases.filter(c=>["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)).length} cases closed`}
+          sub={`${allActivity.filter(c=>["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state)).length} cases closed`}
           subUp
           icon={IndianRupee}
           accent="#10b981"
@@ -318,7 +431,7 @@ export default function Home() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <Truck style={{ width: 14, height: 14, color: "#64748b" }} />
-              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Carrier Scorecard</p>
+              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Counterparty Scorecard</p>
             </div>
             <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
               All <ChevronRight style={{ width: 12, height: 12 }} />
@@ -423,10 +536,10 @@ export default function Home() {
         </div>
       </div>
 
-      {/* ── Recent Cases ──────────────────────────────────────────────────── */}
+      {/* ── Recent Activity ──────────────────────────────────────────────── */}
       <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #f1f5f9" }}>
-          <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Recent Cases</p>
+          <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Recent Activity</p>
           <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             View all <ArrowRight style={{ width: 12, height: 12 }} />
           </button>
@@ -444,10 +557,10 @@ export default function Home() {
               </div>
             ))}
           </div>
-        ) : recentCases.length === 0 ? (
+        ) : recentActivity.length === 0 ? (
           <div style={{ padding: 48, textAlign: "center" }}>
             <FileText style={{ width: 32, height: 32, color: "#cbd5e1", margin: "0 auto 10px" }} />
-            <p style={{ fontSize: 14, color: "#64748b", margin: 0 }}>No cases yet</p>
+            <p style={{ fontSize: 14, color: "#64748b", margin: 0 }}>No cases or claims yet</p>
             <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Submit your first invoice to start detecting overcharges</p>
             <button
               onClick={() => nav("/cases/new")}
@@ -460,7 +573,7 @@ export default function Home() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>
-                {["Case ID", "Carrier", "Invoice Amount", "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
+                {["Case ID", "Slice", "Counterparty", "Amount", "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
                   <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #f1f5f9" }}>
                     {h}
                   </th>
@@ -468,15 +581,23 @@ export default function Home() {
               </tr>
             </thead>
             <tbody>
-              {recentCases.map((c: Case, i: number) => (
+              {recentActivity.map((c, i) => (
                 <tr
                   key={c.id}
-                  onClick={() => nav(`/cases/${c.id}`)}
-                  style={{ cursor: "pointer", borderBottom: i < recentCases.length - 1 ? "1px solid #f8fafc" : "none", transition: "background 0.1s" }}
+                  onClick={() => nav(c.slice === "Claims" ? `/claims/${c.id}` : `/cases/${c.id}`)}
+                  style={{ cursor: "pointer", borderBottom: i < recentActivity.length - 1 ? "1px solid #f8fafc" : "none", transition: "background 0.1s" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <td style={{ padding: "11px 16px", fontFamily: "monospace", fontSize: 11, color: "#2563eb" }}>{c.id.slice(0, 8)}…</td>
+                  <td style={{ padding: "11px 16px" }}>
+                    <span style={{
+                      background: SLICE_BADGE[c.slice].bg, color: SLICE_BADGE[c.slice].text,
+                      fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 99, whiteSpace: "nowrap",
+                    }}>
+                      {c.slice}
+                    </span>
+                  </td>
                   <td style={{ padding: "11px 16px", fontSize: 12, fontWeight: 600, color: "#334155" }}>{c.carrier || "—"}</td>
                   <td style={{ padding: "11px 16px", fontSize: 12, color: "#334155" }}>{formatCurrency(c.amount)}</td>
                   <td style={{ padding: "11px 16px", fontSize: 12, fontWeight: 700, color: c.diff > 0 ? "#dc2626" : "#94a3b8" }}>
@@ -502,6 +623,8 @@ export default function Home() {
           </table>
         )}
       </div>
+      </>
+      )}
 
       {/* ── Trust footer ──────────────────────────────────────────────────── */}
       <div style={{

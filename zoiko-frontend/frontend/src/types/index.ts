@@ -110,6 +110,8 @@ export interface Claim {
   updated_at: string;
   duplicate?: boolean;
   deduplication_outcome?: string;
+  negotiation_status?: string;   // OPEN | SUBMITTED | UNDER_CARRIER_REVIEW | COUNTERED | PARTIALLY_ACCEPTED | ACCEPTED | REJECTED | WITHDRAWN | CLOSED
+  approved_amount?: number | null;
 }
 
 export interface CaseEvent {

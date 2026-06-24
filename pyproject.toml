@@ -10,8 +10,9 @@ extend-exclude = [
     ".git",
     "__pycache__",
     "*.egg-info",
-    # backend/core has its own pyproject.toml with ruff config and a standalone CI job
-    "backend/core",
+    # each spine's core_lib has its own pyproject.toml with ruff config and a standalone CI job
+    "backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib",
+    "backend/slices/sc-002-carrier-claim/spine/core_lib",
 ]
 
 [tool.ruff.lint]

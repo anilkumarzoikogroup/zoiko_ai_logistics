@@ -330,7 +330,7 @@ zoiko-logistics/
 ├── setup.bat                      ← One-time setup (venv + pip + npm install)
 ├── EXECUTION_GUIDE.md             ← Step-by-step commands per service
 ├── CLAUDE.md                      ← AI assistant context and conventions
-├── alembic.ini                    ← Points to backend/core/db/migrations
+├── alembic.ini                    ← Points to backend/alembic/migrations
 │
 ├── backend/
 │   ├── core/                      ← Crypto + DB schema

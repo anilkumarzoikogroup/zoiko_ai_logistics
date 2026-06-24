@@ -19,6 +19,13 @@ const API_BASE  = (import.meta.env.VITE_API_BASE  || "/api")  + "/v1";
 const API3_BASE = (import.meta.env.VITE_API3_BASE || "/api3") + "/v1"; // Phase 3 port 8002
 const API4_BASE = (import.meta.env.VITE_API4_BASE || "/api4") + "/v1"; // Phase 4 port 8001
 
+// SC-002 (carrier claim) spine — a fully separate gateway/execution/governance
+// backend (backend/slices/sc-002-carrier-claim/spine/), not a route on the
+// SC-001 backend above. Claims must go through these, not api/api3/api4.
+const API_CLAIM_BASE  = (import.meta.env.VITE_API_CLAIM_BASE  || "/claimapi")  + "/v1"; // SC-002 gateway port 8010
+const API_CLAIM3_BASE = (import.meta.env.VITE_API_CLAIM3_BASE || "/claimapi3") + "/v1"; // SC-002 governance port 8012
+const API_CLAIM4_BASE = (import.meta.env.VITE_API_CLAIM4_BASE || "/claimapi4") + "/v1"; // SC-002 execution port 8011
+
 // JWT lives in an HttpOnly cookie — the browser sends it automatically on every request.
 // We only need to attach X-Tenant-ID (non-sensitive) and, in dev-only, VITE_DEV_JWT.
 function getAuthHeaders(): Record<string, string> {
@@ -71,4 +78,8 @@ const api  = attachInterceptors(axios.create({ baseURL: API_BASE,  timeout: 6000
 const api3 = attachInterceptors(axios.create({ baseURL: API3_BASE, timeout: 60000, withCredentials: true }));
 const api4 = attachInterceptors(axios.create({ baseURL: API4_BASE, timeout: 60000, withCredentials: true }));
 
-export { api, api3, api4, USE_MOCK };
+const apiClaim  = attachInterceptors(axios.create({ baseURL: API_CLAIM_BASE,  timeout: 60000, withCredentials: true }));
+const apiClaim3 = attachInterceptors(axios.create({ baseURL: API_CLAIM3_BASE, timeout: 60000, withCredentials: true }));
+const apiClaim4 = attachInterceptors(axios.create({ baseURL: API_CLAIM4_BASE, timeout: 60000, withCredentials: true }));
+
+export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, USE_MOCK };

@@ -6,7 +6,7 @@ import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { ArrowRight, Info } from "lucide-react";
+import { ArrowRight, Info, Plus, Trash2 } from "lucide-react";
 import axios from "axios";
 
 // SC-002 — manual-entry claim submission. Mirrors NewCase.tsx's "manual" mode
@@ -49,6 +49,11 @@ function Combobox({ id, value, onChange, placeholder, suggestions }: {
   );
 }
 
+interface LineItem {
+  description: string;
+  claimed_amount: string;
+}
+
 export default function NewClaim() {
   const nav   = useNavigate();
   const qc    = useQueryClient();
@@ -59,16 +64,23 @@ export default function NewClaim() {
     carrier: "", claim_type: "DAMAGE", claimed_amount: "", currency: "INR",
     claim_reference: "", related_invoice_number: "", description: "",
   });
+  const [useLines, setUseLines] = useState(false);
+  const [lines, setLines] = useState<LineItem[]>([{ description: "", claimed_amount: "" }]);
+
+  const lineTotal = lines.reduce((sum, l) => sum + (Number(l.claimed_amount) || 0), 0);
 
   const m = useMutation({
     mutationFn: () => zoikoApi.createClaim({
       carrier:                 form.carrier,
       claim_type:              form.claim_type,
-      claimed_amount:          Number(form.claimed_amount),
+      claimed_amount:          useLines ? lineTotal : Number(form.claimed_amount),
       currency:                form.currency,
       claim_reference:         form.claim_reference,
       related_invoice_number:  form.related_invoice_number,
       description:             form.description,
+      lines: useLines
+        ? lines.filter(l => l.claimed_amount).map(l => ({ description: l.description, claimed_amount: Number(l.claimed_amount) }))
+        : undefined,
     }),
     onSuccess: (c) => {
       qc.invalidateQueries({ queryKey: ["claims"] });
@@ -96,7 +108,7 @@ export default function NewClaim() {
     },
   });
 
-  const canSubmit = form.carrier && form.claim_type && Number(form.claimed_amount) > 0;
+  const canSubmit = form.carrier && form.claim_type && (useLines ? lineTotal > 0 : Number(form.claimed_amount) > 0);
 
   return (
     <div className="max-w-lg mx-auto">
@@ -146,18 +158,67 @@ export default function NewClaim() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="claimed_amount">Claimed Amount</Label>
-                <Input id="claimed_amount" type="number" placeholder="e.g. 5000"
-                  value={form.claimed_amount} onChange={e => setForm(f => ({ ...f, claimed_amount: e.target.value }))} />
+            <div className="flex items-center justify-between">
+              <Label className="!mb-0">{useLines ? "Line Items" : "Claimed Amount"}</Label>
+              <button
+                type="button"
+                onClick={() => setUseLines(v => !v)}
+                className="text-[11px] font-semibold text-blue-600 hover:underline"
+              >
+                {useLines ? "Use a single amount instead" : "Break into multiple line items"}
+              </button>
+            </div>
+
+            {useLines ? (
+              <div className="space-y-2">
+                {lines.map((line, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <Input
+                      placeholder={`Line ${i + 1} description (e.g. Box ${i + 1} — crushed)`}
+                      value={line.description}
+                      onChange={e => setLines(ls => ls.map((l, j) => j === i ? { ...l, description: e.target.value } : l))}
+                      className="flex-1"
+                    />
+                    <Input
+                      type="number" placeholder="Amount" value={line.claimed_amount}
+                      onChange={e => setLines(ls => ls.map((l, j) => j === i ? { ...l, claimed_amount: e.target.value } : l))}
+                      className="w-28"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setLines(ls => ls.length > 1 ? ls.filter((_, j) => j !== i) : ls)}
+                      className="text-slate-400 hover:text-red-500 flex-shrink-0"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setLines(ls => [...ls, { description: "", claimed_amount: "" }])}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 hover:underline"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Add line item
+                </button>
+                <div className="flex items-center justify-between rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-sm">
+                  <span className="text-slate-500">Total claimed</span>
+                  <span className="font-bold text-slate-800">{lineTotal.toLocaleString()} {form.currency}</span>
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="currency">Currency</Label>
-                <Combobox id="currency" value={form.currency}
-                  onChange={v => setForm(f => ({ ...f, currency: v.toUpperCase() }))}
-                  placeholder="INR, USD, EUR…" suggestions={CURRENCIES} />
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Input id="claimed_amount" type="number" placeholder="e.g. 5000"
+                    value={form.claimed_amount} onChange={e => setForm(f => ({ ...f, claimed_amount: e.target.value }))} />
+                </div>
               </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="currency">Currency</Label>
+              <Combobox id="currency" value={form.currency}
+                onChange={v => setForm(f => ({ ...f, currency: v.toUpperCase() }))}
+                placeholder="INR, USD, EUR…" suggestions={CURRENCIES} />
             </div>
 
             <div className="space-y-1.5">

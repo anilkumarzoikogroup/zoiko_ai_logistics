@@ -14,10 +14,15 @@ export default function ManagerApproval() {
   const nav   = useNavigate();
   const qc    = useQueryClient();
   const toast = useToast();
-  const { data: cases, isLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases(), refetchInterval: 5000 });
+  const { data: cases, isLoading: casesLoading } = useQuery({ queryKey: ["cases"], queryFn: () => zoikoApi.listCases(), refetchInterval: 5000 });
+  const { data: claimsPage, isLoading: claimsLoading } = useQuery({ queryKey: ["claims-pending"], queryFn: () => zoikoApi.listClaimsPaged({ state: "APPROVAL_PENDING", page_size: 50 }), refetchInterval: 5000 });
+  const isLoading = casesLoading || claimsLoading;
   const [decided, setDecided] = useState<Record<string, "EXECUTION_READY" | "ABORTED">>({});
 
-  const queue = (cases || []).filter(c => c.state === "APPROVAL_PENDING");
+  const queue = [
+    ...(cases || []).filter(c => c.state === "APPROVAL_PENDING"),
+    ...(claimsPage?.claims || []),
+  ];
 
   const decide = useMutation({
     mutationFn: ({ id, decision }: { id: string; decision: "EXECUTION_READY" | "ABORTED" }) =>
@@ -25,6 +30,7 @@ export default function ManagerApproval() {
     onSuccess: (_d, vars) => {
       setDecided(prev => ({ ...prev, [vars.id]: vars.decision }));
       qc.invalidateQueries({ queryKey: ["cases"] });
+      qc.invalidateQueries({ queryKey: ["claims-pending"] });
       if (vars.decision === "EXECUTION_READY") {
         toast.success("Case approved", "Governance token issued — 15-min execution window open");
       } else {
@@ -122,6 +128,7 @@ export default function ManagerApproval() {
         <div className="space-y-4">
           {queue.map(c => {
             const result = decided[c.id];
+            const isClaim = "case_type" in c && c.case_type === "CARRIER_CLAIM";
             return (
               <div
                 key={c.id}
@@ -140,25 +147,43 @@ export default function ManagerApproval() {
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
                         Pending Approval
                       </span>
+                      {isClaim && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+                          Carrier Claim · {(c as any).claim_type}
+                        </span>
+                      )}
                     </div>
                     <p className="font-bold text-slate-800">{c.carrier}</p>
                     <p className="text-xs text-slate-400 mt-0.5">{c.shipment_ref}</p>
 
                     {/* Financial summary */}
-                    <div className="mt-4 grid grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5 text-center">
-                        <p className="text-[9px] text-slate-400 uppercase tracking-wide font-semibold">Invoice</p>
-                        <p className="text-sm font-bold text-slate-700 mt-1">{formatCurrency(c.amount, c.currency)}</p>
+                    {isClaim ? (
+                      <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5 text-center">
+                          <p className="text-[9px] text-slate-400 uppercase tracking-wide font-semibold">Claimed Amount</p>
+                          <p className="text-sm font-bold text-slate-700 mt-1">{formatCurrency(c.amount, c.currency)}</p>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2.5 text-center">
+                          <p className="text-[9px] text-emerald-500 uppercase tracking-wide font-semibold">AI Score</p>
+                          <p className="text-sm font-bold text-emerald-600 mt-1">{((c.confidence || 0) * 100).toFixed(0)}%</p>
+                        </div>
                       </div>
-                      <div className="rounded-lg bg-red-50 border border-red-100 px-3 py-2.5 text-center">
-                        <p className="text-[9px] text-red-400 uppercase tracking-wide font-semibold">Overcharge</p>
-                        <p className="text-sm font-bold text-red-600 mt-1">{formatCurrency(c.diff, c.currency)}</p>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-3 gap-3">
+                        <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5 text-center">
+                          <p className="text-[9px] text-slate-400 uppercase tracking-wide font-semibold">Invoice</p>
+                          <p className="text-sm font-bold text-slate-700 mt-1">{formatCurrency(c.amount, c.currency)}</p>
+                        </div>
+                        <div className="rounded-lg bg-red-50 border border-red-100 px-3 py-2.5 text-center">
+                          <p className="text-[9px] text-red-400 uppercase tracking-wide font-semibold">Overcharge</p>
+                          <p className="text-sm font-bold text-red-600 mt-1">{formatCurrency(c.diff, c.currency)}</p>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2.5 text-center">
+                          <p className="text-[9px] text-emerald-500 uppercase tracking-wide font-semibold">AI Score</p>
+                          <p className="text-sm font-bold text-emerald-600 mt-1">{((c.confidence || 0) * 100).toFixed(0)}%</p>
+                        </div>
                       </div>
-                      <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2.5 text-center">
-                        <p className="text-[9px] text-emerald-500 uppercase tracking-wide font-semibold">AI Score</p>
-                        <p className="text-sm font-bold text-emerald-600 mt-1">{((c.confidence || 0) * 100).toFixed(0)}%</p>
-                      </div>
-                    </div>
+                    )}
 
                     {/* 8-gate callout */}
                     <div className="mt-3 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 flex items-center gap-2">
@@ -172,7 +197,7 @@ export default function ManagerApproval() {
                   {/* Decision panel */}
                   <div className="flex flex-col gap-2 flex-shrink-0 items-stretch min-w-[140px]">
                     <button
-                      onClick={() => nav(`/cases/${c.id}`)}
+                      onClick={() => nav(isClaim ? `/claims/${c.id}` : `/cases/${c.id}`)}
                       className="flex items-center justify-center gap-1 text-xs text-blue-600 hover:underline font-semibold py-1"
                     >
                       Review case <ChevronRight className="h-3 w-3" />

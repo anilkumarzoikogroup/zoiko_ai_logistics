@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { zoikoApi } from "@/api/zoiko";
@@ -5,7 +6,7 @@ import { formatCurrency, formatDate, cn } from "@/utils/cn";
 import {
   ArrowLeft, CheckCircle2, Clock, FileText, Brain, Lock,
   AlertTriangle, ChevronRight, Zap, Users, RefreshCw, GitBranch,
-  ShieldCheck, Download, ThumbsUp, ShieldAlert, XCircle,
+  ShieldCheck, Download, ThumbsUp, ShieldAlert, XCircle, MessageSquareWarning,
 } from "lucide-react";
 import { useToast } from "@/hooks/useToast";
 import { useAppSelector } from "@/store";
@@ -85,27 +86,39 @@ export default function ClaimDetail() {
   const qc    = useQueryClient();
   const toast = useToast();
   const user  = useAppSelector(s => s.auth.user) || "User";
+  const [counterAmount, setCounterAmount] = useState("");
 
   const cq      = useQuery({ queryKey: ["claim",        id], queryFn: () => zoikoApi.getClaim(id),       retry: 1 });
-  const eventsQ = useQuery({ queryKey: ["claim-events",  id], queryFn: () => zoikoApi.getCaseEvents(id), retry: 1 });
-  const evQ     = useQuery({ queryKey: ["claim-evidence",id], queryFn: () => zoikoApi.getEvidence(id),   retry: false });
-  const findQ   = useQuery({ queryKey: ["claim-finding", id], queryFn: () => zoikoApi.getFinding(id),    retry: false });
-  const propQ   = useQuery({ queryKey: ["claim-proposal",id], queryFn: () => zoikoApi.getProposal(id),   retry: false });
-  const tokenQ  = useQuery({ queryKey: ["claim-token",   id], queryFn: () => zoikoApi.getTokenForCase(id), retry: false });
-  const acrQ    = useQuery({ queryKey: ["claim-acr",     id], queryFn: () => zoikoApi.getAcr(id),        retry: false });
+  const eventsQ = useQuery({ queryKey: ["claim-events",  id], queryFn: () => zoikoApi.getClaimEvents(id), retry: 1 });
+  const evQ     = useQuery({ queryKey: ["claim-evidence",id], queryFn: () => zoikoApi.getClaimEvidence(id),   retry: false });
+  const findQ   = useQuery({ queryKey: ["claim-finding", id], queryFn: () => zoikoApi.getClaimFinding(id),    retry: false });
+  const propQ   = useQuery({ queryKey: ["claim-proposal",id], queryFn: () => zoikoApi.getClaimProposal(id),   retry: false });
+  const tokenQ  = useQuery({ queryKey: ["claim-token",   id], queryFn: () => zoikoApi.getClaimToken(id), retry: false });
+  const acrQ    = useQuery({ queryKey: ["claim-acr",     id], queryFn: () => zoikoApi.getClaimAcr(id),        retry: false });
+  const linesQ  = useQuery({ queryKey: ["claim-lines",   id], queryFn: () => zoikoApi.getClaimLines(id), retry: false });
 
   const proposeMut = useMutation({
-    mutationFn: () => zoikoApi.proposeRecovery(id, { action: "SETTLE_CLAIM", amount: cq.data?.amount ?? 0, currency: cq.data?.currency ?? "INR" }),
+    mutationFn: () => zoikoApi.proposeClaimSettlement(id, { action: "SETTLE_CLAIM", amount: cq.data?.amount ?? 0, currency: cq.data?.currency ?? "INR" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["claim", id] });
       qc.invalidateQueries({ queryKey: ["claim-proposal", id] });
       toast.success("Settlement proposed", "Sent for manager approval (SoD: a different user must approve)");
     },
-    onError: () => toast.error("Proposal failed", "Check that the backend is running on port 8000"),
+    onError: () => toast.error("Proposal failed", "Check that the SC-002 backend is running on port 8010"),
+  });
+
+  const negotiateMut = useMutation({
+    mutationFn: (vars: { action: "COUNTER" | "ACCEPT" | "PARTIALLY_ACCEPT" | "REJECT"; approved_amount?: number }) =>
+      zoikoApi.negotiateClaim(id, vars),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["claim", id] });
+      toast.success("Carrier response recorded", `Status: ${res.negotiation_status.replace(/_/g, " ")}`);
+    },
+    onError: () => toast.error("Update failed", "Check that the SC-002 backend is running on port 8010"),
   });
 
   const decideMut = useMutation({
-    mutationFn: (decision: "EXECUTION_READY" | "ABORTED") => zoikoApi.approveDecision(id, { decision }),
+    mutationFn: (decision: "EXECUTION_READY" | "ABORTED") => zoikoApi.approveClaimDecision(id, { decision }),
     onSuccess: (_d, decision) => {
       qc.invalidateQueries({ queryKey: ["claim", id] });
       qc.invalidateQueries({ queryKey: ["claim-token", id] });
@@ -114,12 +127,12 @@ export default function ClaimDetail() {
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail;
-      toast.error("Decision failed", typeof detail === "string" ? detail : "Check that the backend is running on port 8000");
+      toast.error("Decision failed", typeof detail === "string" ? detail : "Check that the SC-002 backend is running on port 8010");
     },
   });
 
   const executeMut = useMutation({
-    mutationFn: () => zoikoApi.executeRecovery(tokenQ.data!.id, id, tokenQ.data!.amount, tokenQ.data!.currency),
+    mutationFn: () => zoikoApi.executeClaimRecovery(tokenQ.data!.id, id, tokenQ.data!.amount, tokenQ.data!.currency),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["claim", id] });
       qc.invalidateQueries({ queryKey: ["claim-token", id] });
@@ -127,12 +140,12 @@ export default function ClaimDetail() {
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.detail;
-      toast.error("Execution failed", typeof detail === "string" ? detail : "Check that the backend is running on port 8000");
+      toast.error("Execution failed", typeof detail === "string" ? detail : "Check that the SC-002 backend is running on port 8010");
     },
   });
 
   function handleDownloadAcr() {
-    zoikoApi.downloadAcr(id).then(blob => {
+    zoikoApi.downloadClaimAcr(id).then(blob => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url; a.download = `acr_${id.slice(0, 8)}.json`;
@@ -207,6 +220,66 @@ export default function ClaimDetail() {
           </div>
         ))}
       </div>
+
+      {/* ── Carrier negotiation (independent of the governance FSM) ────────── */}
+      {!["CLOSED", "ABORTED"].includes(cs.state) && (
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="h-9 w-9 rounded-lg border border-indigo-200 bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                <MessageSquareWarning className="h-5 w-5 text-indigo-700" />
+              </div>
+              <div>
+                <p className="font-bold text-sm text-indigo-700">Carrier Negotiation</p>
+                <p className="text-xs mt-0.5 leading-relaxed text-indigo-600">
+                  Track the carrier's response separately from internal approval — counter-offer, accept in full, accept partially, or reject.
+                </p>
+              </div>
+            </div>
+            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 whitespace-nowrap">
+              {(cs.negotiation_status || "SUBMITTED").replace(/_/g, " ")}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="number" placeholder="Counter / approved amount"
+              value={counterAmount} onChange={e => setCounterAmount(e.target.value)}
+              className="w-48 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+            />
+            <button
+              onClick={() => negotiateMut.mutate({ action: "COUNTER", approved_amount: Number(counterAmount) || undefined })}
+              disabled={negotiateMut.isPending || !counterAmount}
+              className="px-3 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-xs font-bold hover:bg-indigo-100 disabled:opacity-50 transition-colors"
+            >
+              Record Counter-Offer
+            </button>
+            <button
+              onClick={() => negotiateMut.mutate({ action: "ACCEPT", approved_amount: cs.amount })}
+              disabled={negotiateMut.isPending}
+              className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-50 transition-colors"
+            >
+              Carrier Accepted Full
+            </button>
+            <button
+              onClick={() => negotiateMut.mutate({ action: "PARTIALLY_ACCEPT", approved_amount: Number(counterAmount) || undefined })}
+              disabled={negotiateMut.isPending || !counterAmount}
+              className="px-3 py-2 rounded-lg bg-amber-100 border border-amber-300 text-amber-700 text-xs font-bold hover:bg-amber-200 disabled:opacity-50 transition-colors"
+            >
+              Partially Accepted
+            </button>
+            <button
+              onClick={() => negotiateMut.mutate({ action: "REJECT" })}
+              disabled={negotiateMut.isPending}
+              className="px-3 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-xs font-bold hover:bg-red-50 disabled:opacity-50 transition-colors"
+            >
+              Carrier Rejected
+            </button>
+          </div>
+          {cs.approved_amount != null && (
+            <p className="text-[11px] text-indigo-600">Carrier-approved amount on file: <span className="font-bold">{formatCurrency(cs.approved_amount, cs.currency)}</span></p>
+          )}
+        </div>
+      )}
 
       {/* ── Inline governance actions ───────────────────────────────────── */}
       {(cs.state === "NEW" || cs.state === "EVIDENCE_PENDING" || cs.state === "FINDING_GENERATED") && (
@@ -296,6 +369,25 @@ export default function ClaimDetail() {
           })}
         </div>
       </div>
+
+      {/* ── Line-item breakdown (only shown when the claim has multiple lines) ── */}
+      {!!linesQ.data?.length && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <p className="text-sm font-bold text-slate-800 mb-3">Line-Item Breakdown</p>
+          <div className="divide-y divide-slate-50">
+            {linesQ.data.map(l => (
+              <div key={l.id} className="flex items-center justify-between py-2 text-sm">
+                <span className="text-slate-600">{l.line_number}. {l.description || "—"}</span>
+                <span className="font-semibold text-slate-800">{formatCurrency(l.claimed_amount, l.currency)}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between py-2 text-sm font-bold">
+              <span>Total</span>
+              <span>{formatCurrency(linesQ.data.reduce((s, l) => s + l.claimed_amount, 0), linesQ.data[0]?.currency ?? cs.currency)}</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Artifact cards ───────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

@@ -1,0 +1,243 @@
+"""
+Phase 4 — Reconciliation Service
+
+After the Execution Gateway dispatches a credit, the Reconciliation Service:
+  1. Polls connector_responses for the settlement confirmation
+  2. Compares credited amount vs expected amount
+  3. Writes a reconciliations row (MATCHED / PARTIAL / DISCREPANCY)
+  4. Writes an outcomes row
+  5. Advances case FSM: DISPATCHED → OUTCOME_RECORDED → CLOSED
+  6. Publishes zoiko.reconciliation.updated
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from datetime import datetime, timezone
+
+import psycopg2
+import psycopg2.extras
+import shared.db as _db
+
+import paths  # noqa: F401
+
+from services.reconciliation_svc.models import ReconciliationResult
+
+psycopg2.extras.register_uuid()
+
+_TOLERANCE = 0.01   # 1% discrepancy tolerance
+
+
+class ReconciliationHandler:
+    def __init__(self, db_url: str, kafka_broker, tenant_slug: str = "default") -> None:
+        self._db_url      = db_url
+        self._broker      = kafka_broker
+        self._tenant_slug = tenant_slug
+
+    def reconcile(self, envelope_id: str, tenant_id: str, actor_sub: str = "system") -> ReconciliationResult:
+        """
+        Reconcile a dispatched execution envelope against the connector response.
+
+        In dev: simulates a successful settlement (actual_amount = expected_amount).
+        In prod: reads connector_responses table for actual settlement.
+        """
+        envelope = _db.q1(
+            db_url=self._db_url,
+            sql="""
+                SELECT id, tenant_id, case_id, scope, amount, currency, connector_ref, status
+                FROM   execution_envelopes
+                WHERE  id=%s::uuid AND tenant_id=%s::uuid
+                LIMIT  1
+            """,
+            params=(envelope_id, tenant_id),
+        )
+        if not envelope:
+            raise ValueError(f"Execution envelope '{envelope_id}' not found")
+        if envelope["status"] not in ("DISPATCHED", "CONFIRMED"):
+            raise ValueError(f"Envelope '{envelope_id}' is in state '{envelope['status']}', expected DISPATCHED")
+
+        expected = float(envelope["amount"])
+        case_id  = str(envelope["case_id"]) if envelope["case_id"] else ""
+        currency = envelope["currency"]
+        now      = datetime.now(timezone.utc)
+
+        # Dev: simulate actual amount = expected (connector settled exactly)
+        actual = self._get_actual_amount(envelope_id, expected)
+        delta  = abs(actual - expected)
+
+        if delta == 0:
+            status = "MATCHED"
+        elif delta / expected <= _TOLERANCE:
+            status = "PARTIAL"
+        else:
+            status = "DISCREPANCY"
+
+        # Clarification 05 §14 — reconciliation_type + expected/observed amounts
+        reconciliation_type = {
+            "MATCHED":     "MATCHED",
+            "PARTIAL":     "PARTIAL_MATCH",
+            "DISCREPANCY": "MISMATCH",
+        }[status]
+
+        rec_id     = uuid.uuid4()
+        outcome_id = uuid.uuid4()
+
+        # Compute recon_hash over reconciliation data (domain-tagged SHA-256)
+        recon_bytes = json.dumps({
+            "envelope_id": envelope_id, "expected": expected,
+            "actual": actual, "delta": delta, "status": status,
+        }, sort_keys=True).encode("utf-8")
+        recon_hash = hashlib.sha256(b"zoiko.reconciliation.v1:" + recon_bytes).digest()
+
+        with _db.get_conn(self._db_url) as conn:
+          try:
+            cur = conn.cursor()
+
+            # Write reconciliations row (correct schema: delta_amount, recon_hash)
+            cur.execute("""
+                INSERT INTO reconciliations
+                    (id, tenant_id, case_id, envelope_id,
+                     delta_amount, currency, recon_hash, reconciled_at,
+                     reconciliation_type, expected_amount, observed_amount)
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                rec_id, tenant_id,
+                uuid.UUID(case_id) if case_id else uuid.UUID(envelope_id),
+                uuid.UUID(envelope_id),
+                delta, currency, recon_hash, now,
+                reconciliation_type, expected, actual,
+            ))
+
+            # Write outcomes row
+            _outcome_type = "CREDIT_ISSUED" if status in ("MATCHED", "PARTIAL") else "DISCREPANCY_FLAGGED"
+            _outcome_bytes = json.dumps(
+                {"reconciliation_id": str(rec_id), "outcome_type": _outcome_type, "actual": actual},
+                sort_keys=True,
+            ).encode("utf-8")
+            outcome_hash = hashlib.sha256(b"zoiko.outcome.v1:" + _outcome_bytes).digest()
+            cur.execute("""
+                INSERT INTO outcomes
+                    (id, tenant_id, case_id, recon_id,
+                     outcome_type, outcome_hash, signature, kid, recorded_at)
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid, %s, %s, %s, %s, %s)
+            """, (
+                outcome_id, tenant_id,
+                uuid.UUID(case_id) if case_id else uuid.UUID(envelope_id),
+                rec_id,
+                _outcome_type,
+                outcome_hash,
+                bytes(32),          # placeholder signature
+                "dev-placeholder",  # kid
+                now,
+            ))
+
+            # T-011: write variance_record when amount doesn't fully match
+            if status in ("PARTIAL", "DISCREPANCY"):
+                # Look up most recent proposal for the case
+                prop_row = None
+                if case_id:
+                    cur2 = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                    cur2.execute(
+                        "SELECT id FROM decision_proposals "
+                        "WHERE case_id=%s::uuid AND tenant_id=%s::uuid "
+                        "ORDER BY created_at DESC LIMIT 1",
+                        (uuid.UUID(case_id), tenant_id),
+                    )
+                    prop_row = cur2.fetchone()
+                cur.execute("""
+                    INSERT INTO variance_records
+                        (id, tenant_id, case_id, proposal_id,
+                         variance_type, expected_value, actual_value, delta, status)
+                    VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s, %s, %s)
+                """, (
+                    uuid.uuid4(), tenant_id,
+                    uuid.UUID(case_id) if case_id else None,
+                    prop_row["id"] if prop_row else None,
+                    "AMOUNT_MISMATCH",
+                    expected, actual, delta, "OPEN",
+                ))
+
+            # Mark envelope confirmed
+            cur.execute("""
+                UPDATE execution_envelopes SET status='CONFIRMED' WHERE id=%s::uuid
+            """, (uuid.UUID(envelope_id),))
+
+            # Advance case FSM
+            if case_id:
+                cur.execute("""
+                    UPDATE cases SET state='OUTCOME_RECORDED'
+                    WHERE id=%s::uuid AND tenant_id=%s::uuid AND state='DISPATCHED'
+                """, (uuid.UUID(case_id), tenant_id))
+                cur.execute("""
+                    INSERT INTO case_events
+                        (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
+                    VALUES (%s, %s::uuid, %s::uuid, 'RECONCILIATION_COMPLETE',
+                            'DISPATCHED', 'OUTCOME_RECORDED', %s, %s::jsonb, %s)
+                """, (
+                    uuid.uuid4(), tenant_id, uuid.UUID(case_id),
+                    actor_sub,
+                    json.dumps({"reconciliation_id": str(rec_id), "status": status, "delta": delta}),
+                    now,
+                ))
+
+            # Outbox event
+            cur.execute("""
+                INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
+                VALUES (%s, %s::uuid, %s, %s, %s::jsonb, %s)
+            """, (
+                uuid.uuid4(), tenant_id,
+                "zoiko.reconciliation.updated",
+                case_id or envelope_id,
+                json.dumps({
+                    "reconciliation_id": str(rec_id),
+                    "envelope_id":       envelope_id,
+                    "status":            status,
+                    "delta":             delta,
+                }),
+                now,
+            ))
+
+            conn.commit()
+          finally:
+            pass  # pool returns connection via context manager
+
+        # Kafka publish
+        try:
+            from kafka.producer import ZoikoProducer, KafkaMessage
+            ZoikoProducer(self._broker).publish(KafkaMessage(
+                topic     = "zoiko.reconciliation.updated",
+                key       = case_id or envelope_id,
+                payload   = {"reconciliation_id": str(rec_id), "status": status},
+                tenant_id = tenant_id,
+            ))
+        except Exception:
+            pass
+
+        return ReconciliationResult(
+            reconciliation_id = str(rec_id),
+            envelope_id       = envelope_id,
+            case_id           = case_id,
+            tenant_id         = tenant_id,
+            expected_amount   = expected,
+            actual_amount     = actual,
+            currency          = currency,
+            status            = status,
+            delta             = delta,
+            reconciled_at     = now,
+            outcome_id        = str(outcome_id),
+        )
+
+    def _get_actual_amount(self, envelope_id: str, expected: float) -> float:
+        """Look up connector response. Falls back to expected (dev: always match)."""
+        try:
+            row = _db.q1(
+                db_url=self._db_url,
+                sql="SELECT response_body FROM connector_responses WHERE envelope_id=%s::uuid LIMIT 1",
+                params=(envelope_id,),
+            )
+            if row and row.get("response_body") and row["response_body"].get("settled_amount") is not None:
+                return float(row["response_body"]["settled_amount"])
+        except Exception:
+            pass
+        return expected  # dev fallback — perfect match

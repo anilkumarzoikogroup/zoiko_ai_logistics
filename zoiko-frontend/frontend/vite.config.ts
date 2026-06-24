@@ -9,14 +9,12 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Vite matches proxy contexts in object-key order using plain `url.startsWith(context)`
+    // and stops at the first hit (see doesProxyContextMatchUrl in vite/dist/node — it's a
+    // for-loop with an early return, not longest-prefix-match). That means longer/more
+    // specific prefixes MUST be listed before their shorter stems, or they're unreachable
+    // dead code (e.g. "/api3" would otherwise always be caught by "/api" first).
     proxy: {
-      "/api": {
-        target: "http://localhost:8000",
-        changeOrigin: true,
-        rewrite: (p) => p.replace(/^\/api/, ""),
-        proxyTimeout: 90000,  // 90s — covers the ~22s cloud-DB pipeline
-        timeout: 90000,
-      },
       "/api3": {
         target: "http://localhost:8002",
         changeOrigin: true,
@@ -26,6 +24,34 @@ export default defineConfig({
         target: "http://localhost:8001",
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api4/, ""),
+      },
+      "/api": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api/, ""),
+        proxyTimeout: 90000,  // 90s — covers the ~22s cloud-DB pipeline
+        timeout: 90000,
+      },
+      // SC-002 (carrier claim) spine — independent gateway/execution/governance
+      // processes on their own ports, per backend/slices/sc-002-carrier-claim/spine/.
+      // Longer prefixes ("/claimapi3", "/claimapi4") must precede the shorter
+      // "/claimapi" stem for the same reason as above.
+      "/claimapi3": {
+        target: "http://localhost:8012",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/claimapi3/, ""),
+      },
+      "/claimapi4": {
+        target: "http://localhost:8011",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/claimapi4/, ""),
+      },
+      "/claimapi": {
+        target: "http://localhost:8010",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/claimapi/, ""),
+        proxyTimeout: 90000,
+        timeout: 90000,
       },
     },
   },
