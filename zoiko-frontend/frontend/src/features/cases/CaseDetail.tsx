@@ -786,6 +786,45 @@ export default function CaseDetail() {
         </div>
       )}
 
+      {/* ── SC-002 Carrier Claim Link ─────────────────────────────────────── */}
+      {(() => {
+        const autoEvt = (eventsQ.data ?? []).find(
+          (e: any) => e.reason === "SC002_CLAIM_AUTO_CREATED"
+        );
+        if (!autoEvt) return null;
+        const payload = typeof autoEvt.payload === "string"
+          ? JSON.parse(autoEvt.payload)
+          : (autoEvt.payload ?? {});
+        const sc002Id = payload.sc002_case_id;
+        if (!sc002Id) return null;
+        return (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 shadow-sm flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                <Zap className="h-4 w-4 text-emerald-600" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-emerald-800">Carrier Claim Auto-Created</p>
+                <p className="text-[11px] text-emerald-600 mt-0.5">
+                  SC-002 claim opened automatically after 8-gate execution
+                  {payload.carrier_id ? ` · ${payload.carrier_id}` : ""}
+                  {payload.amount ? ` · ${payload.currency ?? ""} ${Number(payload.amount).toFixed(2)}` : ""}
+                </p>
+                <p className="text-[10px] font-mono text-emerald-500 mt-0.5">
+                  ref: {payload.claim_reference ?? sc002Id.slice(0, 8).toUpperCase()}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => nav(`/claims/${sc002Id}`)}
+              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
+            >
+              View Claim <ArrowRight className="h-3 w-3" />
+            </button>
+          </div>
+        );
+      })()}
+
       {/* ── Timeline ────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
         <div className="flex items-center justify-between mb-4">
@@ -804,28 +843,60 @@ export default function CaseDetail() {
           <ol className="relative border-l-2 border-slate-200 ml-3 space-y-0">
             {(eventsQ.data ?? []).map((e, i) => (
               <li key={e.id} className="pl-5 pb-5 last:pb-0 relative">
-                <div className={cn(
-                  "absolute -left-[9px] top-0.5 h-4 w-4 rounded-full border-2 border-white flex items-center justify-center",
-                  i === 0 ? "bg-blue-600" : "bg-emerald-500"
-                )}>
-                  {i === 0
-                    ? <span className="h-1 w-1 rounded-full bg-white" />
-                    : <CheckCircle2 className="h-2.5 w-2.5 text-white" />
-                  }
-                </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] text-slate-400">{formatDate(e.created_at)}</span>
-                  {e.from_state && (
+                {(() => {
+                  const isAutoLink = (e as any).reason === "SC002_CLAIM_AUTO_CREATED";
+                  const payload = isAutoLink
+                    ? (typeof (e as any).payload === "string"
+                        ? JSON.parse((e as any).payload)
+                        : ((e as any).payload ?? {}))
+                    : null;
+                  return (
                     <>
-                      <StateBadge state={e.from_state} />
-                      <ChevronRight className="h-3 w-3 text-slate-300" />
+                      <div className={cn(
+                        "absolute -left-[9px] top-0.5 h-4 w-4 rounded-full border-2 border-white flex items-center justify-center",
+                        isAutoLink ? "bg-emerald-600" : i === 0 ? "bg-blue-600" : "bg-emerald-500"
+                      )}>
+                        {isAutoLink
+                          ? <Zap className="h-2.5 w-2.5 text-white" />
+                          : i === 0
+                            ? <span className="h-1 w-1 rounded-full bg-white" />
+                            : <CheckCircle2 className="h-2.5 w-2.5 text-white" />
+                        }
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] text-slate-400">{formatDate(e.created_at)}</span>
+                        {e.from_state && (
+                          <>
+                            <StateBadge state={e.from_state} />
+                            <ChevronRight className="h-3 w-3 text-slate-300" />
+                          </>
+                        )}
+                        {e.to_state && <StateBadge state={e.to_state} />}
+                        {isAutoLink && (
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                            SC-002 claim auto-created
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        by <span className="font-semibold text-slate-600">{e.actor}</span>
+                        {isAutoLink && payload?.sc002_case_id ? (
+                          <>
+                            {" · "}
+                            <button
+                              onClick={() => nav(`/claims/${payload.sc002_case_id}`)}
+                              className="text-emerald-600 underline font-semibold hover:text-emerald-800"
+                            >
+                              Open SC-002 claim →
+                            </button>
+                          </>
+                        ) : (
+                          <> · {(e.reason ?? "").replace(/_/g, " ")}</>
+                        )}
+                      </p>
                     </>
-                  )}
-                  <StateBadge state={e.to_state} />
-                </div>
-                <p className="text-[10px] text-slate-400 mt-1">
-                  by <span className="font-semibold text-slate-600">{e.actor}</span> · {e.reason.replace(/_/g, " ")}
-                </p>
+                  );
+                })()}
               </li>
             ))}
           </ol>

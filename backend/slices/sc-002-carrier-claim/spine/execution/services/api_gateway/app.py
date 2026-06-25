@@ -72,6 +72,13 @@ from services.api_gateway.models_proof import (
 from services.api_gateway.models_exceptions import (
     RecoveryExceptionResponse,
 )
+from pydantic import BaseModel as _BM
+
+class PaymentConfirmRequest(_BM):
+    recovery_instrument_id: str
+    payment_ref: str           # carrier's bank / payment reference number
+    payment_amount: float | None = None   # for audit; actual amount already on instrument
+    payment_currency: str | None = None
 
 app = FastAPI(title="Zoiko Phase 4 — Execution Gateway", version="4.0.0")
 
@@ -116,20 +123,32 @@ _recovery_exceptions = RecoveryExceptionsHandler(DB_URL, _BROKER, TENANT_SLUG)
 
 
 # ── Auth dependency ───────────────────────────────────────────────────────────
+# Mirrors gateway/services/api_gateway/auth.py: auto_error=False so cookie auth
+# works alongside Bearer — cookie-only sessions (login form, no VITE_DEV_JWT)
+# must reach this gateway the same way they reach the SC-002 gateway on port 8010.
 
 from middleware.oidc.token_verifier import TokenVerifier as _TV, TokenExpiredError as _TExpired, TokenInvalidError as _TInvalid
 from fastapi.security import HTTPBearer as _Bearer, HTTPAuthorizationCredentials as _Creds
-from fastapi import Security as _Security
+from fastapi import Security as _Security, Request as _Request
+from typing import Optional as _Optional
 
 _tv       = _TV(dev_secret=os.getenv("ZOIKO_DEV_SECRET", "").encode(), issuer=os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com"))
-_security = _Bearer(auto_error=True)
+_security = _Bearer(auto_error=False)   # False = fall back to cookie when no Bearer
 
 def _auth_dep(
+    request: _Request,
     x_tenant_id: str  = Header(..., alias="X-Tenant-ID"),
-    credentials: _Creds = _Security(_security),
+    credentials: _Optional[_Creds] = _Security(_security),
 ) -> ZoikoClaims:
+    # Bearer header takes priority; fall back to HttpOnly cookie
+    if credentials:
+        token = credentials.credentials
+    else:
+        token = request.cookies.get("zoiko_jwt")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        claims = _tv.verify(credentials.credentials)
+        claims = _tv.verify(token)
     except _TExpired:
         raise HTTPException(status_code=401, detail="Token expired. Please log in again.")
     except _TInvalid as e:
@@ -959,6 +978,54 @@ def list_recovery_exceptions(
         )
         for r in results
     ]
+
+
+# ── Payment confirmation webhook ─────────────────────────────────────────────
+
+@v1_router.post(
+    "/recovery/payment-confirm",
+    response_model=RecoveryInstrumentResponse,
+    status_code=200,
+    tags=["recovery"],
+)
+def confirm_payment(
+    body: PaymentConfirmRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(_auth_dep),
+):
+    """
+    Record carrier payment confirmation — marks a recovery instrument as
+    payment_confirmed=true and fires a notification email to all managers.
+
+    Call this endpoint when:
+      - The carrier's bank transfer arrives and is confirmed.
+      - A credit memo is validated by AP as applied.
+      - A refund is confirmed as received.
+
+    After confirming, generate a Recovery Proof (POST /recovery/proofs) to
+    produce the final ACR-ready audit record.
+    """
+    try:
+        result = _recovery_instrument.confirm_payment(
+            recovery_instrument_id = body.recovery_instrument_id,
+            tenant_id              = str(claims.tenant_id),
+            payment_ref            = body.payment_ref,
+            confirmed_by           = claims.sub,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return RecoveryInstrumentResponse(
+        recovery_instrument_id = result.recovery_instrument_id,
+        tenant_id               = result.tenant_id,
+        instrument_type         = result.instrument_type,
+        instrument_amount        = result.instrument_amount,
+        currency                 = result.currency,
+        status                   = result.status,
+        related_case_id          = result.related_case_id,
+        created_by               = result.created_by,
+        created_at               = result.created_at.isoformat(),
+    )
 
 
 # ── Route registration ────────────────────────────────────────────────────────

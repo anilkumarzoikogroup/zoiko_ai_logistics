@@ -65,11 +65,24 @@ class AgentRuntime:
         )
         tools_used.append("read_evidence_bundle")
         evidence_refs = [item["id"] for item in bundle_data.get("items", [])]
+        item_count = bundle_data["item_count"]
+
+        # Require at least 1 evidence item for manually submitted claims.
+        # Auto-detected overcharges from SC-001 carry invoice-level proof implicitly,
+        # but a human-entered carrier claim with zero attachments cannot be scored.
+        if item_count == 0:
+            raise ValueError(
+                "Evidence gate: at least 1 supporting document is required "
+                "before AI reasoning can run. Upload proof of loss, a bill of lading, "
+                "or carrier communication via POST /v1/cases/{case_id}/evidence/upload, "
+                "then seal the bundle before retrying."
+            )
+
         steps.append({
             "step": 1, "tool": "read_evidence_bundle",
             "input":  {"bundle_id": bundle_id},
-            "output": {"item_count": bundle_data["item_count"]},
-            "finding": f"{bundle_data['item_count']} evidence item(s) verified in bundle",
+            "output": {"item_count": item_count},
+            "finding": f"{item_count} evidence item(s) verified in bundle",
         })
 
         # Step 2 — read contract rates

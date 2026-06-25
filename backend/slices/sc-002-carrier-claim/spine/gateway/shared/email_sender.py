@@ -175,6 +175,237 @@ def send_dispute_letter(
     log.info("Dispute letter sent to %s for case %s (provider=%s)", to_email, case_id, EMAIL_PROVIDER)
 
 
+def send_recovery_executed(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    amount: float, currency: str,
+    envelope_id: str,
+) -> None:
+    """Notify managers when a claim settlement has been dispatched through all 8 gates."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"Claim Settlement Dispatched — {sym}{amount:,.2f} {currency} | Case {case_id[:8].upper()}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"A claim settlement of {sym}{amount:,.2f} {currency} has been dispatched for carrier {carrier}.\n\n"
+        f"  Carrier:     {carrier}\n"
+        f"  Amount:      {sym}{amount:,.2f} {currency}\n"
+        f"  Envelope ID: {envelope_id}\n"
+        f"  Case ID:     {case_id}\n\n"
+        f"All 8 execution gates passed. An expected recovery record has been automatically created.\n"
+        f"You will receive a notification once the carrier confirms payment.\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">Claim Settlement Dispatched</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#059669;margin:0 0 12px">✓ Claim Settlement Dispatched</h3>
+        <p style="color:#475569">Hello {to_name}, a claim settlement has been dispatched for <strong>{carrier}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Settlement Amount</td><td style="font-weight:800;color:#059669;font-size:16px">{sym}{amount:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Envelope ID</td><td style="font-family:monospace;font-size:11px">{envelope_id}</td></tr>
+          </table>
+        </div>
+        <a href="{APP_URL}/claims/{case_id}" style="display:inline-block;background:#059669;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">View Claim</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Recovery executed email sent to %s for case %s amount=%s %s", to_email, case_id, amount, currency)
+
+
+def send_payment_confirmed(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    amount: float, currency: str,
+    payment_ref: str,
+) -> None:
+    """Notify finance manager when carrier has confirmed actual payment receipt."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"Payment Confirmed — {sym}{amount:,.2f} {currency} Received | Case {case_id[:8].upper()}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"Payment of {sym}{amount:,.2f} {currency} from {carrier} has been confirmed.\n\n"
+        f"  Carrier:       {carrier}\n"
+        f"  Amount:        {sym}{amount:,.2f} {currency}\n"
+        f"  Payment Ref:   {payment_ref}\n"
+        f"  Case ID:       {case_id}\n\n"
+        f"Recovery is complete. Generate the final Recovery Proof from the case page.\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">Payment Confirmed</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#059669;margin:0 0 12px">💰 Payment Confirmed — Recovery Complete</h3>
+        <p style="color:#475569">Hello {to_name}, payment has been confirmed from <strong>{carrier}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Amount Received</td><td style="font-weight:800;color:#059669;font-size:18px">{sym}{amount:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Payment Reference</td><td style="font-family:monospace">{payment_ref}</td></tr>
+          </table>
+        </div>
+        <a href="{APP_URL}/claims/{case_id}" style="display:inline-block;background:#059669;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">Generate Recovery Proof</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Payment confirmed email sent to %s for case %s ref=%s", to_email, case_id, payment_ref)
+
+
+def send_claim_submitted(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    claim_type: str, amount: float, currency: str,
+    evidence_count: int,
+) -> None:
+    """Notify reviewer when a manual claim is submitted."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"New Carrier Claim — {carrier} | {sym}{amount:,.0f} {currency}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"A new carrier claim has been submitted and requires review.\n\n"
+        f"  Carrier:        {carrier}\n"
+        f"  Claim Type:     {claim_type}\n"
+        f"  Claimed Amount: {sym}{amount:,.2f} {currency}\n"
+        f"  Evidence Items: {evidence_count}\n"
+        f"  Case ID:        {case_id}\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    ev_style = "color:#059669" if evidence_count > 0 else "color:#dc2626"
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">New Carrier Claim</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#1e293b;margin:0 0 12px">New Carrier Claim Requires Review</h3>
+        <p style="color:#475569">Hello {to_name}, a new carrier claim has been submitted.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Claim Type</td><td style="font-weight:600">{claim_type}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Claimed Amount</td><td style="font-weight:800;color:#1e293b;font-size:16px">{sym}{amount:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Evidence Items</td><td style="font-weight:700;{ev_style}">{evidence_count} item(s)</td></tr>
+          </table>
+        </div>
+        <a href="{APP_URL}/claims/{case_id}" style="display:inline-block;background:#2563eb;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">Review Claim</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Claim submitted email sent to %s for case %s", to_email, case_id)
+
+
+def send_carrier_negotiation_update(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    action: str, new_status: str,
+    approved_amount: float | None, currency: str,
+    round_num: int, note: str = "",
+) -> None:
+    """Notify internal team when carrier negotiation status changes (counter, accept, reject)."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    action_labels = {
+        "COUNTER":          "Counter-offered",
+        "ACCEPT":           "Accepted in Full",
+        "PARTIALLY_ACCEPT": "Partially Accepted",
+        "REJECT":           "Rejected",
+    }
+    action_label = action_labels.get(action, action.replace("_", " ").title())
+    subject = f"Carrier Negotiation — Round {round_num} | {carrier} | Case {case_id[:8].upper()}"
+
+    amount_line = f"\n  Agreed Amount:   {sym}{approved_amount:,.2f} {currency}" if approved_amount is not None and action != "REJECT" else ""
+    note_line   = f"\n  Note:            {note}" if note else ""
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"Carrier negotiation round {round_num} has been recorded.\n\n"
+        f"  Carrier:         {carrier}\n"
+        f"  Action:          {action_label}\n"
+        f"  New Status:      {new_status.replace('_', ' ').title()}\n"
+        f"  Round:           {round_num}"
+        f"{amount_line}"
+        f"{note_line}\n\n"
+        f"Case ID: {case_id}\n\n— Zoiko AI Logistics"
+    )
+
+    status_colors = {
+        "COUNTERED":          "#6366f1",
+        "ACCEPTED":           "#059669",
+        "PARTIALLY_ACCEPTED": "#d97706",
+        "REJECTED":           "#dc2626",
+    }
+    color = status_colors.get(new_status, "#475569")
+    amount_row = (
+        f'<tr><td style="color:#64748b;padding:4px 0;width:140px">Agreed Amount</td>'
+        f'<td style="font-weight:800;color:{color};font-size:16px">{sym}{approved_amount:,.2f} {currency}</td></tr>'
+    ) if approved_amount is not None and action != "REJECT" else ""
+    note_html = (
+        f'<p style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;'
+        f'padding:10px 12px;color:#475569;font-size:12px;font-style:italic;margin:12px 0">"{note}"</p>'
+    ) if note else ""
+
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">Carrier Negotiation Update</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#1e293b;margin:0 0 12px">Round {round_num} — <span style="color:{color}">{action_label}</span></h3>
+        <p style="color:#475569">Hello {to_name}, carrier <strong>{carrier}</strong> {action_label.lower()} on round {round_num}.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Status</td>
+              <td><span style="font-weight:800;color:{color}">{new_status.replace("_", " ").title()}</span></td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Round</td><td style="font-weight:600">{round_num}</td></tr>
+            {amount_row}
+          </table>
+        </div>
+        {note_html}
+        <a href="{APP_URL}/claims/{case_id}" style="display:inline-block;background:#2563eb;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">View Claim</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Carrier negotiation email sent to %s case=%s round=%d action=%s", to_email, case_id, round_num, action)
+
+
+def _log_notification(db_url: str, tenant_id: str, event_type: str,
+                      recipient_email: str, recipient_role: str,
+                      case_id: str | None, subject: str,
+                      amount: float | None, currency: str | None,
+                      status: str = "SENT", error: str | None = None) -> None:
+    """Write to email_notification_log — best effort, never raises."""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url)
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO email_notification_log
+                    (tenant_id, event_type, recipient_email, recipient_role,
+                     case_id, subject, amount, currency, status, error_detail, sent_at)
+                VALUES (%s::uuid, %s, %s, %s,
+                        %s::uuid, %s, %s, %s, %s, %s, NOW())
+            """, (
+                tenant_id, event_type, recipient_email, recipient_role,
+                case_id, subject, amount, currency, status, error,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+
 def _send(to: str, subject: str, body: str, link: str) -> None:
     if EMAIL_PROVIDER == "sendgrid":
         _send_sendgrid(to, subject, body)

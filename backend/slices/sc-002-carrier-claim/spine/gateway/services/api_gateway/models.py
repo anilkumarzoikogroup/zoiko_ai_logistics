@@ -16,6 +16,10 @@ class SubmitClaimRequest(BaseModel):
     claim_reference:         str   = ""   # Optional — blank → server generates UI-CLAIM-XXXXXXXX
     description:             str   = ""
     related_invoice_number:  str   = ""
+    awb_number:              str   = ""   # Air Waybill / tracking number — required for carrier identification
+    incident_date:           str   = ""   # ISO date when damage/loss/delay was discovered (YYYY-MM-DD)
+    origin_location:         str   = ""   # Shipment origin (city, port, or address)
+    destination_location:    str   = ""   # Shipment destination
     lines: list[ClaimLineInput] = []   # Optional multi-line breakdown — when present, claimed_amount is derived as their sum
 
 

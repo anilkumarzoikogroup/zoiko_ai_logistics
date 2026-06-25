@@ -41,6 +41,10 @@ class ClaimInput:
     currency:         str
     description:      str   = ""
     related_invoice_number: str = ""
+    awb_number:             str = ""   # Air Waybill / tracking number
+    incident_date:          str = ""   # ISO date YYYY-MM-DD
+    origin_location:        str = ""
+    destination_location:   str = ""
 
 
 @dataclass

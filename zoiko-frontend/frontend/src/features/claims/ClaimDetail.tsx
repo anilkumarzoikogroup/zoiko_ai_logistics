@@ -7,10 +7,36 @@ import {
   ArrowLeft, CheckCircle2, Clock, FileText, Brain, Lock,
   AlertTriangle, ChevronRight, Zap, Users, RefreshCw, GitBranch,
   ShieldCheck, Download, ThumbsUp, ShieldAlert, XCircle, MessageSquareWarning,
+  DollarSign, TrendingUp, BadgeCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/useToast";
 import { useAppSelector } from "@/store";
 import type { ClaimState } from "@/types";
+
+const RECOVERY_STATUS_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
+  EXPECTED:                { label: "Awaiting Instrument",  cls: "bg-amber-100 text-amber-700",    dot: "bg-amber-400"   },
+  AWAITING_INSTRUMENT:     { label: "Awaiting Instrument",  cls: "bg-amber-100 text-amber-700",    dot: "bg-amber-400"   },
+  MATCHED:                 { label: "Matched",              cls: "bg-blue-100 text-blue-700",      dot: "bg-blue-500"    },
+  INSTRUMENT_RECEIVED:     { label: "Instrument Received",  cls: "bg-blue-100 text-blue-700",      dot: "bg-blue-500"    },
+  PAYMENT_CONFIRMED:       { label: "Payment Confirmed",    cls: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500" },
+  RECOVERED_FULL:          { label: "Fully Recovered",      cls: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500" },
+  RECOVERED_PARTIAL:       { label: "Partial Recovery",     cls: "bg-amber-100 text-amber-700",    dot: "bg-amber-400"   },
+  OVER_RECOVERED:          { label: "Over-Recovered",       cls: "bg-purple-100 text-purple-700",  dot: "bg-purple-400"  },
+  MISMATCHED:              { label: "Mismatched",           cls: "bg-red-100 text-red-700",        dot: "bg-red-400"     },
+  REJECTED_BY_COUNTERPARTY:{ label: "Carrier Rejected",     cls: "bg-red-100 text-red-700",        dot: "bg-red-400"     },
+  WRITTEN_OFF:             { label: "Written Off",          cls: "bg-slate-100 text-slate-500",    dot: "bg-slate-400"   },
+  LEDGER_PENDING:          { label: "Ledger Pending",       cls: "bg-blue-100 text-blue-700",      dot: "bg-blue-400"    },
+};
+
+function RecoveryBadge({ status }: { status: string }) {
+  const cfg = RECOVERY_STATUS_STYLE[status] ?? { label: status, cls: "bg-slate-100 text-slate-600", dot: "bg-slate-400" };
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full", cfg.cls)}>
+      <span className={cn("h-1.5 w-1.5 rounded-full", cfg.dot)} />
+      {cfg.label}
+    </span>
+  );
+}
 
 // SC-002 — mirrors CaseDetail.tsx's pipeline-visualization pattern, but is
 // self-contained: propose/approve/execute happen inline on this page instead
@@ -57,6 +83,27 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
+const NEG_STATUS_CFG: Record<string, { label: string; cls: string }> = {
+  OPEN:               { label: "Open",               cls: "bg-slate-100 text-slate-600"     },
+  COUNTERED:          { label: "Countered",           cls: "bg-indigo-100 text-indigo-700"   },
+  PARTIALLY_ACCEPTED: { label: "Partially Accepted",  cls: "bg-amber-100 text-amber-700"     },
+  ACCEPTED:           { label: "Accepted",            cls: "bg-emerald-100 text-emerald-700" },
+  REJECTED:           { label: "Rejected",            cls: "bg-red-100 text-red-700"         },
+};
+function NegStatusBadge({ status }: { status: string }) {
+  const cfg = NEG_STATUS_CFG[status] ?? { label: status.replace(/_/g, " "), cls: "bg-slate-100 text-slate-600" };
+  return <span className={cn("text-[10px] font-bold px-2.5 py-1 rounded-full whitespace-nowrap", cfg.cls)}>{cfg.label}</span>;
+}
+
+// Valid carrier-negotiation actions per current status (mirrors backend _NEGOTIATION_TRANSITIONS).
+const VALID_NEXT_ACTIONS: Record<string, string[]> = {
+  OPEN:               ["COUNTER", "ACCEPT", "PARTIALLY_ACCEPT", "REJECT"],
+  COUNTERED:          ["COUNTER", "ACCEPT", "PARTIALLY_ACCEPT", "REJECT"],
+  PARTIALLY_ACCEPTED: ["COUNTER", "ACCEPT", "REJECT"],
+  REJECTED:           ["COUNTER", "ACCEPT"],
+  ACCEPTED:           [], // terminal
+};
+
 function SectionCard({ title, icon: Icon, status, children }: {
   title: string; icon: React.ElementType; status: "done" | "active" | "pending"; children: React.ReactNode;
 }) {
@@ -87,6 +134,7 @@ export default function ClaimDetail() {
   const toast = useToast();
   const user  = useAppSelector(s => s.auth.user) || "User";
   const [counterAmount, setCounterAmount] = useState("");
+  const [noteText,      setNoteText]      = useState("");
 
   const cq      = useQuery({ queryKey: ["claim",        id], queryFn: () => zoikoApi.getClaim(id),       retry: 1 });
   const eventsQ = useQuery({ queryKey: ["claim-events",  id], queryFn: () => zoikoApi.getClaimEvents(id), retry: 1 });
@@ -96,6 +144,41 @@ export default function ClaimDetail() {
   const tokenQ  = useQuery({ queryKey: ["claim-token",   id], queryFn: () => zoikoApi.getClaimToken(id), retry: false });
   const acrQ    = useQuery({ queryKey: ["claim-acr",     id], queryFn: () => zoikoApi.getClaimAcr(id),        retry: false });
   const linesQ  = useQuery({ queryKey: ["claim-lines",   id], queryFn: () => zoikoApi.getClaimLines(id), retry: false });
+
+  // Recovery tracking queries — enabled only once case is dispatched
+  const recoveryEnabled = ["DISPATCHED", "OUTCOME_RECORDED", "CLOSED"].includes(cq.data?.state ?? "");
+  const expectedQ = useQuery({
+    queryKey: ["claim-expected-recoveries", id],
+    queryFn:  () => zoikoApi.listClaimExpectedRecoveries(id),
+    retry: false, enabled: recoveryEnabled,
+  });
+  const matchesQ  = useQuery({
+    queryKey: ["claim-recovery-matches", id],
+    queryFn:  () => zoikoApi.listClaimRecoveryMatches(id),
+    retry: false, enabled: recoveryEnabled,
+  });
+  const proofQ    = useQuery({
+    queryKey: ["claim-recovery-proof", id],
+    queryFn:  () => zoikoApi.getLatestClaimRecoveryProof(id),
+    retry: false, enabled: recoveryEnabled,
+  });
+  const instrQ    = useQuery({
+    queryKey: ["claim-recovery-instruments", id],
+    queryFn:  () => zoikoApi.listClaimRecoveryInstruments(id),
+    retry: false, enabled: recoveryEnabled,
+  });
+
+  const genProofMut = useMutation({
+    mutationFn: () => zoikoApi.generateClaimRecoveryProof(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["claim-recovery-proof", id] });
+      toast.success("Recovery proof generated", "ACR-ready proof created successfully");
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail;
+      toast.error("Proof failed", typeof detail === "string" ? detail : "Check that the SC-002 execution gateway is running on port 8011");
+    },
+  });
 
   const proposeMut = useMutation({
     mutationFn: () => zoikoApi.proposeClaimSettlement(id, { action: "SETTLE_CLAIM", amount: cq.data?.amount ?? 0, currency: cq.data?.currency ?? "INR" }),
@@ -108,13 +191,22 @@ export default function ClaimDetail() {
   });
 
   const negotiateMut = useMutation({
-    mutationFn: (vars: { action: "COUNTER" | "ACCEPT" | "PARTIALLY_ACCEPT" | "REJECT"; approved_amount?: number }) =>
+    mutationFn: (vars: { action: "COUNTER" | "ACCEPT" | "PARTIALLY_ACCEPT" | "REJECT"; approved_amount?: number; note?: string }) =>
       zoikoApi.negotiateClaim(id, vars),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["claim", id] });
-      toast.success("Carrier response recorded", `Status: ${res.negotiation_status.replace(/_/g, " ")}`);
+      qc.invalidateQueries({ queryKey: ["claim-events", id] });
+      setCounterAmount("");
+      setNoteText("");
+      toast.success(
+        `Round ${(res as any).round ?? ""} recorded`.trim(),
+        `Carrier status: ${res.negotiation_status.replace(/_/g, " ")}`,
+      );
     },
-    onError: () => toast.error("Update failed", "Check that the SC-002 backend is running on port 8010"),
+    onError: (err: any) => {
+      const detail = err?.response?.data?.detail;
+      toast.error("Update failed", typeof detail === "string" ? detail : "Check that the SC-002 backend is running on port 8010");
+    },
   });
 
   const decideMut = useMutation({
@@ -232,65 +324,192 @@ export default function ClaimDetail() {
         ))}
       </div>
 
-      {/* ── Carrier negotiation (independent of the governance FSM) ────────── */}
-      {!["CLOSED", "ABORTED"].includes(cs.state) && (
-        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 space-y-3">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="h-9 w-9 rounded-lg border border-indigo-200 bg-indigo-100 flex items-center justify-center flex-shrink-0">
-                <MessageSquareWarning className="h-5 w-5 text-indigo-700" />
+      {/* ── Carrier Negotiation (production-level) ───────────────────────── */}
+      {!["CLOSED", "ABORTED"].includes(cs.state) && (() => {
+        const negStatus      = cs.negotiation_status || "OPEN";
+        const validActions   = VALID_NEXT_ACTIONS[negStatus] ?? VALID_NEXT_ACTIONS["OPEN"];
+        const isTerminal     = negStatus === "ACCEPTED";
+        const needsAmount    = (action: string) => action === "COUNTER" || action === "PARTIALLY_ACCEPT";
+        const amountNum      = Number(counterAmount);
+        const amountOk       = amountNum > 0 && amountNum <= cs.amount;
+        const partialAmountOk= amountNum > 0 && amountNum < cs.amount;
+
+        const negHistory = (eventsQ.data ?? []).filter(e => e.reason === "CLAIM_NEGOTIATION");
+
+        function doNegotiate(action: "COUNTER" | "ACCEPT" | "PARTIALLY_ACCEPT" | "REJECT") {
+          const approved_amount =
+            action === "ACCEPT"           ? cs.amount :
+            action === "COUNTER"          ? (amountOk ? amountNum : undefined) :
+            action === "PARTIALLY_ACCEPT" ? (partialAmountOk ? amountNum : undefined) :
+            undefined;
+          negotiateMut.mutate({ action, approved_amount, note: noteText.trim() || undefined });
+        }
+
+        return (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 space-y-4">
+
+            {/* ── Header ── */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="h-9 w-9 rounded-lg border border-indigo-200 bg-indigo-100 flex items-center justify-center flex-shrink-0">
+                  <MessageSquareWarning className="h-5 w-5 text-indigo-700" />
+                </div>
+                <div>
+                  <p className="font-bold text-sm text-indigo-700">Carrier Negotiation</p>
+                  <p className="text-xs mt-0.5 leading-relaxed text-indigo-600">
+                    Track the carrier's response separately from internal approval.
+                  </p>
+                </div>
               </div>
-              <div>
-                <p className="font-bold text-sm text-indigo-700">Carrier Negotiation</p>
-                <p className="text-xs mt-0.5 leading-relaxed text-indigo-600">
-                  Track the carrier's response separately from internal approval — counter-offer, accept in full, accept partially, or reject.
-                </p>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {negHistory.length > 0 && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-800">
+                    Round {negHistory.length}
+                  </span>
+                )}
+                <NegStatusBadge status={negStatus} />
               </div>
             </div>
-            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-indigo-100 text-indigo-700 whitespace-nowrap">
-              {(cs.negotiation_status || "SUBMITTED").replace(/_/g, " ")}
-            </span>
+
+            {/* ── Terminal state ── */}
+            {isTerminal ? (
+              <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                <div>
+                  <p className="text-xs font-bold text-emerald-700">Negotiation closed — carrier accepted in full</p>
+                  {cs.approved_amount != null && (
+                    <p className="text-[11px] text-emerald-600 mt-0.5">
+                      Agreed amount: <span className="font-bold">{formatCurrency(cs.approved_amount, cs.currency)}</span>
+                    </p>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* Note field */}
+                <textarea
+                  value={noteText}
+                  onChange={e => setNoteText(e.target.value)}
+                  placeholder="Note — carrier's stated reason, contact name, date of call…"
+                  rows={2}
+                  className="w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs resize-none focus:outline-none focus:ring-2 focus:ring-indigo-300 placeholder:text-slate-400"
+                />
+
+                {/* Amount field — only relevant for COUNTER / PARTIALLY_ACCEPT */}
+                {validActions.some(needsAmount) && (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number" min={0.01} step={0.01}
+                      placeholder="Amount"
+                      value={counterAmount}
+                      onChange={e => setCounterAmount(e.target.value)}
+                      className="w-40 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    />
+                    <span className="text-[11px] text-indigo-400">
+                      claimed: <span className="font-semibold">{formatCurrency(cs.amount, cs.currency)}</span>
+                    </span>
+                    {counterAmount && !amountOk && (
+                      <span className="text-[11px] text-red-500 font-semibold">exceeds claimed</span>
+                    )}
+                  </div>
+                )}
+
+                {/* Action buttons — only valid next-state actions shown */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {validActions.includes("COUNTER") && (
+                    <button
+                      onClick={() => doNegotiate("COUNTER")}
+                      disabled={negotiateMut.isPending || !amountOk}
+                      className="px-3 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-xs font-bold hover:bg-indigo-100 disabled:opacity-40 transition-colors"
+                    >
+                      Record Counter-Offer
+                    </button>
+                  )}
+                  {validActions.includes("ACCEPT") && (
+                    <button
+                      onClick={() => doNegotiate("ACCEPT")}
+                      disabled={negotiateMut.isPending}
+                      className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-40 transition-colors"
+                    >
+                      Carrier Accepted Full
+                    </button>
+                  )}
+                  {validActions.includes("PARTIALLY_ACCEPT") && (
+                    <button
+                      onClick={() => doNegotiate("PARTIALLY_ACCEPT")}
+                      disabled={negotiateMut.isPending || !partialAmountOk}
+                      className="px-3 py-2 rounded-lg bg-amber-100 border border-amber-300 text-amber-700 text-xs font-bold hover:bg-amber-200 disabled:opacity-40 transition-colors"
+                    >
+                      Partially Accepted
+                    </button>
+                  )}
+                  {validActions.includes("REJECT") && (
+                    <button
+                      onClick={() => doNegotiate("REJECT")}
+                      disabled={negotiateMut.isPending}
+                      className="px-3 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-xs font-bold hover:bg-red-50 disabled:opacity-40 transition-colors"
+                    >
+                      Carrier Rejected
+                    </button>
+                  )}
+                  {negotiateMut.isPending && (
+                    <span className="text-[11px] text-indigo-500 animate-pulse">Saving…</span>
+                  )}
+                </div>
+
+                {cs.approved_amount != null && (
+                  <p className="text-[11px] text-indigo-600">
+                    Last carrier-approved amount: <span className="font-bold">{formatCurrency(cs.approved_amount, cs.currency)}</span>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ── Negotiation round history ── */}
+            {negHistory.length > 0 && (
+              <div className="space-y-2 pt-3 border-t border-indigo-200">
+                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wide">
+                  Negotiation History · {negHistory.length} {negHistory.length === 1 ? "round" : "rounds"}
+                </p>
+                <ol className="space-y-2">
+                  {negHistory.map((e, i) => {
+                    const p = (typeof e.payload === "string"
+                      ? (() => { try { return JSON.parse(e.payload as string); } catch { return {}; } })()
+                      : e.payload) as Record<string, unknown> ?? {};
+                    const roundNum        = (p.round as number) ?? (i + 1);
+                    const newStatus       = (p.new_status  as string) ?? "";
+                    const approvedAmt     = p.approved_amount as number | undefined;
+                    const note            = p.note as string | undefined;
+                    return (
+                      <li key={e.id} className="flex items-start gap-3">
+                        <span className="flex-shrink-0 h-5 w-5 rounded-full bg-indigo-200 text-indigo-800 text-[9px] font-bold flex items-center justify-center mt-0.5">
+                          {roundNum}
+                        </span>
+                        <div className="flex-1 rounded-lg bg-white border border-indigo-100 px-3 py-2 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {newStatus && <NegStatusBadge status={newStatus} />}
+                            {approvedAmt != null && (
+                              <span className="text-[11px] font-bold text-slate-700">
+                                {formatCurrency(approvedAmt, cs.currency)}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400 ml-auto">{formatDate(e.created_at)}</span>
+                          </div>
+                          {note && (
+                            <p className="text-[11px] text-slate-600 italic">"{note}"</p>
+                          )}
+                          <p className="text-[10px] text-slate-400">by {e.actor}</p>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            )}
+
           </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <input
-              type="number" placeholder="Counter / approved amount"
-              value={counterAmount} onChange={e => setCounterAmount(e.target.value)}
-              className="w-48 rounded-lg border border-indigo-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-300"
-            />
-            <button
-              onClick={() => negotiateMut.mutate({ action: "COUNTER", approved_amount: Number(counterAmount) || undefined })}
-              disabled={negotiateMut.isPending || !counterAmount}
-              className="px-3 py-2 rounded-lg bg-white border border-indigo-300 text-indigo-700 text-xs font-bold hover:bg-indigo-100 disabled:opacity-50 transition-colors"
-            >
-              Record Counter-Offer
-            </button>
-            <button
-              onClick={() => negotiateMut.mutate({ action: "ACCEPT", approved_amount: cs.amount })}
-              disabled={negotiateMut.isPending}
-              className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold disabled:opacity-50 transition-colors"
-            >
-              Carrier Accepted Full
-            </button>
-            <button
-              onClick={() => negotiateMut.mutate({ action: "PARTIALLY_ACCEPT", approved_amount: Number(counterAmount) || undefined })}
-              disabled={negotiateMut.isPending || !counterAmount}
-              className="px-3 py-2 rounded-lg bg-amber-100 border border-amber-300 text-amber-700 text-xs font-bold hover:bg-amber-200 disabled:opacity-50 transition-colors"
-            >
-              Partially Accepted
-            </button>
-            <button
-              onClick={() => negotiateMut.mutate({ action: "REJECT" })}
-              disabled={negotiateMut.isPending}
-              className="px-3 py-2 rounded-lg bg-white border border-red-200 text-red-600 text-xs font-bold hover:bg-red-50 disabled:opacity-50 transition-colors"
-            >
-              Carrier Rejected
-            </button>
-          </div>
-          {cs.approved_amount != null && (
-            <p className="text-[11px] text-indigo-600">Carrier-approved amount on file: <span className="font-bold">{formatCurrency(cs.approved_amount, cs.currency)}</span></p>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* ── Inline governance actions ───────────────────────────────────── */}
       {(cs.state === "NEW" || cs.state === "EVIDENCE_PENDING" || cs.state === "FINDING_GENERATED") && (
@@ -508,6 +727,124 @@ export default function ClaimDetail() {
           </div>
         )}
       </div>
+
+      {/* ── Recovery Tracking ────────────────────────────────────────────── */}
+      {(recoveryEnabled || expectedQ.data?.length) && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="h-7 w-7 rounded-lg bg-emerald-100 flex items-center justify-center">
+                <TrendingUp className="h-3.5 w-3.5 text-emerald-600" />
+              </div>
+              <p className="text-sm font-bold text-slate-700">Recovery Tracking</p>
+            </div>
+            {proofQ.data?.recovery_status && <RecoveryBadge status={proofQ.data.recovery_status} />}
+          </div>
+
+          {/* Summary row — expected vs recovered */}
+          {proofQ.data ? (
+            (() => {
+              const proof = proofQ.data;
+              return (
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "Expected",    val: proof.total_expected,   color: "text-slate-700" },
+                { label: "Recovered",   val: proof.total_recovered,  color: "text-emerald-600 font-bold" },
+                { label: "Unrecovered", val: proof.total_unrecovered, color: proof.total_unrecovered > 0 ? "text-red-600" : "text-slate-400" },
+              ].map(k => (
+                <div key={k.label} className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5 text-center">
+                  <p className="text-[9px] text-slate-400 uppercase font-semibold">{k.label}</p>
+                  <p className={cn("text-sm font-bold mt-0.5", k.color)}>
+                    {formatCurrency(k.val, proof.currency)}
+                  </p>
+                </div>
+              ))}
+            </div>
+              );
+            })()
+          ) : expectedQ.data?.length ? (
+            <div className="grid grid-cols-2 gap-3">
+              {expectedQ.data.slice(0, 2).map(er => (
+                <div key={er.expected_recovery_id} className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2.5">
+                  <p className="text-[9px] text-slate-400 uppercase font-semibold">Expected Recovery</p>
+                  <p className="text-sm font-bold text-slate-700 mt-0.5">{formatCurrency(er.expected_amount, er.currency)}</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">{er.expected_recovery_method}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-400 flex items-center gap-1.5">
+              <Clock className="h-3.5 w-3.5" /> Expected recovery record will appear automatically after execution
+            </p>
+          )}
+
+          {/* Payment confirmation status per instrument */}
+          {instrQ.data?.length ? (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Recovery Instruments</p>
+              {instrQ.data.map(instr => (
+                <div key={instr.recovery_instrument_id}
+                  className={cn("flex items-center justify-between rounded-lg border px-3 py-2 text-xs",
+                    instr.payment_confirmed ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200")}>
+                  <div className="flex items-center gap-2">
+                    <DollarSign className={cn("h-3.5 w-3.5", instr.payment_confirmed ? "text-emerald-600" : "text-slate-400")} />
+                    <div>
+                      <span className="font-semibold text-slate-700">{instr.instrument_type.replace(/_/g, " ")}</span>
+                      <span className="text-slate-400 ml-2">{formatCurrency(instr.instrument_amount, instr.currency)}</span>
+                    </div>
+                  </div>
+                  {instr.payment_confirmed ? (
+                    <span className="flex items-center gap-1 text-emerald-700 font-bold text-[10px]">
+                      <BadgeCheck className="h-3 w-3" /> Payment Confirmed
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-amber-600 font-semibold">Awaiting Confirmation</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Matches summary */}
+          {matchesQ.data?.length ? (
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Recovery Matches</p>
+              {matchesQ.data.map(m => (
+                <div key={m.match_id} className="flex items-center justify-between rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-[10px]">
+                  <span className="font-mono text-purple-700">Tier {m.match_tier}</span>
+                  <span className="text-slate-600 font-semibold">{m.allocation_status?.replace(/_/g, " ")}</span>
+                  <span className="text-slate-700 font-bold">{formatCurrency(m.matched_amount, m.currency)}</span>
+                  <span className={cn("font-bold", (m.match_confidence ?? 0) >= 0.9 ? "text-emerald-600" : "text-amber-600")}>
+                    {((m.match_confidence ?? 0) * 100).toFixed(0)}% conf
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {/* Proof generation */}
+          <div className="flex items-center justify-between pt-1 border-t border-slate-100">
+            <div>
+              <p className="text-[11px] font-bold text-slate-600">Recovery Proof</p>
+              {proofQ.data ? (
+                <p className="text-[10px] text-slate-400">
+                  {proofQ.data.acr_ready ? "ACR-ready ✓" : "Ledger not yet closed"} · {proofQ.data.recovery_status}
+                </p>
+              ) : (
+                <p className="text-[10px] text-slate-400">Generate after all instruments are matched</p>
+              )}
+            </div>
+            <button
+              onClick={() => genProofMut.mutate()}
+              disabled={genProofMut.isPending || !recoveryEnabled}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-lg text-xs font-bold transition-colors"
+            >
+              <TrendingUp className="h-3 w-3" />
+              {genProofMut.isPending ? "Generating…" : proofQ.data ? "Refresh Proof" : "Generate Proof"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Timeline ────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">

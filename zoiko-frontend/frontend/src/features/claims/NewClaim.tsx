@@ -18,7 +18,7 @@ const CARRIERS = [
   "UPS India", "UPS", "V Express", "Gati", "DHL", "Aramex",
   "Maersk", "MSC", "CMA CGM", "Other",
 ];
-const CLAIM_TYPES = ["DAMAGE", "LOSS", "DELAY", "SHORTAGE", "MISDELIVERY", "OTHER"];
+const CLAIM_TYPES = ["DAMAGE", "LOSS", "DELAY", "SHORTAGE", "MISDELIVERY", "OVERCHARGE", "OTHER"];
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AED", "SGD", "AUD", "JPY", "CNY", "SAR"];
 
 interface FormState {
@@ -28,6 +28,10 @@ interface FormState {
   currency: string;
   claim_reference: string;
   related_invoice_number: string;
+  awb_number: string;
+  incident_date: string;
+  origin_location: string;
+  destination_location: string;
   description: string;
 }
 
@@ -62,7 +66,9 @@ export default function NewClaim() {
 
   const [form, setForm] = useState<FormState>({
     carrier: "", claim_type: "DAMAGE", claimed_amount: "", currency: "INR",
-    claim_reference: "", related_invoice_number: "", description: "",
+    claim_reference: "", related_invoice_number: "",
+    awb_number: "", incident_date: "", origin_location: "", destination_location: "",
+    description: "",
   });
   const [useLines, setUseLines] = useState(false);
   const [lines, setLines] = useState<LineItem[]>([{ description: "", claimed_amount: "" }]);
@@ -77,6 +83,10 @@ export default function NewClaim() {
       currency:                form.currency,
       claim_reference:         form.claim_reference,
       related_invoice_number:  form.related_invoice_number,
+      awb_number:              form.awb_number,
+      incident_date:           form.incident_date,
+      origin_location:         form.origin_location,
+      destination_location:    form.destination_location,
       description:             form.description,
       lines: useLines
         ? lines.filter(l => l.claimed_amount).map(l => ({ description: l.description, claimed_amount: Number(l.claimed_amount) }))
@@ -95,7 +105,7 @@ export default function NewClaim() {
       submitting.current = false;
       if (axios.isAxiosError(err)) {
         if (!err.response) {
-          toast.error("Request timed out", "The pipeline takes ~10-15s. Check the backend is running on port 8000, then try again.");
+          toast.error("Request timed out", "The pipeline takes ~10-15s. Check the SC-002 backend is running on port 8010, then try again.");
         } else if (err.response.status === 401) {
           toast.error("Session expired", "You have been logged out. Please sign in again.");
         } else {
@@ -103,7 +113,7 @@ export default function NewClaim() {
           toast.error("Submission failed", typeof detail === "string" ? detail : JSON.stringify(detail));
         }
       } else {
-        toast.error("Backend unreachable", "Lost connection to the server mid-request. Restart the backend on port 8000 and try again.");
+        toast.error("Backend unreachable", "Lost connection to the server mid-request. Restart the SC-002 backend on port 8010 and try again.");
       }
     },
   });
@@ -158,6 +168,47 @@ export default function NewClaim() {
               </div>
             </div>
 
+            <div className="space-y-1.5">
+              <Label htmlFor="awb_number">AWB / Tracking Number</Label>
+              <Input id="awb_number" type="text" placeholder="e.g. 12345678901 or BD-MUM-2025-001"
+                value={form.awb_number} onChange={e => setForm(f => ({ ...f, awb_number: e.target.value }))} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="incident_date">Incident / Discovery Date</Label>
+                <Input id="incident_date" type="date"
+                  value={form.incident_date} onChange={e => setForm(f => ({ ...f, incident_date: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="related_invoice_number">
+                  Related Invoice No.
+                  <span className="ml-1 text-[10px] font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Input id="related_invoice_number" type="text" placeholder="e.g. INV-2025-001"
+                  value={form.related_invoice_number} onChange={e => setForm(f => ({ ...f, related_invoice_number: e.target.value }))} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="origin_location">
+                  Origin
+                  <span className="ml-1 text-[10px] font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Input id="origin_location" type="text" placeholder="e.g. Mumbai"
+                  value={form.origin_location} onChange={e => setForm(f => ({ ...f, origin_location: e.target.value }))} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="destination_location">
+                  Destination
+                  <span className="ml-1 text-[10px] font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Input id="destination_location" type="text" placeholder="e.g. Surat"
+                  value={form.destination_location} onChange={e => setForm(f => ({ ...f, destination_location: e.target.value }))} />
+              </div>
+            </div>
+
             <div className="flex items-center justify-between">
               <Label className="!mb-0">{useLines ? "Line Items" : "Claimed Amount"}</Label>
               <button
@@ -208,31 +259,31 @@ export default function NewClaim() {
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
+                  <Label htmlFor="claimed_amount">Amount</Label>
                   <Input id="claimed_amount" type="number" placeholder="e.g. 5000"
                     value={form.claimed_amount} onChange={e => setForm(f => ({ ...f, claimed_amount: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="currency">Currency</Label>
+                  <Combobox id="currency" value={form.currency}
+                    onChange={v => setForm(f => ({ ...f, currency: v.toUpperCase() }))}
+                    placeholder="INR, USD, EUR…" suggestions={CURRENCIES} />
                 </div>
               </div>
             )}
 
-            <div className="space-y-1.5">
-              <Label htmlFor="currency">Currency</Label>
-              <Combobox id="currency" value={form.currency}
-                onChange={v => setForm(f => ({ ...f, currency: v.toUpperCase() }))}
-                placeholder="INR, USD, EUR…" suggestions={CURRENCIES} />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="related_invoice_number">
-                Related Invoice Number
-                <span className="ml-1 text-[10px] font-normal text-muted-foreground">(optional)</span>
-              </Label>
-              <Input id="related_invoice_number" type="text" placeholder="e.g. INV-2025-001"
-                value={form.related_invoice_number} onChange={e => setForm(f => ({ ...f, related_invoice_number: e.target.value }))} />
-            </div>
+            {useLines && (
+              <div className="space-y-1.5">
+                <Label htmlFor="currency">Currency</Label>
+                <Combobox id="currency" value={form.currency}
+                  onChange={v => setForm(f => ({ ...f, currency: v.toUpperCase() }))}
+                  placeholder="INR, USD, EUR…" suggestions={CURRENCIES} />
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <Label htmlFor="description">Description</Label>
-              <Textarea id="description" placeholder="Describe the damage, loss, or delay…" rows={3}
+              <Textarea id="description" placeholder="Describe the damage, loss, or delay in detail…" rows={3}
                 value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
             </div>
 
@@ -258,7 +309,7 @@ export default function NewClaim() {
                   ? "Session expired — please log in again."
                   : axios.isAxiosError(m.error) && m.error.response
                   ? `Submission failed — ${(m.error.response.data as any)?.detail || "check the backend terminal for details."}`
-                  : "Backend unreachable — restart the backend on port 8000 and try again."}
+                  : "Backend unreachable — restart the SC-002 backend on port 8010 and try again."}
               </p>
             )}
           </form>

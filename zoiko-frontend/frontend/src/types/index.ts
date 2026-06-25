@@ -122,6 +122,7 @@ export interface CaseEvent {
   actor: string;
   reason: string;
   created_at: string;
+  payload?: Record<string, unknown> | string | null;
 }
 
 export interface EvidenceItem {
@@ -264,6 +265,9 @@ export interface RecoveryInstrument {
   related_case_id?: string | null;
   created_by: string;
   created_at: string;
+  payment_confirmed?: boolean;
+  payment_confirmed_at?: string | null;
+  payment_confirmed_ref?: string | null;
 }
 
 export interface RecoveryMatch {

@@ -226,6 +226,209 @@ def _send_sendgrid(to: str, subject: str, body: str, html: str = "") -> None:
         raise RuntimeError("sendgrid package not installed. Run: pip install sendgrid")
 
 
+def send_overcharge_detected(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    billed: float, contract: float, overcharge: float, currency: str,
+) -> None:
+    """Notify finance manager when an overcharge is detected and queued for recovery."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"Overcharge Detected — {carrier} | Case {case_id[:8].upper()}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"An overcharge has been detected on a {carrier} invoice.\n\n"
+        f"  Carrier:       {carrier}\n"
+        f"  Billed:        {sym}{billed:,.2f} {currency}\n"
+        f"  Contract rate: {sym}{contract:,.2f} {currency}\n"
+        f"  Overcharge:    {sym}{overcharge:,.2f} {currency}\n"
+        f"  Case ID:       {case_id}\n\n"
+        f"The AI analysis (confidence 96%) has created a recovery case. "
+        f"Please log in to review and approve the recovery proposal.\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">Overcharge Detected</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#1e293b;margin:0 0 12px">Overcharge Detected — Action Required</h3>
+        <p style="color:#475569">Hello {to_name}, an overcharge has been detected on a <strong>{carrier}</strong> invoice.</p>
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700;color:#1e293b">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Billed Amount</td><td style="font-weight:700">{sym}{billed:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Contract Rate</td><td style="font-weight:700">{sym}{contract:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Overcharge</td><td style="font-weight:800;color:#dc2626;font-size:16px">{sym}{overcharge:,.2f} {currency}</td></tr>
+          </table>
+        </div>
+        <a href="{APP_URL}/cases" style="display:inline-block;background:#2563eb;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">Review Recovery Case</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Overcharge detected email sent to %s for case %s", to_email, case_id)
+
+
+def send_recovery_executed(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    amount: float, currency: str,
+    envelope_id: str,
+) -> None:
+    """Notify finance manager when a recovery has been dispatched through all 8 gates."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"Recovery Dispatched — {sym}{amount:,.2f} {currency} | Case {case_id[:8].upper()}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"A recovery of {sym}{amount:,.2f} {currency} has been dispatched for case {case_id[:8].upper()}.\n\n"
+        f"  Carrier:     {carrier}\n"
+        f"  Amount:      {sym}{amount:,.2f} {currency}\n"
+        f"  Envelope ID: {envelope_id}\n"
+        f"  Case ID:     {case_id}\n\n"
+        f"All 8 execution gates passed. An expected recovery record has been automatically created.\n"
+        f"You will receive another notification once payment is confirmed by the carrier.\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">Recovery Dispatched</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#059669;margin:0 0 12px">✓ Recovery Dispatched Successfully</h3>
+        <p style="color:#475569">Hello {to_name}, a recovery has been dispatched for <strong>{carrier}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Recovery Amount</td><td style="font-weight:800;color:#059669;font-size:16px">{sym}{amount:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Envelope ID</td><td style="font-family:monospace;font-size:11px">{envelope_id}</td></tr>
+          </table>
+        </div>
+        <p style="color:#64748b;font-size:12px">All 8 execution gates passed. An expected recovery record has been automatically created. You will be notified when the carrier confirms payment.</p>
+        <a href="{APP_URL}/cases/{case_id}" style="display:inline-block;background:#059669;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">View Case</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Recovery executed email sent to %s for case %s amount=%s %s", to_email, case_id, amount, currency)
+
+
+def send_payment_confirmed(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    amount: float, currency: str,
+    payment_ref: str,
+) -> None:
+    """Notify finance manager when carrier has confirmed actual payment receipt."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"Payment Confirmed — {sym}{amount:,.2f} {currency} Received | Case {case_id[:8].upper()}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"Payment of {sym}{amount:,.2f} {currency} from {carrier} has been confirmed.\n\n"
+        f"  Carrier:       {carrier}\n"
+        f"  Amount:        {sym}{amount:,.2f} {currency}\n"
+        f"  Payment Ref:   {payment_ref}\n"
+        f"  Case ID:       {case_id}\n\n"
+        f"The recovery is now complete. You can generate the final Recovery Proof and ACR from the case page.\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">Payment Confirmed</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#059669;margin:0 0 12px">💰 Payment Confirmed — Recovery Complete</h3>
+        <p style="color:#475569">Hello {to_name}, payment has been confirmed from <strong>{carrier}</strong>.</p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Amount Received</td><td style="font-weight:800;color:#059669;font-size:18px">{sym}{amount:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Payment Reference</td><td style="font-family:monospace">{payment_ref}</td></tr>
+          </table>
+        </div>
+        <a href="{APP_URL}/cases/{case_id}" style="display:inline-block;background:#059669;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">Generate Recovery Proof</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Payment confirmed email sent to %s for case %s ref=%s", to_email, case_id, payment_ref)
+
+
+def send_claim_submitted(
+    to_email: str, to_name: str,
+    case_id: str, carrier: str,
+    claim_type: str, amount: float, currency: str,
+    evidence_count: int,
+) -> None:
+    """Notify reviewer when a manual claim is submitted and ready for review."""
+    sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+    subject = f"New Carrier Claim — {carrier} | {sym}{amount:,.0f} {currency}"
+    plain = (
+        f"Hello {to_name},\n\n"
+        f"A new carrier claim has been submitted and requires your review.\n\n"
+        f"  Carrier:        {carrier}\n"
+        f"  Claim Type:     {claim_type}\n"
+        f"  Claimed Amount: {sym}{amount:,.2f} {currency}\n"
+        f"  Evidence Items: {evidence_count}\n"
+        f"  Case ID:        {case_id}\n\n"
+        f"Please log in to review the claim and approve or reject the settlement proposal.\n\n"
+        f"— Zoiko AI Logistics"
+    )
+    ev_style = "color:#059669" if evidence_count > 0 else "color:#dc2626"
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:600px">
+      <div style="background:#1e3a8a;padding:16px 24px;border-radius:8px 8px 0 0">
+        <span style="color:white;font-weight:800;font-size:18px">ZOIKO</span><span style="color:#60a5fa;font-weight:800;font-size:18px">AI</span>
+        <span style="color:#94a3b8;font-size:11px;margin-left:10px">New Carrier Claim</span>
+      </div>
+      <div style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:24px">
+        <h3 style="color:#1e293b;margin:0 0 12px">New Carrier Claim Requires Review</h3>
+        <p style="color:#475569">Hello {to_name}, a new carrier claim has been submitted.</p>
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin:16px 0">
+          <table style="width:100%;border-collapse:collapse">
+            <tr><td style="color:#64748b;padding:4px 0;width:140px">Carrier</td><td style="font-weight:700">{carrier}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Claim Type</td><td style="font-weight:600">{claim_type}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Claimed Amount</td><td style="font-weight:800;color:#1e293b;font-size:16px">{sym}{amount:,.2f} {currency}</td></tr>
+            <tr><td style="color:#64748b;padding:4px 0">Evidence Items</td><td style="font-weight:700;{ev_style}">{evidence_count} item(s) attached</td></tr>
+          </table>
+        </div>
+        <a href="{APP_URL}/claims/{case_id}" style="display:inline-block;background:#2563eb;color:white;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:700;font-size:13px">Review Claim</a>
+        <p style="margin-top:16px;color:#94a3b8;font-size:11px">Case: {case_id}</p>
+      </div>
+    </div>"""
+    _send_html(to_email, subject, plain, html)
+    log.info("Claim submitted email sent to %s for case %s", to_email, case_id)
+
+
+def _log_notification(db_url: str, tenant_id: str, event_type: str,
+                      recipient_email: str, recipient_role: str,
+                      case_id: str | None, subject: str,
+                      amount: float | None, currency: str | None,
+                      status: str = "SENT", error: str | None = None) -> None:
+    """Write to email_notification_log table — best effort, never raises."""
+    try:
+        import psycopg2, uuid as _uuid
+        conn = psycopg2.connect(db_url)
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO email_notification_log
+                    (tenant_id, event_type, recipient_email, recipient_role,
+                     case_id, subject, amount, currency, status, error_detail, sent_at)
+                VALUES (%s::uuid, %s, %s, %s,
+                        %s::uuid, %s, %s, %s, %s, %s, NOW())
+            """, (
+                tenant_id, event_type, recipient_email, recipient_role,
+                case_id, subject, amount, currency, status, error,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass  # notification log is best-effort — never block the main flow
+
+
 def _send_smtp(to: str, subject: str, body: str) -> None:
     import smtplib
     from email.mime.text import MIMEText

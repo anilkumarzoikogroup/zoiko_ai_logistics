@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from shared.db import q, q1
+from shared.db import q, q1, DB_URL
 from services.ingestion_svc.models import ClaimInput
 
 _CLAIM_NEGOTIATION_STATUS = {
@@ -19,6 +19,16 @@ _CLAIM_NEGOTIATION_STATUS = {
     "ACCEPT":            "ACCEPTED",
     "PARTIALLY_ACCEPT":  "PARTIALLY_ACCEPTED",
     "REJECT":            "REJECTED",
+}
+
+# Valid actions per current negotiation status — enforced server-side.
+# ACCEPTED is terminal: once carrier accepts in full, no further action is permitted.
+_NEGOTIATION_TRANSITIONS: dict[str, set] = {
+    "OPEN":               {"COUNTER", "ACCEPT", "PARTIALLY_ACCEPT", "REJECT"},
+    "COUNTERED":          {"COUNTER", "ACCEPT", "PARTIALLY_ACCEPT", "REJECT"},
+    "PARTIALLY_ACCEPTED": {"COUNTER", "ACCEPT", "REJECT"},
+    "REJECTED":           {"COUNTER", "ACCEPT"},
+    "ACCEPTED":           set(),  # terminal
 }
 
 
@@ -53,7 +63,222 @@ def claims_q(_r, where: str, params: tuple, limit: int = 50, offset: int = 0) ->
     return [_r(row) for row in rows]
 
 
+def _sync_missing_carrier_claims(tenant_id: str) -> int:
+    """Lazy sync: create CARRIER_CLAIM cases for any DISPATCHED SC-001 cases that
+    have no corresponding carrier claim yet. Called on every list_claims request.
+    Also repairs existing $0 claims whose amount can be recovered from execution_envelopes.
+    Idempotent and best-effort — never raises."""
+    try:
+        import logging as _logging
+        import psycopg2 as _pg2
+        import psycopg2.extras as _extras
+        import threading as _threading
+
+        _log = _logging.getLogger("sc002.sync")
+        _extras.register_uuid()
+        now = datetime.now(timezone.utc)
+
+        # ── Step 0: repair existing $0 claims — use execution_envelopes.amount ──
+        # The original _auto_create_carrier_claim may have stored amount=0 if
+        # decision_proposals.amount was NULL at dispatch time. execution_envelopes.amount
+        # is always set correctly at dispatch, so use it as the authoritative source.
+        try:
+            conn0 = _pg2.connect(DB_URL)
+            conn0.autocommit = False
+            try:
+                cur0 = conn0.cursor()
+                cur0.execute("""
+                    UPDATE claims
+                    SET    claimed_amount = ee.amount::numeric,
+                           currency      = ee.currency
+                    FROM   cases sc001
+                    JOIN   execution_envelopes ee
+                           ON  ee.case_id  = sc001.id
+                           AND ee.tenant_id = sc001.tenant_id
+                    WHERE  sc001.tenant_id  = %s::uuid
+                      AND  sc001.case_type  = 'INVOICE_OVERCHARGE'
+                      AND  sc001.state      = 'DISPATCHED'
+                      AND  claims.tenant_id = sc001.tenant_id
+                      AND  claims.claim_reference = 'AUTO-' || UPPER(LEFT(sc001.id::text, 8))
+                      AND  claims.claimed_amount  = 0
+                      AND  ee.amount > 0
+                """, (tenant_id,))
+                repaired = cur0.rowcount
+                conn0.commit()
+                if repaired:
+                    _log.info("Sync: repaired %d $0 carrier claims with correct amount from execution_envelopes", repaired)
+            except Exception as _repair_err:
+                try:
+                    conn0.rollback()
+                except Exception:
+                    pass
+                _log.warning("Sync repair step failed: %s", _repair_err)
+            finally:
+                try:
+                    conn0.close()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # ── Step 1: find DISPATCHED SC-001 cases with no carrier claim yet ──
+        # Use execution_envelopes.amount as the authoritative amount source —
+        # it is always written at dispatch time before _auto_create_carrier_claim runs.
+        missing = q("""
+            SELECT
+                c.id::text                                          AS sc001_case_id,
+                c.tenant_id::text                                   AS tenant_id,
+                COALESCE(ci.carrier_id, 'UNKNOWN')                  AS carrier_id,
+                COALESCE(ci.invoice_number, LEFT(c.id::text, 8))    AS invoice_number,
+                COALESCE(ee.amount, 0)::float                       AS amount,
+                COALESCE(ee.currency, 'USD')                        AS currency,
+                COALESCE(ee.id::text, '')                           AS envelope_id,
+                COALESCE(ee.actor_sub, 'system')                    AS actor_sub
+            FROM  cases c
+            LEFT JOIN canonical_invoices  ci ON ci.id = c.invoice_id
+            LEFT JOIN execution_envelopes ee ON ee.case_id   = c.id
+                                             AND ee.tenant_id = c.tenant_id
+            WHERE c.tenant_id = %s::uuid
+              AND c.case_type  = 'INVOICE_OVERCHARGE'
+              AND c.state      = 'DISPATCHED'
+              AND NOT EXISTS (
+                  SELECT 1 FROM case_events ce
+                  WHERE  ce.case_id = c.id
+                    AND  ce.tenant_id = c.tenant_id
+                    AND  ce.event_type = 'SC002_CLAIM_AUTO_CREATED'
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM claims cl
+                  WHERE  cl.tenant_id = c.tenant_id
+                    AND  cl.claim_reference = 'AUTO-' || UPPER(LEFT(c.id::text, 8))
+              )
+            LIMIT 20
+        """, (tenant_id,))
+
+        if not missing:
+            return 0
+
+        created = 0
+        conn = _pg2.connect(DB_URL)
+        conn.autocommit = False
+        try:
+            for row in missing:
+                sc001_case_id   = row["sc001_case_id"]
+                carrier_id      = row["carrier_id"]
+                invoice_number  = row["invoice_number"]
+                amount          = float(row["amount"])
+                currency        = row["currency"]
+                envelope_id     = row["envelope_id"]
+                actor_sub       = row["actor_sub"]
+                claim_reference = f"AUTO-{sc001_case_id[:8].upper()}"
+                claim_id        = uuid.uuid4()
+                sc002_case_id   = uuid.uuid4()
+                try:
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO claims
+                            (id, tenant_id, carrier_id, claim_reference, claim_type,
+                             claimed_amount, currency, status, filed_at, created_at)
+                        VALUES (%s, %s::uuid, %s, %s, 'OVERCHARGE', %s, %s, 'OPEN', %s, %s)
+                        ON CONFLICT DO NOTHING
+                        RETURNING id
+                    """, (claim_id, tenant_id, carrier_id, claim_reference,
+                          amount, currency, now, now))
+                    if not cur.fetchone():
+                        conn.rollback()
+                        continue  # already exists
+                    cur.execute("""
+                        INSERT INTO cases
+                            (id, tenant_id, claim_id, case_type, state, opened_at)
+                        VALUES (%s, %s::uuid, %s::uuid, 'CARRIER_CLAIM', 'NEW', %s)
+                    """, (sc002_case_id, tenant_id, claim_id, now))
+                    cur.execute(
+                        "UPDATE claims SET case_id=%s::uuid "
+                        "WHERE id=%s::uuid AND tenant_id=%s::uuid",
+                        (sc002_case_id, claim_id, tenant_id),
+                    )
+                    cur.execute("""
+                        INSERT INTO case_events
+                            (id, tenant_id, case_id, event_type, from_state, to_state,
+                             actor_sub, payload, occurred_at)
+                        VALUES (%s, %s::uuid, %s::uuid, 'CASE_OPENED', NULL, 'NEW',
+                                'system', %s::jsonb, %s)
+                    """, (uuid.uuid4(), tenant_id, sc002_case_id,
+                          json.dumps({"auto_created_from": sc001_case_id,
+                                      "envelope_id": envelope_id,
+                                      "invoice_number": invoice_number,
+                                      "claim_reference": claim_reference}),
+                          now))
+                    cur.execute("""
+                        INSERT INTO case_events
+                            (id, tenant_id, case_id, event_type, from_state, to_state,
+                             actor_sub, payload, occurred_at)
+                        VALUES (%s, %s::uuid, %s::uuid, 'SC002_CLAIM_AUTO_CREATED',
+                                NULL, NULL, %s, %s::jsonb, %s)
+                    """, (uuid.uuid4(), tenant_id, uuid.UUID(sc001_case_id),
+                          actor_sub,
+                          json.dumps({"sc002_case_id": str(sc002_case_id),
+                                      "claim_id": str(claim_id),
+                                      "claim_reference": claim_reference,
+                                      "carrier_id": carrier_id,
+                                      "amount": amount, "currency": currency}),
+                          now))
+                    conn.commit()
+                    created += 1
+                    _log.info("Sync: auto-created CARRIER_CLAIM %s for SC-001 case %s",
+                              sc002_case_id, sc001_case_id)
+                    # Background: advance to FINDING_GENERATED
+                    _threading.Thread(
+                        target=_advance_claim_state,
+                        args=(DB_URL, tenant_id, str(sc002_case_id),
+                              str(claim_id), carrier_id, amount, currency),
+                        name=f"sc002-sync-{str(sc002_case_id)[:8]}",
+                        daemon=True,
+                    ).start()
+                except Exception as _row_err:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    _log.warning("Sync row error for SC-001 case %s: %s", sc001_case_id, _row_err)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return created
+    except Exception:
+        return 0
+
+
+def _advance_claim_state(
+    db_url: str, tenant_id: str, sc002_case_id: str,
+    claim_id: str, carrier: str, amount: float, currency: str,
+) -> None:
+    """Background thread: run evidence + reasoning to advance a synced claim to
+    FINDING_GENERATED so it is ready for manager approval."""
+    try:
+        from kafka.mock_kafka import MockKafkaBroker
+        run_evidence_and_reasoning_claim(
+            db_url=db_url,
+            tenant_id=tenant_id,
+            case_id=sc002_case_id,
+            slug="default",
+            carrier=carrier,
+            amount=amount,
+            currency=currency,
+            claim_type="OVERCHARGE",
+            actor_sub="system",
+            broker=MockKafkaBroker(),
+        )
+    except Exception:
+        pass
+
+
 def ui_list_claims(_r, tenant_id: str, state: str | None, page: int, page_size: int) -> dict:
+    # Best-effort: create any CARRIER_CLAIM cases that SC-001 dispatch missed
+    _sync_missing_carrier_claims(tenant_id)
+
     limit  = max(1, min(page_size, 200))
     offset = (max(1, page) - 1) * limit
 
@@ -244,6 +469,10 @@ def submit_claim_async_worker(
             claim_type=body.claim_type, claimed_amount=float(body.claimed_amount),
             currency=body.currency, description=body.description,
             related_invoice_number=body.related_invoice_number,
+            awb_number=getattr(body, "awb_number", "") or "",
+            incident_date=getattr(body, "incident_date", "") or "",
+            origin_location=getattr(body, "origin_location", "") or "",
+            destination_location=getattr(body, "destination_location", "") or "",
         )
         ing_r = ingestion_cls(db_url, broker, slug).ingest_claim(tenant_id, claim_in, idempotency_key)
         can_r = canonical_cls(db_url, broker, slug).canonicalize_claim(
@@ -333,6 +562,10 @@ def submit_claim(
         claim_type=body.claim_type, claimed_amount=float(body.claimed_amount),
         currency=body.currency, description=body.description,
         related_invoice_number=body.related_invoice_number,
+        awb_number=getattr(body, "awb_number", "") or "",
+        incident_date=getattr(body, "incident_date", "") or "",
+        origin_location=getattr(body, "origin_location", "") or "",
+        destination_location=getattr(body, "destination_location", "") or "",
     )
     ing_r  = ingestion_cls(db_url, broker, slug).ingest_claim(
         tenant_id, claim_in, idempotency_key,
@@ -404,25 +637,121 @@ def submit_claim(
 
 
 def ui_negotiate_claim(_r, _raw_exec, tenant_id: str, case_id: str, body, actor_sub: str) -> dict:
-    """SC-002 — carrier counter-offer round-trip. Independent of the governance
-    FSM (cases.state): this tracks claims.status, the back-and-forth with the
-    carrier that happens before/alongside the propose -> approve -> execute flow."""
+    """SC-002 — carrier counter-offer round-trip with state machine validation
+    and amount guards.  Independent of the governance FSM (cases.state): this
+    tracks claims.status — the back-and-forth with the carrier that happens
+    before/alongside the propose → approve → execute flow."""
+
     if body.action not in _CLAIM_NEGOTIATION_STATUS:
         raise HTTPException(status_code=422, detail=f"action must be one of {sorted(_CLAIM_NEGOTIATION_STATUS)}")
 
-    row = q1("SELECT claim_id FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid", (case_id, tenant_id))
-    if not row or not row["claim_id"]:
+    row = q1(
+        "SELECT cl.id::text AS claim_id, cl.status AS current_status, cl.claimed_amount::float AS claimed_amount "
+        "FROM cases c JOIN claims cl ON cl.id = c.claim_id "
+        "WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid",
+        (case_id, tenant_id),
+    )
+    if not row:
         raise HTTPException(status_code=404, detail="Claim case not found")
 
+    current_status = row["current_status"] or "OPEN"
+    claimed_amount = float(row["claimed_amount"] or 0)
+
+    # ── State machine guard ────────────────────────────────────────────────
+    valid_actions = _NEGOTIATION_TRANSITIONS.get(current_status, set())
+    if body.action not in valid_actions:
+        terminal = current_status == "ACCEPTED"
+        detail = (
+            "Negotiation is closed — carrier has already accepted in full."
+            if terminal else
+            f"Cannot {body.action} from status {current_status}. "
+            f"Valid next actions: {sorted(valid_actions) or 'none'}"
+        )
+        raise HTTPException(status_code=409, detail=detail)
+
+    # ── Amount validation ──────────────────────────────────────────────────
+    approved_amount = body.approved_amount
+    if body.action == "ACCEPT":
+        approved_amount = claimed_amount  # full acceptance = claimed amount
+    elif body.action in ("COUNTER", "PARTIALLY_ACCEPT"):
+        if not approved_amount or approved_amount <= 0:
+            raise HTTPException(status_code=422, detail=f"{body.action} requires a positive approved_amount")
+        if approved_amount > claimed_amount:
+            raise HTTPException(
+                status_code=422,
+                detail=f"approved_amount {approved_amount} exceeds claimed amount {claimed_amount}",
+            )
+        if body.action == "PARTIALLY_ACCEPT" and approved_amount >= claimed_amount:
+            raise HTTPException(
+                status_code=422,
+                detail="PARTIALLY_ACCEPT amount must be less than the claimed amount",
+            )
+
     new_status = _CLAIM_NEGOTIATION_STATUS[body.action]
+
+    # ── Round counter ──────────────────────────────────────────────────────
+    round_row = q1(
+        "SELECT COUNT(*) AS cnt FROM case_events "
+        "WHERE case_id=%s::uuid AND event_type='CLAIM_NEGOTIATION'",
+        (case_id,),
+    )
+    round_num = (int(round_row["cnt"]) if round_row else 0) + 1
+
     _raw_exec(
         "UPDATE claims SET status=%s, approved_amount=%s WHERE id=%s::uuid AND tenant_id=%s::uuid",
-        (new_status, body.approved_amount, str(row["claim_id"]), tenant_id),
+        (new_status, approved_amount, row["claim_id"], tenant_id),
     )
     _raw_exec(
-        "INSERT INTO case_events (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at) "
+        "INSERT INTO case_events "
+        "(id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at) "
         "VALUES (%s, %s::uuid, %s::uuid, 'CLAIM_NEGOTIATION', NULL, NULL, %s, %s::jsonb, now())",
-        (uuid.uuid4(), tenant_id, case_id, actor_sub,
-         json.dumps({"action": body.action, "new_status": new_status, "approved_amount": body.approved_amount, "note": body.note})),
+        (
+            uuid.uuid4(), tenant_id, case_id, actor_sub,
+            json.dumps({
+                "action":          body.action,
+                "from_status":     current_status,
+                "new_status":      new_status,
+                "approved_amount": approved_amount,
+                "note":            body.note or "",
+                "round":           round_num,
+            }),
+        ),
     )
-    return {"case_id": case_id, "negotiation_status": new_status, "approved_amount": body.approved_amount}
+    # ── Best-effort email notification ────────────────────────────────────────
+    try:
+        from shared.email_sender import send_carrier_negotiation_update
+        extra = q1(
+            "SELECT cl.carrier_id, cl.currency FROM cases c "
+            "JOIN claims cl ON cl.id=c.claim_id "
+            "WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid",
+            (case_id, tenant_id),
+        )
+        carrier_name = (extra or {}).get("carrier_id", "Carrier")
+        currency_val = (extra or {}).get("currency", "USD")
+        users = q(
+            "SELECT email, full_name FROM users "
+            "WHERE tenant_id=%s::uuid AND role IN ('manager', 'analyst')",
+            (tenant_id,),
+        )
+        for u in users:
+            send_carrier_negotiation_update(
+                to_email=u["email"],
+                to_name=(u.get("full_name") or u["email"]),
+                case_id=case_id,
+                carrier=carrier_name,
+                action=body.action,
+                new_status=new_status,
+                approved_amount=approved_amount,
+                currency=currency_val,
+                round_num=round_num,
+                note=body.note or "",
+            )
+    except Exception:
+        import traceback; traceback.print_exc()
+
+    return {
+        "case_id":            case_id,
+        "negotiation_status": new_status,
+        "approved_amount":    approved_amount,
+        "round":              round_num,
+    }

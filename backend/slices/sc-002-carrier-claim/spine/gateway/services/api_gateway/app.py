@@ -2377,6 +2377,7 @@ def ui_case_events(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
         SELECT id::text, case_id::text, from_state, to_state,
                actor_sub                                    AS actor,
                COALESCE(payload->>'reason', event_type)     AS reason,
+               payload,
                occurred_at                                  AS created_at
         FROM   case_events
         WHERE  case_id=%s::uuid AND tenant_id=%s::uuid
@@ -2569,6 +2570,150 @@ def ui_get_proposal(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     return _r(row)
 
 
+# ── Email notification helpers (best-effort, never raise) ────────────────────
+
+def _email_approval_needed(
+    db_url: str, tenant_id: str, case_id: str,
+    proposer_sub: str, amount: float, currency: str,
+) -> None:
+    """Email managers when a claim proposal is waiting for approval."""
+    try:
+        settings = q1(
+            "SELECT approval_needed_email FROM tenant_notification_settings WHERE tenant_id=%s::uuid",
+            (tenant_id,),
+        )
+        if settings and settings.get("approval_needed_email") is False:
+            return
+
+        case_row = q1(
+            """SELECT c.id, ca.name AS carrier_name, cl.claim_type
+               FROM cases c
+               LEFT JOIN carriers ca ON ca.id = c.carrier_id
+               LEFT JOIN claims cl ON cl.id = c.claim_id
+               WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1""",
+            (case_id, tenant_id),
+        )
+        carrier   = (case_row or {}).get("carrier_name") or "Unknown Carrier"
+        recipients = q(
+            "SELECT email, full_name, role FROM users WHERE tenant_id=%s::uuid AND role IN ('admin','manager') AND is_active=true",
+            (tenant_id,),
+        )
+        from shared.email_sender import send_governance_notification, _log_notification
+        app_url = os.getenv("APP_URL", "http://localhost:5173")
+        sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
+        for r in recipients:
+            try:
+                send_governance_notification(
+                    to_email=r["email"], to_name=r["full_name"],
+                    event="proposal",
+                    case_id=case_id, actor=proposer_sub,
+                    amount=amount, currency=currency, app_url=app_url,
+                )
+                _log_notification(
+                    db_url, tenant_id, "approval_needed",
+                    r["email"], r["role"], case_id,
+                    f"Action Required: Claim Proposal — Case {case_id[:8].upper()}",
+                    amount, currency, "SENT",
+                )
+            except Exception as _e:
+                _log_notification(
+                    db_url, tenant_id, "approval_needed",
+                    r["email"], r["role"], case_id,
+                    f"Action Required: Claim Proposal — Case {case_id[:8].upper()}",
+                    amount, currency, "FAILED", str(_e),
+                )
+    except Exception:
+        pass
+
+
+def _email_decision_made(
+    db_url: str, tenant_id: str, case_id: str,
+    outcome: str, actor_sub: str, amount: float, currency: str,
+) -> None:
+    """Email all relevant users when a governance decision is made."""
+    try:
+        settings = q1(
+            "SELECT recovery_executed_email FROM tenant_notification_settings WHERE tenant_id=%s::uuid",
+            (tenant_id,),
+        )
+        if settings and settings.get("recovery_executed_email") is False:
+            return
+
+        event = "approved" if outcome == "EXECUTION_READY" else "rejected"
+        recipients = q(
+            "SELECT email, full_name, role FROM users WHERE tenant_id=%s::uuid AND role IN ('admin','manager','analyst') AND is_active=true",
+            (tenant_id,),
+        )
+        from shared.email_sender import send_governance_notification, _log_notification
+        app_url = os.getenv("APP_URL", "http://localhost:5173")
+        for r in recipients:
+            try:
+                send_governance_notification(
+                    to_email=r["email"], to_name=r["full_name"],
+                    event=event, case_id=case_id, actor=actor_sub,
+                    amount=amount, currency=currency, app_url=app_url,
+                )
+                _log_notification(
+                    db_url, tenant_id, "decision_made",
+                    r["email"], r["role"], case_id,
+                    f"Claim Decision ({event.upper()}) — Case {case_id[:8].upper()}",
+                    amount, currency, "SENT",
+                )
+            except Exception as _e:
+                _log_notification(
+                    db_url, tenant_id, "decision_made",
+                    r["email"], r["role"], case_id,
+                    f"Claim Decision ({event.upper()}) — Case {case_id[:8].upper()}",
+                    amount, currency, "FAILED", str(_e),
+                )
+    except Exception:
+        pass
+
+
+def _email_claim_submitted(
+    db_url: str, tenant_id: str, case_id: str,
+    carrier: str, claim_type: str, amount: float, currency: str,
+    evidence_count: int,
+) -> None:
+    """Email reviewers when a new claim is submitted — best effort."""
+    try:
+        settings = q1(
+            "SELECT case_opened_email FROM tenant_notification_settings WHERE tenant_id=%s::uuid",
+            (tenant_id,),
+        )
+        if settings and settings.get("case_opened_email") is False:
+            return
+
+        recipients = q(
+            "SELECT email, full_name, role FROM users WHERE tenant_id=%s::uuid AND role IN ('admin','manager') AND is_active=true",
+            (tenant_id,),
+        )
+        from shared.email_sender import send_claim_submitted, _log_notification
+        for r in recipients:
+            try:
+                send_claim_submitted(
+                    to_email=r["email"], to_name=r["full_name"],
+                    case_id=case_id, carrier=carrier,
+                    claim_type=claim_type, amount=amount, currency=currency,
+                    evidence_count=evidence_count,
+                )
+                _log_notification(
+                    db_url, tenant_id, "claim_submitted",
+                    r["email"], r["role"], case_id,
+                    f"New Carrier Claim — {carrier}",
+                    amount, currency, "SENT",
+                )
+            except Exception as _e:
+                _log_notification(
+                    db_url, tenant_id, "claim_submitted",
+                    r["email"], r["role"], case_id,
+                    f"New Carrier Claim — {carrier}",
+                    amount, currency, "FAILED", str(_e),
+                )
+    except Exception:
+        pass
+
+
 @v1_router.post("/cases/{case_id}/proposal", tags=["ui"], status_code=201)
 def ui_create_proposal(
     case_id: str,
@@ -2639,6 +2784,16 @@ def ui_create_proposal(
             INSERT INTO case_events (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
             VALUES (%s, %s::uuid, %s::uuid, 'PROPOSAL_CREATED', %s, 'APPROVAL_PENDING', %s, %s::jsonb, %s)
         """, (uuid.uuid4(), tid, case_id, prev, claims.sub, json.dumps({"proposal_id": str(pid)}), now))
+
+    # Notify managers that a claim proposal needs approval
+    try:
+        _email_approval_needed(
+            db_url=DB_URL, tenant_id=str(tid), case_id=case_id,
+            proposer_sub=claims.sub,
+            amount=float(body.amount), currency=body.currency,
+        )
+    except Exception:
+        pass  # best-effort
 
     return {"id": str(pid), "case_id": case_id, "action": body.action,
             "amount": float(body.amount), "currency": body.currency,
@@ -2735,6 +2890,18 @@ def ui_decide(
             INSERT INTO case_events (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
             VALUES (%s, %s::uuid, %s::uuid, %s, 'APPROVAL_PENDING', %s, %s, %s::jsonb, %s)
         """, (uuid.uuid4(), tid, case_id, f"GOVERNANCE_{outcome}", outcome, claims.sub, json.dumps({"decision_id": str(did)}), now))
+
+    # Notify proposer and managers about the decision
+    try:
+        prop_amount = float((prop_det or {}).get("amount", 0)) if outcome == "EXECUTION_READY" else 0.0
+        prop_currency = (prop_det or {}).get("currency", "INR") if outcome == "EXECUTION_READY" else "INR"
+        _email_decision_made(
+            db_url=DB_URL, tenant_id=str(tid), case_id=case_id,
+            outcome=outcome, actor_sub=claims.sub,
+            amount=prop_amount, currency=prop_currency,
+        )
+    except Exception:
+        pass  # best-effort
 
     return {"id": str(did), "case_id": case_id, "decision": outcome,
             "actor_sub": claims.sub, "decided_at": now.isoformat(),
@@ -3272,11 +3439,31 @@ def ui_submit_claim(
     See services/api_gateway/routes_logic.py:submit_claim().
     """
     from services.api_gateway.routers.ingestion import _capture_rest_push_metadata
-    return _sc002_routes.submit_claim(
+    result = _sc002_routes.submit_claim(
         DB_URL, _BROKER, IngestionHandler, CanonicalHandler, CaseHandler,
         _run_evidence_and_reasoning_claim, _capture_rest_push_metadata,
         request, body, idempotency_key, str(claims.tenant_id), claims.sub,
     )
+    # Fire claim-submitted notification after successful pipeline
+    try:
+        case_id = result.get("case_id") or result.get("id") if isinstance(result, dict) else getattr(result, "case_id", None)
+        if case_id:
+            carrier_row = q1(
+                "SELECT ca.name FROM cases c LEFT JOIN carriers ca ON ca.id=c.carrier_id WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1",
+                (case_id, claims.tenant_id),
+            )
+            _email_claim_submitted(
+                db_url=DB_URL, tenant_id=str(claims.tenant_id),
+                case_id=str(case_id),
+                carrier=(carrier_row or {}).get("name") or "Unknown Carrier",
+                claim_type=body.claim_type,
+                amount=float(body.claimed_amount),
+                currency=body.currency,
+                evidence_count=0,
+            )
+    except Exception:
+        pass
+    return result
 
 
 # ── Route registration ────────────────────────────────────────────────────────

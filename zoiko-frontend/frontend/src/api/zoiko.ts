@@ -253,6 +253,8 @@ export const zoikoApi = {
   async createClaim(payload: {
     carrier: string; claim_type: string; claimed_amount: number; currency: string;
     claim_reference?: string; description?: string; related_invoice_number?: string;
+    awb_number?: string; incident_date?: string;
+    origin_location?: string; destination_location?: string;
     lines?: { description: string; claimed_amount: number }[];
   }): Promise<Claim> {
     if (USE_MOCK) {
@@ -575,6 +577,56 @@ export const zoikoApi = {
     if (USE_MOCK) { await delay(); return []; }
     const { data } = await api4.get<RecoveryException[]>("/recovery/exceptions", {
       params: { case_id: caseId, stuck_after_days: stuckAfterDays },
+    });
+    return data;
+  },
+
+  // ---------- SC-002 Claim Recovery (apiClaim4 = port 8011) ----------
+  // These mirror the Phase 6 methods above but route to the SC-002 execution
+  // gateway, not the SC-001 one. ClaimDetail.tsx MUST use these, not the api4 variants.
+  async listClaimExpectedRecoveries(caseId: string): Promise<ExpectedRecovery[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    try {
+      const { data } = await apiClaim4.get<ExpectedRecovery[]>("/recovery/expected:by-case", { params: { case_id: caseId } });
+      return data;
+    } catch { return []; }
+  },
+
+  async listClaimRecoveryInstruments(caseId: string): Promise<RecoveryInstrument[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    try {
+      const { data } = await apiClaim4.get<RecoveryInstrument[]>("/recovery/instruments:by-case", { params: { case_id: caseId } });
+      return data;
+    } catch { return []; }
+  },
+
+  async listClaimRecoveryMatches(caseId: string): Promise<RecoveryMatch[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    try {
+      const { data } = await apiClaim4.get<RecoveryMatch[]>("/recovery/matches:by-case", { params: { case_id: caseId } });
+      return data;
+    } catch { return []; }
+  },
+
+  async getLatestClaimRecoveryProof(caseId: string): Promise<RecoveryProof | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    try {
+      const { data } = await apiClaim4.get<RecoveryProof>("/recovery/proofs:latest", { params: { case_id: caseId } });
+      return data;
+    } catch { return null; }
+  },
+
+  async generateClaimRecoveryProof(caseId: string): Promise<RecoveryProof> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data } = await apiClaim4.post<RecoveryProof>("/recovery/proofs", { case_id: caseId });
+    return data;
+  },
+
+  async confirmClaimPayment(recoveryInstrumentId: string, paymentRef: string): Promise<RecoveryInstrument> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await apiClaim4.post<RecoveryInstrument>("/recovery/payment-confirm", {
+      recovery_instrument_id: recoveryInstrumentId,
+      payment_ref: paymentRef,
     });
     return data;
   },

@@ -29,21 +29,15 @@ if %errorlevel%==0 (
 )
 echo.
 
-REM ── Check for port conflicts ─────────────────────────────────
-echo  Checking for port conflicts...
-set PORT_CONFLICT=0
+REM ── Kill any stale services on our ports ─────────────────────
+echo  Stopping any stale services on ports 8000 8001 8002 8010 8011 8012 5173...
 for %%P in (8000 8001 8002 8010 8011 8012 5173) do (
-    netstat -an 2>nul | findstr /C:":%%P " | findstr /C:"LISTENING" >nul 2>&1
-    if !errorlevel!==0 (
-        echo  [WARN] Port %%P is already in use -- kill the existing process to avoid conflicts.
-        set PORT_CONFLICT=1
+    for /f "tokens=5" %%A in ('netstat -aon 2^>nul ^| findstr ":%%P " ^| findstr "LISTENING"') do (
+        taskkill /PID %%A /F >nul 2>&1
     )
 )
-if %PORT_CONFLICT%==1 (
-    echo.
-    echo  Continue anyway? Press any key or Ctrl+C to cancel.
-    pause >nul
-)
+timeout /t 2 /nobreak >nul
+echo  [OK] Old services cleared.
 echo.
 
 REM ── Migrations ──────────────────────────────────────────────
@@ -64,7 +58,7 @@ echo  Starting SC-001 Governance on port 8002...
 start "SC001-Governance" /d "%SC001%\governance" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC001%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8002"
 
 echo  Starting SC-001 Execution on port 8001...
-start "SC001-Execution" /d "%SC001%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC001%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8001"
+start "SC001-Execution" /d "%SC001%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "REDIS_URL=!REDIS_URL!" && set "GROQ_API_KEY=!GROQ_API_KEY!" && set "GROQ_MODEL=!GROQ_MODEL!" && set "TOKEN_TTL_MINUTES=!TOKEN_TTL_MINUTES!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC001%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8001"
 
 REM ════════════════════════════════════════════════════════════
 REM  SC-002 (carrier claim) — gateway/execution/governance
@@ -79,7 +73,7 @@ echo  Starting SC-002 Governance on port 8012...
 start "SC002-Governance" /d "%SC002%\governance" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC002%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8012"
 
 echo  Starting SC-002 Execution on port 8011...
-start "SC002-Execution" /d "%SC002%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC002%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8011"
+start "SC002-Execution" /d "%SC002%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "REDIS_URL=!REDIS_URL!" && set "GROQ_API_KEY=!GROQ_API_KEY!" && set "GROQ_MODEL=!GROQ_MODEL!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC002%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8011"
 
 REM ── Poll both gateways before starting frontend ─────────────
 echo  Waiting for both gateways to be ready...

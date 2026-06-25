@@ -119,17 +119,26 @@ _recovery_exceptions = RecoveryExceptionsHandler(DB_URL, _BROKER, TENANT_SLUG)
 
 from middleware.oidc.token_verifier import TokenVerifier as _TV, TokenExpiredError as _TExpired, TokenInvalidError as _TInvalid
 from fastapi.security import HTTPBearer as _Bearer, HTTPAuthorizationCredentials as _Creds
-from fastapi import Security as _Security
+from fastapi import Security as _Security, Request as _Request
+from typing import Optional as _Optional
 
 _tv       = _TV(dev_secret=os.getenv("ZOIKO_DEV_SECRET", "").encode(), issuer=os.getenv("ZOIKO_ISSUER", "https://auth.zoikotech.com"))
-_security = _Bearer(auto_error=True)
+_security = _Bearer(auto_error=False)  # False = fall back to zoiko_jwt cookie when no Bearer header
 
 def _auth_dep(
-    x_tenant_id: str  = Header(..., alias="X-Tenant-ID"),
-    credentials: _Creds = _Security(_security),
+    request: _Request,
+    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    credentials: _Optional[_Creds] = _Security(_security),
 ) -> ZoikoClaims:
+    # Bearer header takes priority; fall back to HttpOnly cookie
+    if credentials:
+        token = credentials.credentials
+    else:
+        token = request.cookies.get("zoiko_jwt")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        claims = _tv.verify(credentials.credentials)
+        claims = _tv.verify(token)
     except _TExpired:
         raise HTTPException(status_code=401, detail="Token expired. Please log in again.")
     except _TInvalid as e:

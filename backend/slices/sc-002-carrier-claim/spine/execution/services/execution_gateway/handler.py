@@ -389,6 +389,16 @@ class ExecutionGateway:
         except Exception:
             pass  # outbox relay will recover
 
+        # Auto-create expected_recovery so finance can track without manual step
+        if case_id:
+            self._auto_create_expected_recovery(
+                case_id=case_id, tenant_id=req.tenant_id,
+                amount=amount, currency=currency,
+                scope=scope, token=token,
+                envelope_id=str(env_id),
+                actor_sub=req.actor_sub,
+            )
+
         return ExecutionEnvelope(
             envelope_id   = str(env_id),
             token_id      = token_id,
@@ -403,6 +413,97 @@ class ExecutionGateway:
             status        = "DISPATCHED",
             connector_ref = connector_ref,
         )
+
+    # ── Auto-recovery + notifications ────────────────────────────────────────────
+
+    def _auto_create_expected_recovery(
+        self,
+        case_id: str, tenant_id: str,
+        amount: float, currency: str,
+        scope: str, token: dict,
+        envelope_id: str, actor_sub: str,
+    ) -> None:
+        """Create expected_recovery row after dispatch — best effort, never raises."""
+        try:
+            from services.recovery.expected_recovery_svc.handler import ExpectedRecoveryHandler
+            from services.recovery.expected_recovery_svc.models import ExpectedRecoveryCreate
+            decision_id = str(token.get("decision_id", "")) or None
+            er = ExpectedRecoveryHandler(self._db_url, self._broker, self._tenant_slug)
+            er.create(ExpectedRecoveryCreate(
+                case_id                       = case_id,
+                tenant_id                     = tenant_id,
+                expected_amount               = amount,
+                currency                      = currency,
+                expected_recovery_method      = "CLAIM_SETTLEMENT",
+                counterparty_type             = "CARRIER",
+                authorization_decision_id     = decision_id,
+            ))
+        except ValueError:
+            pass  # already exists — idempotent
+        except Exception:
+            pass
+
+        self._notify_recovery_executed(
+            tenant_id=tenant_id, case_id=case_id,
+            amount=amount, currency=currency, envelope_id=envelope_id,
+        )
+
+    def _notify_recovery_executed(
+        self,
+        tenant_id: str, case_id: str,
+        amount: float, currency: str, envelope_id: str,
+    ) -> None:
+        """Email managers about claim settlement dispatch — best effort."""
+        try:
+            from shared.db import q, q1
+            settings = q1(
+                "SELECT recovery_executed_email FROM tenant_notification_settings WHERE tenant_id=%s::uuid",
+                (tenant_id,),
+                db_url=self._db_url,
+            )
+            if settings and settings.get("recovery_executed_email") is False:
+                return
+
+            # Get claim/carrier info
+            case_row = q1(
+                """SELECT c.id, ca.name AS carrier_name
+                   FROM cases c
+                   LEFT JOIN carriers ca ON ca.id = c.carrier_id
+                   WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1""",
+                (case_id, tenant_id),
+                db_url=self._db_url,
+            )
+            carrier = (case_row or {}).get("carrier_name") or "Unknown Carrier"
+
+            recipients = q(
+                "SELECT email, full_name, role FROM users WHERE tenant_id=%s::uuid AND role IN ('admin','manager') AND is_active=true",
+                (tenant_id,),
+                db_url=self._db_url,
+            )
+            from shared.email_sender import send_recovery_executed, _log_notification
+            for r in recipients:
+                try:
+                    send_recovery_executed(
+                        to_email=r["email"], to_name=r["full_name"],
+                        case_id=case_id, carrier=carrier,
+                        amount=amount, currency=currency,
+                        envelope_id=envelope_id,
+                    )
+                    _log_notification(
+                        self._db_url, tenant_id, "recovery_executed",
+                        r["email"], r["role"], case_id,
+                        f"Claim Settlement Dispatched — Case {case_id[:8].upper()}",
+                        amount, currency, "SENT",
+                    )
+                except Exception as _e:
+                    _log_notification(
+                        self._db_url, tenant_id, "recovery_executed",
+                        r["email"], r["role"], case_id,
+                        f"Claim Settlement Dispatched — Case {case_id[:8].upper()}",
+                        amount, currency, "FAILED", str(_e),
+                    )
+        except Exception:
+            pass
 
     # ── Helpers ─────────────────────────────────────────────────────────────────
 
