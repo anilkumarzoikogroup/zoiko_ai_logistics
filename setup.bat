@@ -33,8 +33,8 @@ echo  Installing (requires internet)...
 if errorlevel 1 (
     echo  WARNING: pip had errors ^(no internet?^). Using existing packages.
 )
-.venv\Scripts\pip install -e backend\core\packages\zoiko-common -q 2>nul
-.venv\Scripts\pip install -e backend\platform\packages\zoiko-kms -q 2>nul
+.venv\Scripts\pip install -e backend\slices\sc-001-freight-invoice-overcharge\spine\core_lib\packages\zoiko-common -q 2>nul
+.venv\Scripts\pip install -e backend\slices\sc-001-freight-invoice-overcharge\spine\platform_lib\packages\zoiko-kms -q 2>nul
 echo  Done.
 goto :step3
 
@@ -77,7 +77,7 @@ if "!SKIP_DB!"=="1" (
     echo  SKIPPED ^(database not reachable^).
     goto :step5
 )
-.venv\Scripts\python seed_users.py 2>nul
+.venv\Scripts\python backend\slices\sc-001-freight-invoice-overcharge\spine\core_lib\scripts\seed_users.py 2>nul
 echo  Done.
 
 :step5

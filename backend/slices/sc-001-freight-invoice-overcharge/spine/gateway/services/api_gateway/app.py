@@ -2512,6 +2512,7 @@ def ui_finding(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
         SELECT id::text, case_id::text, confidence::float,
                rule_trace,
                encode(signature, 'hex') AS finding_hash,
+               ai_confidence::float, risk_level, ai_reasoning,
                created_at
         FROM   findings
         WHERE  case_id=%s::uuid AND tenant_id=%s::uuid
@@ -2520,6 +2521,89 @@ def ui_finding(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
     if not row:
         raise HTTPException(status_code=404, detail="No finding found")
     d = _r(row)
+
+    # Lazy Groq enrichment — runs once for cases created before GROQ_API_KEY
+    # was wired into launch.bat. Result is persisted so subsequent views are instant.
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if d.get("ai_confidence") is None and groq_key:
+        try:
+            ctx_row = q1("""
+                SELECT
+                    ci.carrier_id                                                AS carrier,
+                    ci.total_amount::float                                       AS amount,
+                    ci.currency,
+                    COALESCE(cs.origin_city || ' to ' || cs.dest_city,
+                             ci.invoice_number)                                  AS route,
+                    COALESCE((
+                        SELECT (vr.rule_violations->0->>'delta')::float
+                        FROM   validation_results vr
+                        WHERE  vr.source_record_id = ci.source_record_id
+                          AND  vr.status = 'FAIL'
+                        LIMIT  1
+                    ), 0)                                                        AS diff
+                FROM  cases c
+                JOIN  canonical_invoices ci   ON ci.id = c.invoice_id
+                LEFT JOIN canonical_shipments cs ON cs.invoice_id = ci.id
+                WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid
+            """, (case_id, claims.tenant_id))
+
+            if ctx_row:
+                ctx           = _r(ctx_row)
+                amount        = float(ctx.get("amount") or 0)
+                diff          = float(ctx.get("diff") or 0)
+                contract_rate = max(0.0, amount - diff)
+                carrier       = ctx.get("carrier") or ""
+                route         = ctx.get("route") or ""
+                currency      = ctx.get("currency") or "INR"
+
+                from groq import Groq as _Groq
+                groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+                _gclient   = _Groq(api_key=groq_key)
+                prompt = (
+                    f"Freight overcharge case:\n"
+                    f"  Carrier: {carrier}\n"
+                    f"  Route: {route}\n"
+                    f"  Billed: {amount} {currency}\n"
+                    f"  Contract rate: {contract_rate} {currency}\n"
+                    f"  Overcharge: {round(diff, 2)} {currency}\n\n"
+                    "Assess the risk level (HIGH/MEDIUM/LOW), provide a confidence score 0.0-1.0, "
+                    "and explain your reasoning in 1-2 sentences. "
+                    'Respond ONLY in JSON: {"risk_level": "HIGH", "ai_confidence": 0.92, "reasoning": "..."}'
+                )
+                chat = _gclient.chat.completions.create(
+                    model=groq_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=200,
+                )
+                raw   = chat.choices[0].message.content.strip()
+                match = _re.search(r'\{.*\}', raw, _re.DOTALL)
+                if match:
+                    parsed     = json.loads(match.group())
+                    ai_conf    = round(float(parsed.get("ai_confidence", 0.90)), 4)
+                    risk_level = str(parsed.get("risk_level", "MEDIUM")).upper()
+                    ai_reason  = str(parsed.get("reasoning", ""))
+
+                    import psycopg2 as _pg2
+                    _conn = _pg2.connect(DB_URL)
+                    try:
+                        _cur = _conn.cursor()
+                        _cur.execute("""
+                            UPDATE findings
+                            SET ai_confidence=%s, risk_level=%s, ai_reasoning=%s
+                            WHERE id=%s::uuid AND tenant_id=%s::uuid
+                        """, (ai_conf, risk_level, ai_reason, d["id"], claims.tenant_id))
+                        _conn.commit()
+                    finally:
+                        _conn.close()
+
+                    d["ai_confidence"] = ai_conf
+                    d["risk_level"]    = risk_level
+                    d["ai_reasoning"]  = ai_reason
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger("zoiko.reasoning").warning("Lazy Groq enrichment failed for %s: %s", case_id, _e)
+
     d["trace"] = d.pop("rule_trace") or {}
     return d
 

@@ -137,7 +137,7 @@ class AgentRuntime:
         if groq_key:
             try:
                 from groq import Groq as _Groq
-                groq_model = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+                groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
                 client = _Groq(api_key=groq_key)
                 overcharge = round(amount - contract_rate, 2) if contract_rate > 0 else amount
                 prompt = (

@@ -55,29 +55,31 @@ REM ═════════════════════════�
 REM  SC-001 (freight invoice overcharge) — gateway/execution/governance
 REM ════════════════════════════════════════════════════════════
 set SC001=%ROOT%backend\slices\sc-001-freight-invoice-overcharge\spine
+set PYPATH_SC001=%SC001%\platform_lib;%SC001%\core_lib\packages\zoiko-common
 
 echo  Starting SC-001 Gateway on port 8000...
-start "SC001-Gateway" /d "%SC001%\gateway" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "ZOIKO_FF_SC_001_ENABLED=*" && set "ZOIKO_COMPANY_NAME=!ZOIKO_COMPANY_NAME!" && set "ZOIKO_ADMIN_EMAIL=!ZOIKO_ADMIN_EMAIL!" && set "ZOIKO_ADMIN_PASSWORD=!ZOIKO_ADMIN_PASSWORD!" && set "ZOIKO_ADMIN_NAME=!ZOIKO_ADMIN_NAME!" && set "JWT_TTL_SECONDS=!JWT_TTL_SECONDS!" && set "GOOGLE_CLIENT_ID=!GOOGLE_CLIENT_ID!" && set "GOOGLE_CLIENT_SECRET=!GOOGLE_CLIENT_SECRET!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8000"
+start "SC001-Gateway" /d "%SC001%\gateway" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "ZOIKO_FF_SC_001_ENABLED=*" && set "ZOIKO_COMPANY_NAME=!ZOIKO_COMPANY_NAME!" && set "ZOIKO_ADMIN_EMAIL=!ZOIKO_ADMIN_EMAIL!" && set "ZOIKO_ADMIN_PASSWORD=!ZOIKO_ADMIN_PASSWORD!" && set "ZOIKO_ADMIN_NAME=!ZOIKO_ADMIN_NAME!" && set "JWT_TTL_SECONDS=!JWT_TTL_SECONDS!" && set "GOOGLE_CLIENT_ID=!GOOGLE_CLIENT_ID!" && set "GOOGLE_CLIENT_SECRET=!GOOGLE_CLIENT_SECRET!" && set "GROQ_API_KEY=!GROQ_API_KEY!" && set "GROQ_MODEL=!GROQ_MODEL!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC001%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8000"
 
 echo  Starting SC-001 Governance on port 8002...
-start "SC001-Governance" /d "%SC001%\governance" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8002"
+start "SC001-Governance" /d "%SC001%\governance" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC001%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8002"
 
 echo  Starting SC-001 Execution on port 8001...
-start "SC001-Execution" /d "%SC001%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8001"
+start "SC001-Execution" /d "%SC001%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC001%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8001"
 
 REM ════════════════════════════════════════════════════════════
 REM  SC-002 (carrier claim) — gateway/execution/governance
 REM ════════════════════════════════════════════════════════════
 set SC002=%ROOT%backend\slices\sc-002-carrier-claim\spine
+set PYPATH_SC002=%SC002%\platform_lib;%SC002%\core_lib\packages\zoiko-common
 
 echo  Starting SC-002 Gateway on port 8010...
-start "SC002-Gateway" /d "%SC002%\gateway" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8010"
+start "SC002-Gateway" /d "%SC002%\gateway" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "GROQ_API_KEY=!GROQ_API_KEY!" && set "GROQ_MODEL=!GROQ_MODEL!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC002%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8010"
 
 echo  Starting SC-002 Governance on port 8012...
-start "SC002-Governance" /d "%SC002%\governance" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8012"
+start "SC002-Governance" /d "%SC002%\governance" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC002%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8012"
 
 echo  Starting SC-002 Execution on port 8011...
-start "SC002-Execution" /d "%SC002%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8011"
+start "SC002-Execution" /d "%SC002%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC002%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8011"
 
 REM ── Poll both gateways before starting frontend ─────────────
 echo  Waiting for both gateways to be ready...

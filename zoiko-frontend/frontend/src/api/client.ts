@@ -6,6 +6,48 @@ import { queryClient } from "@/lib/queryClient";
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 
+// Bare axios instance used ONLY for session verification — no interceptors attached,
+// so a 401 from /auth/me never recurses back into the error handler below.
+const _sessionVerifier = axios.create({
+  baseURL: (import.meta.env.VITE_API_BASE || "/api") + "/v1",
+  withCredentials: true,
+  timeout: 5000,
+});
+
+// Dedup: if 10 parallel queries all return 401 at once we only run one check.
+let _verifyInFlight = false;
+
+function _handleUnauthorized(): void {
+  if (_verifyInFlight) return;
+  _verifyInFlight = true;
+  // Build auth headers the same way the normal instances do.
+  const devJwt = import.meta.env.VITE_DEV_JWT;
+  const tenant  = store.getState().auth.tenantId
+    || localStorage.getItem("zoiko_tenant")
+    || import.meta.env.VITE_DEV_TENANT
+    || "";
+  const verifyHeaders: Record<string, string> = {};
+  if (devJwt)  verifyHeaders["Authorization"] = `Bearer ${devJwt}`;
+  if (tenant)  verifyHeaders["X-Tenant-ID"]   = tenant;
+
+  _sessionVerifier.get("/auth/me", { headers: verifyHeaders })
+    .then(() => {
+      // /auth/me succeeded → the session is still valid.
+      // The original 401 was from a supplementary data endpoint whose data
+      // doesn't exist yet for this case state — not a session expiry. Don't logout.
+    })
+    .catch((verifyErr: AxiosError) => {
+      if (verifyErr.response?.status === 401) {
+        // /auth/me also returned 401 → session is truly expired.
+        store.dispatch(logout());
+        queryClient.clear();
+        window.location.href = "/login";
+      }
+      // Any other error (network, 5xx) → assume session is still valid, do nothing.
+    })
+    .finally(() => { _verifyInFlight = false; });
+}
+
 // Log mode clearly so it's always visible in DevTools console
 if (USE_MOCK) {
   console.warn("[Zoiko] MOCK MODE — data is not real. Set VITE_USE_MOCK=false and restart npm run dev.");
@@ -60,9 +102,14 @@ function attachInterceptors(instance: AxiosInstance): AxiosInstance {
     (error: AxiosError) => {
       const status = error.response?.status;
       if (status === 401) {
-        store.dispatch(logout());
-        queryClient.clear();
-        window.location.href = "/login";
+        // Don't logout immediately — verify the session first.
+        // CaseDetail fires ~10 parallel queries; some endpoints legitimately
+        // return 401 when the case hasn't reached that pipeline stage yet
+        // (e.g. no token issued, no variances). Logging out on those is wrong.
+        // _handleUnauthorized() calls /auth/me on a bare axios instance:
+        //   • In DEV_MODE the backend bypasses JWT → /auth/me succeeds → no logout.
+        //   • In production an expired token fails /auth/me too → logout correctly.
+        _handleUnauthorized();
       }
       if (status === 503) console.warn("503 — OPA unreachable (fail-closed)");
       return Promise.reject(error);

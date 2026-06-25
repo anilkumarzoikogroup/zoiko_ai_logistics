@@ -43,7 +43,7 @@ const NEXT_ACTION: Partial<Record<CaseState, {
 }>> = {
   NEW:               { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "AI analysis done. Review and propose recovery in the Analyst queue." },
   EVIDENCE_PENDING:  { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "Evidence is being collected. Once done, propose recovery." },
-  FINDING_GENERATED: { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "96% confidence overcharge detected. Open Analyst Review to propose recovery." },
+  FINDING_GENERATED: { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "Overcharge detected. Open Analyst Review to propose recovery." },
   APPROVAL_PENDING:  { label: "Manager Approval", route: "/manager",  icon: CheckCircle2,color: "text-amber-700",   bgColor: "bg-amber-50 border-amber-200", explain: "Recovery proposed. A manager must approve to issue the governance token." },
   EXECUTION_READY:   { label: "Execute Recovery", route: "/execute",  icon: Zap,         color: "text-emerald-700", bgColor: "bg-emerald-50 border-emerald-200", explain: "Token ACTIVE — 15-min window. Run 8-gate execution to issue the credit memo." },
 };
@@ -219,6 +219,17 @@ export default function CaseDetail() {
   const completedStages = STATE_STAGE[cs.state] ?? 4;
   const next = NEXT_ACTION[cs.state];
 
+  const nextExplain = (() => {
+    if (cs.state === "FINDING_GENERATED" && findQ.data) {
+      const score = findQ.data.ai_confidence ?? findQ.data.confidence;
+      const pct = score != null ? `${(score * 100).toFixed(0)}%` : null;
+      return pct
+        ? `${pct} confidence overcharge detected. Open Analyst Review to propose recovery.`
+        : next?.explain;
+    }
+    return next?.explain;
+  })();
+
   const stageStatus = (n: number): "done" | "active" | "pending" =>
     n < completedStages ? "done" : n === completedStages ? "active" : "pending";
 
@@ -260,7 +271,18 @@ export default function CaseDetail() {
           { label: "Invoice Amount",  value: formatCurrency(cs.amount, cs.currency),                                                      top: "border-l-blue-500",   val: "text-slate-800" },
           { label: "Overcharge",      value: cs.diff > 0 ? formatCurrency(cs.diff, cs.currency) : "—",                                    top: "border-l-red-500",    val: "text-red-600"   },
           { label: "Contract Rate",   value: valQ.data ? formatCurrency(valQ.data.contract_amount, cs.currency) : formatCurrency(cs.amount - cs.diff, cs.currency), top: "border-l-amber-500", val: "text-amber-600" },
-          { label: "AI Confidence",   value: cs.confidence ? `${(cs.confidence * 100).toFixed(0)}%` : (findQ.data ? `${(findQ.data.confidence * 100).toFixed(0)}%` : "—"), top: "border-l-emerald-500", val: (cs.confidence ?? 0) >= 0.9 ? "text-emerald-600 font-bold" : "text-amber-600" },
+          {
+            label: findQ.data?.ai_confidence != null ? "AI Confidence" : "Rule Score",
+            value: findQ.data?.ai_confidence != null
+              ? `${(findQ.data.ai_confidence * 100).toFixed(0)}%`
+              : cs.confidence
+                ? `${(cs.confidence * 100).toFixed(0)}%`
+                : "—",
+            top: "border-l-emerald-500",
+            val: (findQ.data?.ai_confidence ?? cs.confidence ?? 0) >= 0.9
+              ? "text-emerald-600 font-bold"
+              : "text-amber-600",
+          },
         ].map(k => (
           <div key={k.label} className={cn("bg-white rounded-xl border border-slate-200 border-l-4 px-4 py-3.5 shadow-sm", k.top)}>
             <p className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">{k.label}</p>
@@ -278,7 +300,7 @@ export default function CaseDetail() {
             </div>
             <div>
               <p className={cn("font-bold text-sm", next.color)}>Action required: {next.label}</p>
-              <p className={cn("text-xs mt-0.5 leading-relaxed", next.color.replace("700","600"))}>{next.explain}</p>
+              <p className={cn("text-xs mt-0.5 leading-relaxed", next.color.replace("700","600"))}>{nextExplain}</p>
             </div>
           </div>
           <button

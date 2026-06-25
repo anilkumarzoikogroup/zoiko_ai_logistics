@@ -212,7 +212,18 @@ export default function ClaimDetail() {
           { label: "Claimed Amount", value: formatCurrency(cs.amount, cs.currency), top: "border-l-blue-500", val: "text-slate-800" },
           { label: "Claim Type",     value: cs.claim_type,                          top: "border-l-indigo-500", val: "text-indigo-600" },
           { label: "Signed in as",   value: user,                                   top: "border-l-amber-500", val: "text-amber-600" },
-          { label: "AI Confidence",  value: cs.confidence ? `${(cs.confidence * 100).toFixed(0)}%` : (findQ.data ? `${(findQ.data.confidence * 100).toFixed(0)}%` : "—"), top: "border-l-emerald-500", val: (cs.confidence ?? 0) >= 0.9 ? "text-emerald-600 font-bold" : "text-amber-600" },
+          {
+            label: findQ.data?.ai_confidence != null ? "AI Confidence" : "Rule Score",
+            value: findQ.data?.ai_confidence != null
+              ? `${(findQ.data.ai_confidence * 100).toFixed(0)}%`
+              : cs.confidence
+                ? `${(cs.confidence * 100).toFixed(0)}%`
+                : "—",
+            top: "border-l-emerald-500",
+            val: (findQ.data?.ai_confidence ?? cs.confidence ?? 0) >= 0.9
+              ? "text-emerald-600 font-bold"
+              : "text-amber-600",
+          },
         ].map(k => (
           <div key={k.label} className={cn("bg-white rounded-xl border border-slate-200 border-l-4 px-4 py-3.5 shadow-sm", k.top)}>
             <p className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">{k.label}</p>
@@ -289,7 +300,7 @@ export default function ClaimDetail() {
             <div>
               <p className="font-bold text-sm text-blue-700">Analyst step: Propose Settlement</p>
               <p className="text-xs mt-0.5 leading-relaxed text-blue-600">
-                AI scored this claim at {findQ.data ? `${(findQ.data.confidence * 100).toFixed(0)}%` : "…"} confidence. Propose settling {formatCurrency(cs.amount, cs.currency)} for manager approval.
+                AI scored this claim at {findQ.data ? `${((findQ.data.ai_confidence ?? findQ.data.confidence) * 100).toFixed(0)}%` : "…"} confidence. Propose settling {formatCurrency(cs.amount, cs.currency)} for manager approval.
               </p>
             </div>
           </div>
@@ -418,16 +429,38 @@ export default function ClaimDetail() {
         <SectionCard title="AI Reasoning (SC-002)" icon={Brain} status={stageStatus(5)}>
           {findQ.data ? (
             <div className="space-y-3">
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-4">
                 <div className="text-center">
                   <p className={cn("text-3xl font-bold", findQ.data.confidence >= 0.9 ? "text-emerald-600" : "text-amber-600")}>{(findQ.data.confidence * 100).toFixed(0)}%</p>
                   <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">Rule Score</p>
                 </div>
+                {findQ.data.ai_confidence != null && (
+                  <div className="text-center">
+                    <p className={cn("text-3xl font-bold", findQ.data.ai_confidence >= 0.9 ? "text-blue-600" : "text-amber-600")}>
+                      {(findQ.data.ai_confidence * 100).toFixed(0)}%
+                    </p>
+                    <p className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">AI Score</p>
+                  </div>
+                )}
                 <div className="flex-1 rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2">
                   <p className="text-xs font-bold text-emerald-700">Liability + policy-cap scored</p>
                   <p className="text-[10px] text-emerald-600 mt-0.5">Weighted rule-based scoring (SC-002)</p>
+                  {findQ.data.risk_level && (
+                    <span className={cn("inline-block mt-1.5 text-[10px] font-bold px-2 py-0.5 rounded border",
+                      findQ.data.risk_level === "HIGH"   ? "bg-red-50    border-red-200    text-red-700"    :
+                      findQ.data.risk_level === "MEDIUM" ? "bg-amber-50  border-amber-200  text-amber-700"  :
+                                                           "bg-emerald-50 border-emerald-200 text-emerald-700")}>
+                      AI Risk: {findQ.data.risk_level}
+                    </span>
+                  )}
                 </div>
               </div>
+              {findQ.data.ai_reasoning && (
+                <div className="rounded-lg bg-blue-50 border border-blue-100 px-3 py-2.5">
+                  <p className="text-[9px] text-blue-500 font-bold uppercase tracking-wide mb-1">AI Reasoning</p>
+                  <p className="text-[11px] text-blue-800 leading-relaxed">{findQ.data.ai_reasoning}</p>
+                </div>
+              )}
               {Object.entries(findQ.data.trace ?? {}).filter(([k]) => k !== "weighted_average").map(([k, v]) => (
                 <div key={k} className="flex items-center gap-2 rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-[10px]">
                   <span className="font-mono text-purple-700 flex-1">{k}</span>
