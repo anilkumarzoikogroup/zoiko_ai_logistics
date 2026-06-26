@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "@/store";
@@ -127,24 +127,24 @@ function KpiCard({
     <div
       onClick={onClick}
       style={{
-        background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12,
-        padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
+        background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12,
+        padding: "16px 18px", boxShadow: "var(--dm-shadow)",
         cursor: onClick ? "pointer" : "default", position: "relative", overflow: "hidden",
         transition: "box-shadow 0.15s, transform 0.15s",
       }}
       onMouseEnter={e => { if (onClick) { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 16px rgba(0,0,0,0.10)"; (e.currentTarget as HTMLDivElement).style.transform = "translateY(-1px)"; } }}
-      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "0 1px 4px rgba(0,0,0,0.04)"; (e.currentTarget as HTMLDivElement).style.transform = "none"; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.boxShadow = "var(--dm-shadow)"; (e.currentTarget as HTMLDivElement).style.transform = "none"; }}
     >
       <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, borderRadius: "12px 12px 0 0", background: accent }} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <p style={{ fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</p>
+        <p style={{ fontSize: 11, fontWeight: 700, color: "var(--dm-text-5)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</p>
         <div style={{ width: 32, height: 32, borderRadius: 8, background: accent + "18", display: "flex", alignItems: "center", justifyContent: "center" }}>
           <Icon style={{ width: 15, height: 15, color: accent }} />
         </div>
       </div>
-      <p style={{ fontSize: 22, fontWeight: 800, color: "#1e293b", margin: "0 0 4px" }}>{value}</p>
+      <p style={{ fontSize: 22, fontWeight: 800, color: "var(--dm-text-1)", margin: "0 0 4px" }}>{value}</p>
       {sub && (
-        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: subUp ? "#16a34a" : "#64748b", fontWeight: 600 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: subUp ? "#16a34a" : "var(--dm-text-4)", fontWeight: 600 }}>
           {subUp !== undefined && (
             subUp ? <TrendingUp style={{ width: 11, height: 11 }} /> : <TrendingDown style={{ width: 11, height: 11 }} />
           )}
@@ -181,8 +181,8 @@ function ActionCard({
           <Icon style={{ width: 16, height: 16, color }} />
         </div>
         <div>
-          <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>{title}</p>
-          <p style={{ fontSize: 11, color: "#64748b", margin: 0 }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: "var(--dm-text-1)", margin: 0 }}>{title}</p>
+          <p style={{ fontSize: 11, color: "var(--dm-text-4)", margin: 0 }}>
             {count} case{count !== 1 ? "s" : ""}
             {amount && amount > 0 ? ` · ${formatCurrency(amount)}` : ""}
           </p>
@@ -210,6 +210,17 @@ export default function Home() {
   const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats,            refetchInterval: 10000 });
   const [activeTab, setActiveTab] = useState<TabKey>("All");
   const [showSubmitMenu, setShowSubmitMenu] = useState(false);
+
+  // Dark mode detection for SVG/chart colors (CSS custom properties can't target SVG presentation attributes)
+  const [isDark, setIsDark] = useState(() => document.documentElement.classList.contains("dark"));
+  useEffect(() => {
+    const el = document.documentElement;
+    const obs = new MutationObserver(() => setIsDark(el.classList.contains("dark")));
+    obs.observe(el, { attributeFilter: ["class"] });
+    return () => obs.disconnect();
+  }, []);
+  const chartGridColor = isDark ? "#1e293b" : "#f1f5f9";
+  const chartTickColor = isDark ? "#64748b" : "#94a3b8";
 
   // ── Derived metrics ──────────────────────────────────────────────────────────
   const isLoading        = casesLoading || claimsLoading;
@@ -272,10 +283,10 @@ export default function Home() {
       {/* ── Welcome banner ───────────────────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <h1 style={{ fontSize: 20, fontWeight: 800, color: "#1e293b", margin: 0 }}>
+          <h1 style={{ fontSize: 20, fontWeight: 800, color: "var(--dm-text-1)", margin: 0 }}>
             Welcome back, {firstName}
           </h1>
-          <p style={{ fontSize: 13, color: "#64748b", margin: "2px 0 0" }}>
+          <p style={{ fontSize: 13, color: "var(--dm-text-4)", margin: "2px 0 0" }}>
             {role === "analyst" && "Review flagged invoices and propose recoveries"}
             {role === "manager" && "Approve pending recovery proposals"}
             {role === "admin"   && "Freight overcharge recovery overview"}
@@ -300,21 +311,21 @@ export default function Home() {
               <div style={{ position: "fixed", inset: 0, zIndex: 10 }} onClick={() => setShowSubmitMenu(false)} />
               <div style={{
                 position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 11,
-                background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10,
-                boxShadow: "0 8px 24px rgba(0,0,0,0.12)", minWidth: 170, overflow: "hidden",
+                background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 10,
+                boxShadow: "var(--dm-shadow-md)", minWidth: 170, overflow: "hidden",
               }}>
                 <button
                   onClick={() => { setShowSubmitMenu(false); nav("/cases/new"); }}
-                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "var(--dm-text-2)", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--dm-surface-subtle)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <FileText style={{ width: 14, height: 14, color: "#2563eb" }} /> Submit Invoice
                 </button>
                 <button
                   onClick={() => { setShowSubmitMenu(false); nav("/claims/new"); }}
-                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "var(--dm-text-2)", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--dm-surface-subtle)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <FileWarning style={{ width: 14, height: 14, color: "#7c3aed" }} /> Submit Claim
@@ -326,14 +337,18 @@ export default function Home() {
       </div>
 
       {/* ── Tab row ───────────────────────────────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 10, padding: 6 }}>
         {TABS.map(({ key, icon: Icon }) => {
           const active = activeTab === key;
           const live = LIVE_TABS.includes(key);
           return (
             <button
               key={key}
-              onClick={() => setActiveTab(key)}
+              onClick={() => {
+                if (key === "Invoices") { nav("/cases");  return; }
+                if (key === "Claims")   { nav("/claims"); return; }
+                setActiveTab(key);
+              }}
               title={live ? undefined : "Coming soon — no backend slice yet"}
               style={{
                 display: "flex", alignItems: "center", gap: 6,
@@ -343,7 +358,7 @@ export default function Home() {
                 fontSize: 12.5, fontWeight: 700, cursor: "pointer",
                 transition: "background 0.15s, color 0.15s",
               }}
-              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseEnter={e => { if (!active) e.currentTarget.style.background = "var(--dm-surface-subtle)"; }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = "transparent"; }}
             >
               <Icon style={{ width: 14, height: 14 }} />
@@ -354,19 +369,19 @@ export default function Home() {
       </div>
 
       {!LIVE_TABS.includes(activeTab) ? (
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 56, textAlign: "center", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-          {(() => { const Icon = TABS.find(t => t.key === activeTab)!.icon; return <Icon style={{ width: 36, height: 36, color: "#cbd5e1", margin: "0 auto 12px" }} />; })()}
-          <p style={{ fontSize: 15, fontWeight: 700, color: "#475569", margin: 0 }}>{activeTab} — coming soon</p>
-          <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>This slice doesn't have a backend yet. Check back once it's built.</p>
+        <div style={{ background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12, padding: 56, textAlign: "center", boxShadow: "var(--dm-shadow)" }}>
+          {(() => { const Icon = TABS.find(t => t.key === activeTab)!.icon; return <Icon style={{ width: 36, height: 36, color: "var(--dm-text-6)", margin: "0 auto 12px" }} />; })()}
+          <p style={{ fontSize: 15, fontWeight: 700, color: "var(--dm-text-3)", margin: 0 }}>{activeTab} — coming soon</p>
+          <p style={{ fontSize: 12, color: "var(--dm-text-5)", marginTop: 4 }}>This slice doesn't have a backend yet. Check back once it's built.</p>
         </div>
       ) : (
       <>
       {/* ── Action Required ───────────────────────────────────────────────── */}
       {hasActions && (
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+        <div style={{ background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12, padding: "16px 18px", boxShadow: "var(--dm-shadow)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 14 }}>
             <AlertTriangle style={{ width: 15, height: 15, color: "#f59e0b" }} />
-            <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Action Required</p>
+            <p style={{ fontSize: 13, fontWeight: 700, color: "var(--dm-text-1)", margin: 0 }}>Action Required</p>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {(role === "analyst" || role === "admin") && (
@@ -427,20 +442,20 @@ export default function Home() {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 0.9fr", gap: 14 }}>
 
         {/* Carrier Scorecard */}
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+        <div style={{ background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12, padding: "16px 18px", boxShadow: "var(--dm-shadow)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-              <Truck style={{ width: 14, height: 14, color: "#64748b" }} />
-              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Counterparty Scorecard</p>
+              <Truck style={{ width: 14, height: 14, color: "var(--dm-text-4)" }} />
+              <p style={{ fontSize: 13, fontWeight: 700, color: "var(--dm-text-1)", margin: 0 }}>Counterparty Scorecard</p>
             </div>
             <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
               All <ChevronRight style={{ width: 12, height: 12 }} />
             </button>
           </div>
           {carriers.length === 0 ? (
-            <div style={{ height: 140, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#cbd5e1", gap: 8 }}>
+            <div style={{ height: 140, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--dm-text-6)", gap: 8 }}>
               <Truck style={{ width: 28, height: 28 }} />
-              <p style={{ fontSize: 12, color: "#94a3b8", margin: 0 }}>No carrier data yet</p>
+              <p style={{ fontSize: 12, color: "var(--dm-text-5)", margin: 0 }}>No carrier data yet</p>
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -449,14 +464,14 @@ export default function Home() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <span style={{ width: 8, height: 8, borderRadius: "50%", background: c.color, display: "inline-block", flexShrink: 0 }} />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: "#334155" }}>{c.carrier}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--dm-text-2)" }}>{c.carrier}</span>
                     </div>
                     <div style={{ textAlign: "right" }}>
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#ef4444" }}>{formatCurrency(c.overcharge)}</span>
-                      <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 5 }}>{c.pct}%</span>
+                      <span style={{ fontSize: 10, color: "var(--dm-text-5)", marginLeft: 5 }}>{c.pct}%</span>
                     </div>
                   </div>
-                  <div style={{ background: "#f1f5f9", borderRadius: 99, height: 5, overflow: "hidden" }}>
+                  <div style={{ background: "var(--dm-surface-muted)", borderRadius: 99, height: 5, overflow: "hidden" }}>
                     <div style={{ height: "100%", borderRadius: 99, background: c.color, width: `${Math.min(c.pct, 100)}%`, transition: "width 0.8s ease" }} />
                   </div>
                 </div>
@@ -466,25 +481,25 @@ export default function Home() {
         </div>
 
         {/* Monthly Recovery Trend */}
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+        <div style={{ background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12, padding: "16px 18px", boxShadow: "var(--dm-shadow)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 14 }}>
-            <BarChart3 style={{ width: 14, height: 14, color: "#64748b" }} />
-            <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Monthly Recovery</p>
+            <BarChart3 style={{ width: 14, height: 14, color: "var(--dm-text-4)" }} />
+            <p style={{ fontSize: 13, fontWeight: 700, color: "var(--dm-text-1)", margin: 0 }}>Monthly Recovery</p>
           </div>
           {trend.length === 0 ? (
-            <div style={{ height: 150, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>
+            <div style={{ height: 150, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--dm-text-5)", fontSize: 12 }}>
               Submit invoices to see trend
             </div>
           ) : (
             <ResponsiveContainer width="100%" height={160}>
               <BarChart data={trend} margin={{ top: 4, right: 4, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} axisLine={false} tickLine={false}
+                <CartesianGrid strokeDasharray="3 3" stroke={chartGridColor} vertical={false} />
+                <XAxis dataKey="month" tick={{ fontSize: 10, fill: chartTickColor }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: chartTickColor }} axisLine={false} tickLine={false}
                        tickFormatter={(v: number) => `$${(v/1000).toFixed(0)}k`} />
                 <Tooltip
                   formatter={(v: number, n: string) => [formatCurrency(v), n === "billed" ? "Overcharged" : "Recovered"]}
-                  contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                  contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid var(--dm-border)", background: "var(--dm-surface)", color: "var(--dm-text-1)" }}
                 />
                 <Bar dataKey="billed"    fill="#fee2e2" radius={[4,4,0,0]} name="billed"    />
                 <Bar dataKey="recovered" fill="#10b981" radius={[4,4,0,0]} name="recovered" />
@@ -496,26 +511,26 @@ export default function Home() {
               { color: "#10b981", border: "#10b981", label: "Recovered"   }].map(l => (
               <div key={l.label} style={{ display: "flex", alignItems: "center", gap: 5 }}>
                 <span style={{ width: 10, height: 10, borderRadius: 3, background: l.color, border: `1.5px solid ${l.border}`, display: "inline-block" }} />
-                <span style={{ fontSize: 10, color: "#64748b" }}>{l.label}</span>
+                <span style={{ fontSize: 10, color: "var(--dm-text-4)" }}>{l.label}</span>
               </div>
             ))}
           </div>
         </div>
 
         {/* Recovery Funnel */}
-        <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: "16px 18px", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+        <div style={{ background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12, padding: "16px 18px", boxShadow: "var(--dm-shadow)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 14 }}>
-            <TrendingUp style={{ width: 14, height: 14, color: "#64748b" }} />
-            <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Recovery Pipeline</p>
+            <TrendingUp style={{ width: 14, height: 14, color: "var(--dm-text-4)" }} />
+            <p style={{ fontSize: 13, fontWeight: 700, color: "var(--dm-text-1)", margin: 0 }}>Recovery Pipeline</p>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {funnelData.map((f, i) => (
               <div key={f.label}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: "#475569", fontWeight: 600 }}>{f.label}</span>
-                  <span style={{ fontSize: 12, fontWeight: 800, color: "#1e293b" }}>{f.value}</span>
+                  <span style={{ fontSize: 11, color: "var(--dm-text-3)", fontWeight: 600 }}>{f.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 800, color: "var(--dm-text-1)" }}>{f.value}</span>
                 </div>
-                <div style={{ background: "#f1f5f9", borderRadius: 99, height: 6, overflow: "hidden" }}>
+                <div style={{ background: "var(--dm-surface-muted)", borderRadius: 99, height: 6, overflow: "hidden" }}>
                   <div style={{
                     height: "100%", borderRadius: 99, background: f.color,
                     width: `${funnelData[0].value > 0 ? Math.round((f.value / funnelData[0].value) * 100) : 0}%`,
@@ -526,20 +541,20 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #f1f5f9" }}>
-            <p style={{ fontSize: 10, color: "#94a3b8", margin: "0 0 2px", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>Pending Approval</p>
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--dm-surface-muted)" }}>
+            <p style={{ fontSize: 10, color: "var(--dm-text-5)", margin: "0 0 2px", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>Pending Approval</p>
             <p style={{ fontSize: 16, fontWeight: 800, color: "#d97706", margin: 0 }}>
               {formatCurrency(pendingApprovalAmt)}
             </p>
-            <p style={{ fontSize: 10, color: "#94a3b8", margin: "2px 0 0" }}>{needsApproval.length} cases waiting</p>
+            <p style={{ fontSize: 10, color: "var(--dm-text-5)", margin: "2px 0 0" }}>{needsApproval.length} cases waiting</p>
           </div>
         </div>
       </div>
 
       {/* ── Recent Activity ──────────────────────────────────────────────── */}
-      <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #f1f5f9" }}>
-          <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Recent Activity</p>
+      <div style={{ background: "var(--dm-surface)", border: "1px solid var(--dm-border)", borderRadius: 12, overflow: "hidden", boxShadow: "var(--dm-shadow)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--dm-surface-muted)" }}>
+          <p style={{ fontSize: 13, fontWeight: 700, color: "var(--dm-text-1)", margin: 0 }}>Recent Activity</p>
           <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             View all <ArrowRight style={{ width: 12, height: 12 }} />
           </button>
@@ -549,19 +564,19 @@ export default function Home() {
           <div>
             {[0,1,2,3,4].map(i => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 16px", borderBottom: i < 4 ? "1px solid #f8fafc" : "none" }}>
-                <div className="animate-pulse" style={{ height: 10, width: 64, background: "#f1f5f9", borderRadius: 999 }} />
-                <div className="animate-pulse" style={{ height: 10, width: 96, background: "#f1f5f9", borderRadius: 999 }} />
-                <div className="animate-pulse" style={{ height: 10, width: 80, background: "#f1f5f9", borderRadius: 999, marginLeft: "auto" }} />
-                <div className="animate-pulse" style={{ height: 10, width: 64, background: "#f1f5f9", borderRadius: 999 }} />
-                <div className="animate-pulse" style={{ height: 18, width: 72, background: "#f1f5f9", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 10, width: 64, background: "var(--dm-surface-muted)", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 10, width: 96, background: "var(--dm-surface-muted)", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 10, width: 80, background: "var(--dm-surface-muted)", borderRadius: 999, marginLeft: "auto" }} />
+                <div className="animate-pulse" style={{ height: 10, width: 64, background: "var(--dm-surface-muted)", borderRadius: 999 }} />
+                <div className="animate-pulse" style={{ height: 18, width: 72, background: "var(--dm-surface-muted)", borderRadius: 999 }} />
               </div>
             ))}
           </div>
         ) : recentActivity.length === 0 ? (
           <div style={{ padding: 48, textAlign: "center" }}>
-            <FileText style={{ width: 32, height: 32, color: "#cbd5e1", margin: "0 auto 10px" }} />
-            <p style={{ fontSize: 14, color: "#64748b", margin: 0 }}>No cases or claims yet</p>
-            <p style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>Submit your first invoice to start detecting overcharges</p>
+            <FileText style={{ width: 32, height: 32, color: "var(--dm-text-6)", margin: "0 auto 10px" }} />
+            <p style={{ fontSize: 14, color: "var(--dm-text-4)", margin: 0 }}>No cases or claims yet</p>
+            <p style={{ fontSize: 12, color: "var(--dm-text-5)", marginTop: 4 }}>Submit your first invoice to start detecting overcharges</p>
             <button
               onClick={() => nav("/cases/new")}
               style={{ marginTop: 14, padding: "8px 18px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer" }}
@@ -572,9 +587,9 @@ export default function Home() {
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ background: "#f8fafc" }}>
+              <tr style={{ background: "var(--dm-surface-subtle)" }}>
                 {["Case ID", "Slice", "Counterparty", "Amount", "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
-                  <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #f1f5f9" }}>
+                  <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "var(--dm-text-5)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--dm-surface-muted)" }}>
                     {h}
                   </th>
                 ))}
@@ -586,7 +601,7 @@ export default function Home() {
                   key={c.id}
                   onClick={() => nav(c.slice === "Claims" ? `/claims/${c.id}` : `/cases/${c.id}`)}
                   style={{ cursor: "pointer", borderBottom: i < recentActivity.length - 1 ? "1px solid #f8fafc" : "none", transition: "background 0.1s" }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseEnter={e => (e.currentTarget.style.background = "var(--dm-surface-subtle)")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <td style={{ padding: "11px 16px", fontFamily: "monospace", fontSize: 11, color: "#2563eb" }}>{c.id.slice(0, 8)}…</td>
@@ -598,23 +613,23 @@ export default function Home() {
                       {c.slice}
                     </span>
                   </td>
-                  <td style={{ padding: "11px 16px", fontSize: 12, fontWeight: 600, color: "#334155" }}>{c.carrier || "—"}</td>
-                  <td style={{ padding: "11px 16px", fontSize: 12, color: "#334155" }}>{formatCurrency(c.amount)}</td>
+                  <td style={{ padding: "11px 16px", fontSize: 12, fontWeight: 600, color: "var(--dm-text-2)" }}>{c.carrier || "—"}</td>
+                  <td style={{ padding: "11px 16px", fontSize: 12, color: "var(--dm-text-2)" }}>{formatCurrency(c.amount)}</td>
                   <td style={{ padding: "11px 16px", fontSize: 12, fontWeight: 700, color: c.diff > 0 ? "#dc2626" : "#94a3b8" }}>
                     {c.diff > 0 ? formatCurrency(c.diff) : "—"}
                   </td>
                   <td style={{ padding: "11px 16px" }}>
                     {c.confidence ? (
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 40, height: 5, background: "#f1f5f9", borderRadius: 99, overflow: "hidden" }}>
+                        <div style={{ width: 40, height: 5, background: "var(--dm-surface-muted)", borderRadius: 99, overflow: "hidden" }}>
                           <div style={{ height: "100%", background: c.confidence >= 0.9 ? "#10b981" : c.confidence >= 0.7 ? "#f59e0b" : "#ef4444", width: `${c.confidence * 100}%`, borderRadius: 99 }} />
                         </div>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: "#475569" }}>{(c.confidence * 100).toFixed(0)}%</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--dm-text-3)" }}>{(c.confidence * 100).toFixed(0)}%</span>
                       </div>
-                    ) : <span style={{ fontSize: 11, color: "#cbd5e1" }}>—</span>}
+                    ) : <span style={{ fontSize: 11, color: "var(--dm-text-6)" }}>—</span>}
                   </td>
                   <td style={{ padding: "11px 16px" }}><StateBadge state={c.state} /></td>
-                  <td style={{ padding: "11px 16px", fontSize: 11, color: "#94a3b8" }}>
+                  <td style={{ padding: "11px 16px", fontSize: 11, color: "var(--dm-text-5)" }}>
                     {new Date(c.opened_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" })}
                   </td>
                 </tr>
@@ -644,7 +659,7 @@ export default function Home() {
             </div>
             <div>
               <p style={{ fontSize: 11, fontWeight: 700, color: "#fff", margin: 0 }}>{s.title}</p>
-              <p style={{ fontSize: 10, color: "#64748b", margin: 0 }}>{s.sub}</p>
+              <p style={{ fontSize: 10, color: "var(--dm-text-4)", margin: 0 }}>{s.sub}</p>
             </div>
           </div>
         ))}

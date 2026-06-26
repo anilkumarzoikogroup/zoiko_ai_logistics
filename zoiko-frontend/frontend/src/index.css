@@ -29,8 +29,99 @@
     --zoiko-purple:  #8b5cf6;
     --zoiko-teal:    #06b6d4;
     --zoiko-emerald: #10b981;
+
+    /* Dark-mode semantic tokens — used by inline-styled components (e.g. Home.tsx).
+       These resolve via CSS custom properties so inline style={{ color: "var(--dm-text-1)" }}
+       automatically adapts when .dark is toggled on <html>. */
+    --dm-surface:         #ffffff;
+    --dm-surface-subtle:  #f8fafc;
+    --dm-surface-muted:   #f1f5f9;
+    --dm-text-1:          #1e293b;
+    --dm-text-2:          #334155;
+    --dm-text-3:          #475569;
+    --dm-text-4:          #64748b;
+    --dm-text-5:          #94a3b8;
+    --dm-text-6:          #cbd5e1;
+    --dm-border:          #e2e8f0;
+    --dm-shadow:          0 1px 4px rgba(0,0,0,0.04);
+    --dm-shadow-md:       0 4px 16px rgba(0,0,0,0.08);
   }
 }
+
+/* ── Dark mode CSS variable overrides ───────────────────────────────────── */
+.dark {
+  color-scheme: dark;
+  --background:          222 47% 7%;
+  --foreground:          210 40% 95%;
+  --card:                222 47% 10%;
+  --card-foreground:     210 40% 95%;
+  --primary:             215 100% 60%;
+  --primary-foreground:  0 0% 100%;
+  --secondary:           217 33% 15%;
+  --secondary-foreground:210 40% 95%;
+  --muted:               217 33% 15%;
+  --muted-foreground:    215 20% 55%;
+  --accent:              217 33% 15%;
+  --accent-foreground:   210 40% 95%;
+  --destructive:         0 63% 31%;
+  --destructive-foreground: 210 40% 95%;
+  --border:              217 33% 18%;
+  --input:               217 33% 18%;
+  --ring:                215 100% 60%;
+
+  /* Dark-mode semantic tokens */
+  --dm-surface:         #0f172a;
+  --dm-surface-subtle:  #1e293b;
+  --dm-surface-muted:   #1e293b;
+  --dm-text-1:          #f1f5f9;
+  --dm-text-2:          #e2e8f0;
+  --dm-text-3:          #cbd5e1;
+  --dm-text-4:          #94a3b8;
+  --dm-text-5:          #64748b;
+  --dm-text-6:          #475569;
+  --dm-border:          #1e293b;
+  --dm-shadow:          0 1px 4px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04);
+  --dm-shadow-md:       0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DARK MODE — TAILWIND UTILITY OVERRIDES
+   Uses :where() so specificity stays at (0,1,0). This means any explicit
+   dark:* Tailwind variant (specificity 0,2,0) in AppLayout always wins —
+   only elements WITHOUT explicit dark: variants (Cases, Claims, etc.) are
+   affected. Placed outside @layer for correct cascade ordering.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* — Backgrounds — */
+.dark :where(.bg-white)            { background-color: #0f172a; }
+.dark :where(.bg-slate-50)         { background-color: #1e293b; }
+.dark :where(.bg-slate-100)        { background-color: #1e293b; }
+.dark :where(.bg-slate-200)        { background-color: #334155; }
+.dark :where(.hover\:bg-white):hover      { background-color: #1e293b; }
+.dark :where(.hover\:bg-slate-50):hover   { background-color: #253347; }
+.dark :where(.hover\:bg-slate-100):hover  { background-color: #1e293b; }
+
+/* — Text —
+   Only darken text that is too dark for dark backgrounds. slate-400 (#94a3b8)
+   and lighter are already readable on dark bg — do not override them. */
+.dark :where(.text-slate-900) { color: #f1f5f9; }
+.dark :where(.text-slate-800) { color: #e2e8f0; }
+.dark :where(.text-slate-700) { color: #cbd5e1; }
+.dark :where(.text-slate-600) { color: #94a3b8; }
+
+/* — Borders — */
+.dark :where(.border-slate-300) { border-color: #334155; }
+.dark :where(.border-slate-200) { border-color: #1e293b; }
+.dark :where(.border-slate-100) { border-color: #0f172a; }
+
+/* — Dividers — */
+.dark :where(.divide-slate-50)  > :not([hidden]) ~ :not([hidden]) { border-color: #0f172a; }
+.dark :where(.divide-slate-100) > :not([hidden]) ~ :not([hidden]) { border-color: #1e293b; }
+.dark :where(.divide-y)         > :not([hidden]) ~ :not([hidden]) { border-color: #1e293b; }
+
+/* — Scrollbar — */
+.dark ::-webkit-scrollbar-thumb       { background: #334155; }
+.dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
 @layer base {
   * { @apply border-border; }
