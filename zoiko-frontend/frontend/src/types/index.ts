@@ -114,6 +114,18 @@ export interface Claim {
   approved_amount?: number | null;
 }
 
+export interface NegotiationRound {
+  round: number;
+  action: string;         // COUNTER | ACCEPT | PARTIALLY_ACCEPT | REJECT
+  from_status: string;
+  to_status: string;
+  approved_amount: number | null;
+  note: string;
+  occurred_at: string;
+  actor_sub?: string;
+}
+
+
 export interface CaseEvent {
   id: string;
   case_id: string;

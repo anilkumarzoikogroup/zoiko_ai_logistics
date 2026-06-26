@@ -2369,6 +2369,24 @@ def ui_negotiate_claim(case_id: str, body: NegotiateClaimRequest, claims: ZoikoC
     return _sc002_routes.ui_negotiate_claim(_r, _raw_exec, claims.tenant_id, case_id, body, claims.sub)
 
 
+@v1_router.get("/claims/{case_id}/negotiation-history", tags=["ui"])
+def ui_get_negotiation_history(case_id: str, claims: ZoikoClaims = Depends(get_claims)):
+    """All carrier counter-offer rounds for a claim, in chronological order."""
+    return _sc002_routes.ui_get_negotiation_history(_r, claims.tenant_id, case_id)
+
+
+@v1_router.post("/claims/{case_id}/lines", tags=["ui"], status_code=201)
+def ui_add_claim_line(case_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    """Add a new line item to an existing claim. Sum of lines must not exceed claims.claimed_amount."""
+    return _sc002_routes.ui_add_claim_line(_raw_exec, _r, claims.tenant_id, case_id, body)
+
+
+@v1_router.patch("/claims/{case_id}/lines/{line_id}", tags=["ui"])
+def ui_update_claim_line(case_id: str, line_id: str, body: dict, claims: ZoikoClaims = Depends(get_claims)):
+    """Update description and/or amount of a claim line."""
+    return _sc002_routes.ui_update_claim_line(_raw_exec, _r, claims.tenant_id, case_id, line_id, body)
+
+
 # ── Case events ────────────────────────────────────────────────────────────────
 
 @v1_router.get("/cases/{case_id}/events", tags=["ui"])
@@ -4043,3 +4061,4 @@ try:
 except Exception as _domain_err:
     import logging as _log
     _log.getLogger("zoiko.domain").warning("Domain routers not fully loaded: %s", _domain_err)
+

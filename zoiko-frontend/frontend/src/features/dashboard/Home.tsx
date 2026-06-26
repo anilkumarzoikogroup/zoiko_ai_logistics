@@ -456,7 +456,7 @@ export default function Home() {
                       <span style={{ fontSize: 10, color: "#94a3b8", marginLeft: 5 }}>{c.pct}%</span>
                     </div>
                   </div>
-                  <div style={{ background: "#f1f5f9", borderRadius: 99, height: 5, overflow: "hidden" }}>
+                  <div style={{ background: "#f1f5f9sdxx", borderRadius: 99, height: 5, overflow: "hidden" }}>
                     <div style={{ height: "100%", borderRadius: 99, background: c.color, width: `${Math.min(c.pct, 100)}%`, transition: "width 0.8s ease" }} />
                   </div>
                 </div>

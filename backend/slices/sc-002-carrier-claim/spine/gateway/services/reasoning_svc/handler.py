@@ -29,7 +29,7 @@ from zoiko_common.crypto.jcs import canonicalize
 
 from services.reasoning_svc import tools as agent_tools
 from services.reasoning_svc.models import FindingResult
-from services.reasoning_svc.rules import RULES as _RULES, SC002_CONFIDENCE
+from services.reasoning_svc.rules import RULES as _RULES, SC002_CONFIDENCE, compute_confidence
 
 _AGENT_ID      = "zoiko.agent.carrier_claim.v1"
 _POLICY_VERSION = "v1.0.0"
@@ -110,29 +110,59 @@ class AgentRuntime:
             "finding": f"Case state: {case_data.get('state', 'unknown')}",
         })
 
-        # Steps 4..N — one step per rule in the selected bundle (SC-001: fuel_charge,
-        # accessorial; SC-002: liability_acknowledged, amount_within_policy_cap)
-        step_num = 3
-        for rule_name, rule in rules.items():
+        # Step 4 — read claim-specific attributes for data-driven rule evaluation
+        claim_attrs = agent_tools.invoke(
+            "read_claim_attributes", db_url=db_url,
+            case_id=case_id, tenant_id=tenant_id,
+        )
+        tools_used.append("read_claim_attributes")
+        steps.append({
+            "step": 4, "tool": "read_claim_attributes",
+            "input":  {"case_id": case_id},
+            "output": {
+                "days_since_filed": claim_attrs.get("days_since_filed"),
+                "claim_type":       claim_attrs.get("claim_type"),
+                "status":           claim_attrs.get("status"),
+                "max_rate":         claim_attrs.get("max_rate"),
+                "claimed_amount":   claim_attrs.get("claimed_amount"),
+                "found":            claim_attrs.get("found", False),
+            },
+            "finding": (
+                f"Claim age: {claim_attrs.get('days_since_filed', 'unknown')} days — "
+                f"type: {claim_attrs.get('claim_type', 'unknown')} — "
+                f"policy cap: {claim_attrs.get('max_rate', 'none on file')}"
+            ),
+        })
+
+        # Steps 5..N — one step per rule, confidence evaluated against actual claim data
+        step_num = 4
+        rule_trace, confidence = compute_confidence(claim_attrs, amount)
+
+        for rule_name, rule_result in {k: v for k, v in rule_trace.items() if k != "weighted_average"}.items():
             step_num += 1
+            rule_cfg = rules.get(rule_name, {})
             steps.append({
-                "step": step_num, "tool": "RULE_ENGINE", "rule": rule_name,
-                "input":      {"amount": amount, "currency": currency},
-                "confidence": rule["confidence"],
-                "weight":     rule["weight"],
-                "finding":    (
-                    f"{rule_name} confirmed — "
-                    f"confidence {rule['confidence']*100:.0f}%, weight {rule['weight']}"
+                "step":           step_num,
+                "tool":           "RULE_ENGINE",
+                "rule":           rule_name,
+                "input":          {"amount": amount, "currency": currency, "claim_attrs": {
+                    "days_since_filed": claim_attrs.get("days_since_filed"),
+                    "max_rate":         claim_attrs.get("max_rate"),
+                    "status":           claim_attrs.get("status"),
+                }},
+                "confidence":     rule_result["confidence"],
+                "base_confidence":rule_result["base_confidence"],
+                "weight":         rule_result["weight"],
+                "finding":        (
+                    f"{rule_name} evaluated — "
+                    f"confidence {rule_result['confidence']*100:.1f}% "
+                    f"(base {rule_result['base_confidence']*100:.0f}%), "
+                    f"weight {rule_result['weight']}"
                 ),
             })
 
         # Final rule step — weighted confidence + action decision
         step_num += 1
-        rule_trace = {
-            rule_name: {"confidence": v["confidence"], "weight": v["weight"]}
-            for rule_name, v in rules.items()
-        }
-        rule_trace["weighted_average"] = confidence
         steps.append({
             "step": step_num, "tool": "RULE_ENGINE", "rule": "compute_confidence",
             "input":      {"rules": list(rules.keys())},

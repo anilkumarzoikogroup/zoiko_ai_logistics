@@ -7,11 +7,11 @@ import {
   ArrowLeft, CheckCircle2, Clock, FileText, Brain, Lock,
   AlertTriangle, ChevronRight, Zap, Users, RefreshCw, GitBranch,
   ShieldCheck, Download, ThumbsUp, ShieldAlert, XCircle, MessageSquareWarning,
-  DollarSign, TrendingUp, BadgeCheck,
+  DollarSign, TrendingUp, BadgeCheck, ArrowRight,
 } from "lucide-react";
+import type { NegotiationRound, ClaimState } from "@/types";
 import { useToast } from "@/hooks/useToast";
 import { useAppSelector } from "@/store";
-import type { ClaimState } from "@/types";
 
 const RECOVERY_STATUS_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
   EXPECTED:                { label: "Awaiting Instrument",  cls: "bg-amber-100 text-amber-700",    dot: "bg-amber-400"   },
@@ -136,14 +136,15 @@ export default function ClaimDetail() {
   const [counterAmount, setCounterAmount] = useState("");
   const [noteText,      setNoteText]      = useState("");
 
-  const cq      = useQuery({ queryKey: ["claim",        id], queryFn: () => zoikoApi.getClaim(id),       retry: 1 });
-  const eventsQ = useQuery({ queryKey: ["claim-events",  id], queryFn: () => zoikoApi.getClaimEvents(id), retry: 1 });
-  const evQ     = useQuery({ queryKey: ["claim-evidence",id], queryFn: () => zoikoApi.getClaimEvidence(id),   retry: false });
-  const findQ   = useQuery({ queryKey: ["claim-finding", id], queryFn: () => zoikoApi.getClaimFinding(id),    retry: false });
-  const propQ   = useQuery({ queryKey: ["claim-proposal",id], queryFn: () => zoikoApi.getClaimProposal(id),   retry: false });
-  const tokenQ  = useQuery({ queryKey: ["claim-token",   id], queryFn: () => zoikoApi.getClaimToken(id), retry: false });
-  const acrQ    = useQuery({ queryKey: ["claim-acr",     id], queryFn: () => zoikoApi.getClaimAcr(id),        retry: false });
-  const linesQ  = useQuery({ queryKey: ["claim-lines",   id], queryFn: () => zoikoApi.getClaimLines(id), retry: false });
+  const cq        = useQuery({ queryKey: ["claim",            id], queryFn: () => zoikoApi.getClaim(id),                    retry: 1 });
+  const eventsQ   = useQuery({ queryKey: ["claim-events",     id], queryFn: () => zoikoApi.getClaimEvents(id),               retry: 1 });
+  const negHistQ  = useQuery({ queryKey: ["claim-neg-history",id], queryFn: () => zoikoApi.getClaimNegotiationHistory(id),   retry: false });
+  const evQ       = useQuery({ queryKey: ["claim-evidence",   id], queryFn: () => zoikoApi.getClaimEvidence(id),             retry: false });
+  const findQ     = useQuery({ queryKey: ["claim-finding",    id], queryFn: () => zoikoApi.getClaimFinding(id),              retry: false });
+  const propQ     = useQuery({ queryKey: ["claim-proposal",   id], queryFn: () => zoikoApi.getClaimProposal(id),             retry: false });
+  const tokenQ    = useQuery({ queryKey: ["claim-token",      id], queryFn: () => zoikoApi.getClaimToken(id),                retry: false });
+  const acrQ      = useQuery({ queryKey: ["claim-acr",        id], queryFn: () => zoikoApi.getClaimAcr(id),                  retry: false });
+  const linesQ    = useQuery({ queryKey: ["claim-lines",      id], queryFn: () => zoikoApi.getClaimLines(id),                retry: false });
 
   // Recovery tracking queries — enabled only once case is dispatched
   const recoveryEnabled = ["DISPATCHED", "OUTCOME_RECORDED", "CLOSED"].includes(cq.data?.state ?? "");
@@ -196,6 +197,7 @@ export default function ClaimDetail() {
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["claim", id] });
       qc.invalidateQueries({ queryKey: ["claim-events", id] });
+      qc.invalidateQueries({ queryKey: ["claim-neg-history", id] });
       setCounterAmount("");
       setNoteText("");
       toast.success(
@@ -362,9 +364,9 @@ export default function ClaimDetail() {
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
-                {negHistory.length > 0 && (
+                {((negHistQ.data?.length ?? negHistory.length) > 0) && (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-800">
-                    Round {negHistory.length}
+                    Round {negHistQ.data?.length ?? negHistory.length}
                   </span>
                 )}
                 <NegStatusBadge status={negStatus} />
@@ -465,47 +467,79 @@ export default function ClaimDetail() {
               </div>
             )}
 
-            {/* ── Negotiation round history ── */}
-            {negHistory.length > 0 && (
-              <div className="space-y-2 pt-3 border-t border-indigo-200">
-                <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wide">
-                  Negotiation History · {negHistory.length} {negHistory.length === 1 ? "round" : "rounds"}
-                </p>
-                <ol className="space-y-2">
-                  {negHistory.map((e, i) => {
+            {/* ── Negotiation round history — dedicated endpoint ── */}
+            {(() => {
+              const rounds: NegotiationRound[] = negHistQ.data && negHistQ.data.length > 0
+                ? negHistQ.data
+                : negHistory.map((e, i) => {
                     const p = (typeof e.payload === "string"
                       ? (() => { try { return JSON.parse(e.payload as string); } catch { return {}; } })()
-                      : e.payload) as Record<string, unknown> ?? {};
-                    const roundNum        = (p.round as number) ?? (i + 1);
-                    const newStatus       = (p.new_status  as string) ?? "";
-                    const approvedAmt     = p.approved_amount as number | undefined;
-                    const note            = p.note as string | undefined;
-                    return (
-                      <li key={e.id} className="flex items-start gap-3">
-                        <span className="flex-shrink-0 h-5 w-5 rounded-full bg-indigo-200 text-indigo-800 text-[9px] font-bold flex items-center justify-center mt-0.5">
-                          {roundNum}
-                        </span>
-                        <div className="flex-1 rounded-lg bg-white border border-indigo-100 px-3 py-2 space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {newStatus && <NegStatusBadge status={newStatus} />}
-                            {approvedAmt != null && (
-                              <span className="text-[11px] font-bold text-slate-700">
-                                {formatCurrency(approvedAmt, cs.currency)}
+                      : e.payload ?? {}) as Record<string, unknown>;
+                    return {
+                      round:           (p.round as number) ?? (i + 1),
+                      action:          (p.action as string) ?? "COUNTER",
+                      from_status:     (p.from_status as string) ?? "OPEN",
+                      to_status:       (p.new_status as string) ?? "COUNTERED",
+                      approved_amount: (p.approved_amount as number) ?? null,
+                      note:            (p.note as string) ?? "",
+                      occurred_at:     e.created_at,
+                      actor_sub:       e.actor,
+                    } satisfies NegotiationRound;
+                  });
+
+              if (rounds.length === 0) return null;
+
+              const ACTION_CFG: Record<string, { label: string; cls: string }> = {
+                COUNTER:          { label: "Counter-Offer",    cls: "bg-indigo-100 text-indigo-700"   },
+                ACCEPT:           { label: "Full Accept",      cls: "bg-emerald-100 text-emerald-700" },
+                PARTIALLY_ACCEPT: { label: "Partial Accept",   cls: "bg-amber-100 text-amber-700"     },
+                REJECT:           { label: "Rejected",         cls: "bg-red-100 text-red-700"         },
+              };
+
+              return (
+                <div className="space-y-2 pt-3 border-t border-indigo-200">
+                  <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-wide">
+                    Negotiation History · {rounds.length} {rounds.length === 1 ? "round" : "rounds"}
+                  </p>
+                  <ol className="space-y-2">
+                    {rounds.map(round => {
+                      const actionCfg = ACTION_CFG[round.action] ?? { label: round.action, cls: "bg-slate-100 text-slate-600" };
+                      return (
+                        <li key={round.round} className="flex items-start gap-3">
+                          <span className="flex-shrink-0 h-5 w-5 rounded-full bg-indigo-200 text-indigo-800 text-[9px] font-bold flex items-center justify-center mt-0.5">
+                            {round.round}
+                          </span>
+                          <div className="flex-1 rounded-lg bg-white border border-indigo-100 px-3 py-2 space-y-1.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", actionCfg.cls)}>
+                                {actionCfg.label}
                               </span>
+                              <div className="flex items-center gap-1 text-[10px] text-slate-500">
+                                <NegStatusBadge status={round.from_status} />
+                                <ArrowRight className="h-3 w-3 text-slate-300 flex-shrink-0" />
+                                <NegStatusBadge status={round.to_status} />
+                              </div>
+                              <span className="text-[10px] text-slate-400 ml-auto">{formatDate(round.occurred_at)}</span>
+                            </div>
+                            {round.approved_amount != null && (
+                              <p className="text-[11px] font-bold text-slate-700">
+                                Amount: {formatCurrency(round.approved_amount, cs.currency)}
+                              </p>
                             )}
-                            <span className="text-[10px] text-slate-400 ml-auto">{formatDate(e.created_at)}</span>
+                            {round.note && (
+                              <p className="text-[11px] text-slate-600 italic">"{round.note}"</p>
+                            )}
+                            {round.actor_sub && (
+                              <p className="text-[10px] text-slate-400">by {round.actor_sub}</p>
+                            )}
                           </div>
-                          {note && (
-                            <p className="text-[11px] text-slate-600 italic">"{note}"</p>
-                          )}
-                          <p className="text-[10px] text-slate-400">by {e.actor}</p>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </div>
-            )}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+              );
+            })()}
 
           </div>
         );

@@ -2,7 +2,7 @@ import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, USE_MOCK } from "./cli
 import * as mocks from "@/mocks/fixtures";
 import type {
   Case, Claim, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
-  DecisionProposal, GovernanceToken, GovernanceDecision, CaseEvent,
+  DecisionProposal, GovernanceToken, GovernanceDecision, CaseEvent, NegotiationRound,
   KafkaEvent, DashboardStats, SourceRecord, VarianceRecord, ACRBundle,
   ExecutionResult, RecoveryProof,
   ExpectedRecovery, RecoveryInstrument, RecoveryMatch, RecoveryException, ReconcileResult,
@@ -285,6 +285,12 @@ export const zoikoApi = {
   async getClaimEvents(claimId: string): Promise<CaseEvent[]> {
     if (USE_MOCK) { await delay(); return []; }
     const { data } = await apiClaim.get<CaseEvent[]>(`/cases/${claimId}/events`);
+    return data;
+  },
+
+  async getClaimNegotiationHistory(claimId: string): Promise<NegotiationRound[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await apiClaim.get<NegotiationRound[]>(`/claims/${claimId}/negotiation-history`);
     return data;
   },
 
@@ -866,6 +872,7 @@ export const zoikoApi = {
     const { data } = await api.post<PurgeJob>(`/data/purge/jobs/${id}/approve`, { approval_id });
     return data;
   },
+
 };
 
 // ── Carrier types ─────────────────────────────────────────────────────────────

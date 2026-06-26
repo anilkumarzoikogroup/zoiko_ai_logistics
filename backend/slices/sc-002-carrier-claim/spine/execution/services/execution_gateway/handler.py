@@ -389,6 +389,23 @@ class ExecutionGateway:
         except Exception:
             pass  # outbox relay will recover
 
+        # Submit to carrier via connector hub — best effort, never blocks dispatch
+        if scope == "SETTLE_CLAIM":
+            try:
+                from services.connector_hub.handler import CarrierConnectorHub
+                hub = CarrierConnectorHub(self._db_url, self._broker, self._tenant_slug)
+                hub.submit_claim(
+                    envelope_id=str(env_id),
+                    tenant_id=req.tenant_id,
+                    case_id=case_id,
+                    amount=amount,
+                    currency=currency,
+                    scope=scope,
+                    actor_sub=req.actor_sub,
+                )
+            except Exception:
+                pass  # connector hub logs internally; reconcile deferred to webhook
+
         # Auto-create expected_recovery so finance can track without manual step
         if case_id:
             self._auto_create_expected_recovery(

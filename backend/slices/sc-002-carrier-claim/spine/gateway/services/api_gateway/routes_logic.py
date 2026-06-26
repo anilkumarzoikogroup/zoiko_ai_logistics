@@ -620,6 +620,32 @@ def submit_claim(
 
     _threading.Thread(target=_bg, daemon=True, name=f"sc002-{case_r.case_id}").start()
 
+    # Publish zoiko.claim.submitted — outbox (relay) + in-process broker
+    try:
+        _event_payload = {
+            "case_id":         str(case_r.case_id),
+            "claim_reference": claim_ref,
+            "carrier":         body.carrier,
+            "claim_type":      body.claim_type,
+            "claimed_amount":  float(body.claimed_amount),
+            "currency":        body.currency,
+            "actor_sub":       actor_sub or "",
+        }
+        q(
+            "INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at) "
+            "VALUES (%s, %s::uuid, %s, %s, %s::jsonb, now())",
+            (uuid.uuid4(), tenant_id, "zoiko.claim.submitted", str(case_r.case_id), json.dumps(_event_payload)),
+        )
+        from kafka.producer import ZoikoProducer, KafkaMessage
+        ZoikoProducer(broker).publish(KafkaMessage(
+            topic=     "zoiko.claim.submitted",
+            key=       str(case_r.case_id),
+            payload=   _event_payload,
+            tenant_id= tenant_id,
+        ))
+    except Exception:
+        import traceback; traceback.print_exc()
+
     now_str = datetime.now(timezone.utc).isoformat()
     return {
         "id":              str(case_r.case_id),
@@ -717,6 +743,25 @@ def ui_negotiate_claim(_r, _raw_exec, tenant_id: str, case_id: str, body, actor_
             }),
         ),
     )
+    # ── Publish zoiko.claim.negotiated outbox event ───────────────────────────
+    try:
+        _neg_payload = {
+            "case_id":         case_id,
+            "action":          body.action,
+            "from_status":     current_status,
+            "new_status":      new_status,
+            "approved_amount": approved_amount,
+            "round":           round_num,
+            "actor_sub":       actor_sub or "",
+        }
+        _raw_exec(
+            "INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at) "
+            "VALUES (%s, %s::uuid, %s, %s, %s::jsonb, now())",
+            (uuid.uuid4(), tenant_id, "zoiko.claim.negotiated", case_id, json.dumps(_neg_payload)),
+        )
+    except Exception:
+        import traceback; traceback.print_exc()
+
     # ── Best-effort email notification ────────────────────────────────────────
     try:
         from shared.email_sender import send_carrier_negotiation_update
@@ -754,4 +799,171 @@ def ui_negotiate_claim(_r, _raw_exec, tenant_id: str, case_id: str, body, actor_
         "negotiation_status": new_status,
         "approved_amount":    approved_amount,
         "round":              round_num,
+    }
+
+
+def ui_get_negotiation_history(_r, tenant_id: str, case_id: str) -> list[dict]:
+    """Return all CLAIM_NEGOTIATION case_events in round order."""
+    rows = q("""
+        SELECT id::text, actor_sub, payload, occurred_at
+        FROM   case_events
+        WHERE  case_id = %s::uuid AND tenant_id = %s::uuid
+          AND  event_type = 'CLAIM_NEGOTIATION'
+        ORDER  BY occurred_at ASC
+    """, (case_id, tenant_id))
+
+    if not rows:
+        # Also verify the case exists and is a claim case
+        check = q1(
+            "SELECT id FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid AND case_type='CARRIER_CLAIM'",
+            (case_id, tenant_id),
+        )
+        if not check:
+            raise HTTPException(status_code=404, detail="Claim case not found")
+
+    history = []
+    for r in rows:
+        payload = r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"] or "{}")
+        history.append({
+            "event_id":       r["id"],
+            "actor":          r["actor_sub"],
+            "round":          payload.get("round", 0),
+            "action":         payload.get("action", ""),
+            "from_status":    payload.get("from_status", ""),
+            "to_status":      payload.get("new_status", ""),
+            "approved_amount":payload.get("approved_amount"),
+            "note":           payload.get("note", ""),
+            "occurred_at":    r["occurred_at"].isoformat() if r.get("occurred_at") else None,
+        })
+    return history
+
+
+def ui_add_claim_line(_raw_exec, _r, tenant_id: str, case_id: str, body: dict) -> dict:
+    """
+    POST /v1/claims/{case_id}/lines
+    Add a new line item to an existing claim.  Guards:
+      - Case must exist and be a CARRIER_CLAIM
+      - Sum of all lines must not exceed claims.claimed_amount
+      - Line numbers are auto-assigned (next available)
+    """
+    row = q1(
+        "SELECT c.claim_id::text, cl.claimed_amount::float AS total, cl.currency "
+        "FROM cases c JOIN claims cl ON cl.id=c.claim_id "
+        "WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid AND c.case_type='CARRIER_CLAIM'",
+        (case_id, tenant_id),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Claim case not found")
+
+    claim_id   = row["claim_id"]
+    total_cap  = float(row["total"])
+    currency   = body.get("currency") or row["currency"]
+    desc       = (body.get("description") or "").strip()
+    line_amount = float(body.get("claimed_amount") or 0)
+
+    if not desc:
+        raise HTTPException(status_code=422, detail="description is required")
+    if line_amount <= 0:
+        raise HTTPException(status_code=422, detail="claimed_amount must be positive")
+
+    # Validate new sum doesn't exceed header amount
+    existing_sum_row = q1(
+        "SELECT COALESCE(SUM(claimed_amount), 0)::float AS existing_sum "
+        "FROM claim_lines WHERE claim_id=%s::uuid AND tenant_id=%s::uuid",
+        (claim_id, tenant_id),
+    )
+    existing_sum = float(existing_sum_row["existing_sum"] if existing_sum_row else 0)
+    if existing_sum + line_amount > total_cap:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Line amount {line_amount:.2f} would bring total lines "
+                f"({existing_sum + line_amount:.2f}) above claim amount {total_cap:.2f}"
+            ),
+        )
+
+    # Auto-assign line_number
+    next_num_row = q1(
+        "SELECT COALESCE(MAX(line_number), 0) + 1 AS next_num "
+        "FROM claim_lines WHERE claim_id=%s::uuid AND tenant_id=%s::uuid",
+        (claim_id, tenant_id),
+    )
+    next_num = int(next_num_row["next_num"] if next_num_row else 1)
+    line_id  = uuid.uuid4()
+
+    _raw_exec(
+        "INSERT INTO claim_lines (id, tenant_id, claim_id, line_number, description, claimed_amount, currency) "
+        "VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s)",
+        (line_id, tenant_id, claim_id, next_num, desc, line_amount, currency),
+    )
+    return {
+        "id":             str(line_id),
+        "claim_id":       claim_id,
+        "line_number":    next_num,
+        "description":    desc,
+        "claimed_amount": line_amount,
+        "currency":       currency,
+    }
+
+
+def ui_update_claim_line(_raw_exec, _r, tenant_id: str, case_id: str, line_id: str, body: dict) -> dict:
+    """
+    PATCH /v1/claims/{case_id}/lines/{line_id}
+    Update description and/or amount of an existing claim line.
+    Guards: updated sum must not exceed claims.claimed_amount.
+    """
+    row = q1(
+        "SELECT c.claim_id::text, cl.claimed_amount::float AS total, cl.currency "
+        "FROM cases c JOIN claims cl ON cl.id=c.claim_id "
+        "WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid AND c.case_type='CARRIER_CLAIM'",
+        (case_id, tenant_id),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Claim case not found")
+
+    claim_id  = row["claim_id"]
+    total_cap = float(row["total"])
+
+    line = q1(
+        "SELECT id::text, line_number, description, claimed_amount::float, currency "
+        "FROM claim_lines WHERE id=%s::uuid AND claim_id=%s::uuid AND tenant_id=%s::uuid",
+        (line_id, claim_id, tenant_id),
+    )
+    if not line:
+        raise HTTPException(status_code=404, detail="Claim line not found")
+
+    new_desc   = body.get("description", line["description"])
+    new_amount = float(body.get("claimed_amount", line["claimed_amount"]))
+
+    if new_amount <= 0:
+        raise HTTPException(status_code=422, detail="claimed_amount must be positive")
+
+    # Validate new sum: subtract old line amount, add new
+    other_sum_row = q1(
+        "SELECT COALESCE(SUM(claimed_amount), 0)::float AS other_sum "
+        "FROM claim_lines "
+        "WHERE claim_id=%s::uuid AND tenant_id=%s::uuid AND id != %s::uuid",
+        (claim_id, tenant_id, line_id),
+    )
+    other_sum = float(other_sum_row["other_sum"] if other_sum_row else 0)
+    if other_sum + new_amount > total_cap:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Updated line amount {new_amount:.2f} would bring total lines "
+                f"({other_sum + new_amount:.2f}) above claim amount {total_cap:.2f}"
+            ),
+        )
+
+    _raw_exec(
+        "UPDATE claim_lines SET description=%s, claimed_amount=%s WHERE id=%s::uuid AND tenant_id=%s::uuid",
+        (new_desc, new_amount, line_id, tenant_id),
+    )
+    return {
+        "id":             line_id,
+        "claim_id":       claim_id,
+        "line_number":    line["line_number"],
+        "description":    new_desc,
+        "claimed_amount": new_amount,
+        "currency":       line["currency"],
     }

@@ -58,6 +58,10 @@ PRODUCER_TOPICS: set = {
     # Core pipeline
     "zoiko.source.record.received",     "zoiko.source.record.validated",    "zoiko.canonical.invoice.created",
     "zoiko.canonical.claim.created",    # SC-002 — canonicalize_claim()
+    "zoiko.claim.submitted",            # SC-002 — claim case opened
+    "zoiko.claim.negotiated",           # SC-002 — counter-offer round completed
+    "zoiko.claim.settled",              # SC-002 — carrier settlement response received
+    "zoiko.claim.disputed",             # SC-002 — escalation triggered
     "zoiko.case.opened",                "zoiko.case.updated",               "zoiko.case.closed",
     "zoiko.evidence.bundled",           "zoiko.finding.generated",          "zoiko.proposal.created",
     "zoiko.governance.decision.issued", "zoiko.governance.token.issued",    "zoiko.governance.token.consumed",
