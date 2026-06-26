@@ -13,7 +13,7 @@ import {
   ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
   Download, Zap, CheckSquare, FlaskConical, Plug,
   Activity, Lock, Clock, ShieldOff, RotateCcw, HardDrive, Trash2,
-  Wallet, Scale,
+  Wallet, Scale, AlertTriangle, Plus,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -35,6 +35,8 @@ const NAV: NavGroup[] = [
       { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"         },
       { label: "Carrier Claims",   icon: FileWarning,     to: "/claims"            },
       { label: "Submit Claim",     icon: FileWarning,     to: "/claims/new"        },
+      { label: "Shipment Exceptions", icon: AlertTriangle, to: "/exceptions"       },
+      { label: "Report Exception", icon: Plus,            to: "/exceptions/new"    },
       { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions"  },
       { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"      },
       { label: "Carriers",         icon: Truck,           to: "/carriers"          },

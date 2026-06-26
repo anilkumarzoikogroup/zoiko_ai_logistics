@@ -58,18 +58,35 @@ class AgentRuntime:
         tools_used: list[str] = []
         evidence_refs: list[str] = []
 
-        # Step 1 — read evidence bundle
+        # Step 1 — read evidence bundle + compute evidence_completeness factor.
+        # evidence_completeness = present required types / 6 required types.
+        # For SC-001 this must be 1.0 (all 6 present — bundle is sealed COMPLETE).
+        _REQUIRED_TYPES = {
+            "source_record", "canonical_invoice", "canonical_shipment",
+            "contract_rate_version", "charge_comparison", "rule_trace",
+        }
         bundle_data = agent_tools.invoke(
             "read_evidence_bundle", db_url=db_url,
             bundle_id=bundle_id, tenant_id=tenant_id,
         )
         tools_used.append("read_evidence_bundle")
         evidence_refs = [item["id"] for item in bundle_data.get("items", [])]
+        present_types = {item.get("item_type") for item in bundle_data.get("items", [])}
+        evidence_completeness = round(
+            len(present_types & _REQUIRED_TYPES) / len(_REQUIRED_TYPES), 4
+        )
         steps.append({
             "step": 1, "tool": "read_evidence_bundle",
             "input":  {"bundle_id": bundle_id},
-            "output": {"item_count": bundle_data["item_count"]},
-            "finding": f"{bundle_data['item_count']} evidence item(s) verified in bundle",
+            "output": {
+                "item_count":            bundle_data["item_count"],
+                "present_types":         sorted(present_types & _REQUIRED_TYPES),
+                "evidence_completeness": evidence_completeness,
+            },
+            "finding": (
+                f"{bundle_data['item_count']} evidence item(s) verified; "
+                f"evidence_completeness={evidence_completeness}"
+            ),
         })
 
         # Step 2 — read contract rates
@@ -97,6 +114,25 @@ class AgentRuntime:
             "finding": f"Case state: {case_data.get('state', 'unknown')}",
         })
 
+        # Step 3b — ambiguity_penalty: count unresolved ambiguity_queue_entries
+        # for this case. Each unresolved entry reduces confidence by 0.05,
+        # capped at 0.20. Zero ambiguities (normal SC-001 path) → penalty = 0.0.
+        import psycopg2 as _psycopg2
+        _aconn = _psycopg2.connect(db_url)
+        try:
+            _acur = _aconn.cursor()
+            _acur.execute(
+                "SELECT COUNT(*) FROM ambiguity_queue_entries "
+                "WHERE case_id=%s AND tenant_id=%s AND resolved_at IS NULL",
+                (uuid.UUID(case_id), tenant_id),
+            )
+            _ambig_count = _acur.fetchone()[0]
+        except Exception:
+            _ambig_count = 0
+        finally:
+            _aconn.close()
+        ambiguity_penalty = round(min(_ambig_count * 0.05, 0.20), 4)
+
         # Steps 4..N — one step per rule in the selected bundle (SC-001: fuel_charge,
         # accessorial; SC-002: liability_acknowledged, amount_within_policy_cap)
         step_num = 3
@@ -113,19 +149,37 @@ class AgentRuntime:
                 ),
             })
 
-        # Final rule step — weighted confidence + action decision
+        # Final rule step — three-component confidence decomposition:
+        #   rule_coverage        = weighted average of rule confidences (SC-001: 0.96)
+        #   evidence_completeness = present required types / 6              (SC-001: 1.0)
+        #   ambiguity_penalty    = unresolved ambiguity count × 0.05 cap 0.20 (SC-001: 0.0)
+        #   final confidence     = rule_coverage × evidence_completeness × (1 − penalty)
+        rule_coverage = confidence  # SC001_CONFIDENCE = 0.96
+        final_confidence = round(
+            rule_coverage * evidence_completeness * (1.0 - ambiguity_penalty), 4
+        )
         step_num += 1
         rule_trace = {
             rule_name: {"confidence": v["confidence"], "weight": v["weight"]}
             for rule_name, v in rules.items()
         }
-        rule_trace["weighted_average"] = confidence
+        rule_trace["rule_coverage"]         = rule_coverage
+        rule_trace["evidence_completeness"] = evidence_completeness
+        rule_trace["ambiguity_penalty"]     = ambiguity_penalty
+        rule_trace["weighted_average"]      = final_confidence
+        confidence = final_confidence
         steps.append({
             "step": step_num, "tool": "RULE_ENGINE", "rule": "compute_confidence",
-            "input":      {"rules": list(rules.keys())},
-            "confidence": confidence,
+            "input": {
+                "rules":                 list(rules.keys()),
+                "rule_coverage":         rule_coverage,
+                "evidence_completeness": evidence_completeness,
+                "ambiguity_penalty":     ambiguity_penalty,
+            },
+            "confidence": final_confidence,
             "finding":    (
-                f"Weighted confidence = {confidence} → "
+                f"Confidence = {rule_coverage} × {evidence_completeness} × "
+                f"(1 − {ambiguity_penalty}) = {final_confidence} → "
                 f"recommending action: {proposed_action}"
             ),
         })

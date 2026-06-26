@@ -262,9 +262,19 @@ class GovernanceHandler:
                         f"cannot be the same as first approver '{first_approver}'"
                     )
 
+            # SC-001 policy reference — must be bound by name + version so that
+            # governance decisions are replay-provable: "which exact policy
+            # authorized this action?" The combined reference is stored in the
+            # decision row so independent verifiers can confirm without runtime
+            # access to the live policy bundle.
+            _SC001_POLICY_NAME    = "freight-claims-policy"
+            _SC001_POLICY_VERSION = "2026.05.01"
+
             # ── Ensure a policy bundle exists ────────────────────────────────
             cur.execute(
-                "SELECT id FROM policy_bundles WHERE tenant_id=%s AND active=TRUE LIMIT 1",
+                "SELECT id FROM policy_bundles "
+                "WHERE tenant_id=%s AND active=TRUE "
+                "ORDER BY deployed_at DESC LIMIT 1",
                 (tenant_id,),
             )
             pb_row = cur.fetchone()
@@ -272,12 +282,19 @@ class GovernanceHandler:
                 policy_bundle_id = pb_row["id"]
             else:
                 policy_bundle_id = uuid.uuid4()
-                stub_hash = hashlib.sha256(b"zoiko.opa.freight_dispute.v1").digest()
+                stub_hash = hashlib.sha256(
+                    f"zoiko.opa.{_SC001_POLICY_NAME}.{_SC001_POLICY_VERSION}".encode()
+                ).digest()
                 cur2.execute("""
                     INSERT INTO policy_bundles
-                        (id, tenant_id, version, rego_hash, active, deployed_at)
-                    VALUES (%s, %s, %s, %s, TRUE, %s)
-                """, (policy_bundle_id, tenant_id, "v1.0.0", stub_hash, now))
+                        (id, tenant_id, policy_name, version, rego_hash, active, deployed_at)
+                    VALUES (%s, %s, %s, %s, %s, TRUE, %s)
+                    ON CONFLICT DO NOTHING
+                """, (
+                    policy_bundle_id, tenant_id,
+                    _SC001_POLICY_NAME, _SC001_POLICY_VERSION,
+                    stub_hash, now,
+                ))
 
             # JCS canonicalize → SHA-256 → sign
             decision_payload = {
@@ -302,13 +319,20 @@ class GovernanceHandler:
             )
             approval_chain_hash = hashlib.sha256(chain_input).digest()
 
-            # policy_version from the bundle we just resolved
+            # policy_version stored as "policy_name@version" — the combined
+            # reference lets independent verifiers confirm which exact policy
+            # bundle authorized this decision without platform-runtime access.
             cur.execute(
-                "SELECT version FROM policy_bundles WHERE id=%s",
+                "SELECT policy_name, version FROM policy_bundles WHERE id=%s",
                 (policy_bundle_id,),
             )
             pb_ver_row = cur.fetchone()
-            policy_version = pb_ver_row["version"] if pb_ver_row else "v1.0.0"
+            if pb_ver_row and pb_ver_row.get("policy_name"):
+                policy_version = f"{pb_ver_row['policy_name']}@{pb_ver_row['version']}"
+            elif pb_ver_row:
+                policy_version = pb_ver_row["version"]
+            else:
+                policy_version = f"{_SC001_POLICY_NAME}@{_SC001_POLICY_VERSION}"
 
             decision_id = uuid.uuid4()
             cur2.execute("""

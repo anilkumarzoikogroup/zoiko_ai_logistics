@@ -6,7 +6,12 @@ Project context for Claude Code. Read this before making any changes.
 
 ## What This System Does
 
-Zoiko detects freight overcharges automatically and recovers money through a cryptographically auditable pipeline. The SC-001 scenario: **BlueDart bills Amazon India ₹12,500, contract allows ₹8,000 — ₹4,500 overcharge caught, two humans approve, money recovered, audit record locked.**
+Zoiko detects freight overcharges, carrier claim disputes, and SLA breaches automatically and recovers money through a cryptographically auditable pipeline.
+
+Three live scenarios:
+- **SC-001** — BlueDart bills Amazon India ₹12,500, contract allows ₹8,000 → ₹4,500 overcharge caught, two humans approve, money recovered, ACR locked.
+- **SC-002** — Carrier claim filed for damaged goods → AI scores claim, analyst proposes settlement, manager approves, credit issued.
+- **SC-003** — BlueDart commits to 14:00 delivery, arrives at 20:00 → 6-hour SLA breach at ₹500/h = ₹3,000 penalty, two humans approve, SLA credit issued, ACR locked.
 
 ---
 
@@ -22,6 +27,14 @@ Zoiko detects freight overcharges automatically and recovers money through a cry
 | Phase 5 | ✅ | — | React 18 + TypeScript + Vite frontend · /v1/ API prefix · fully wired to live backend |
 | Phase 6 | ✅ | — | Recovery pipeline — expected_recoveries → recovery_instruments → recovery_matches (tiered) → ledger_svc → write_off_svc → recovery_proofs (acr_ready) |
 | C07 | ✅ | — | Data governance/compliance — legal holds (blocking), retention, crypto-shred, archive/restore (verified)/purge jobs, observability dashboard (admin-only) |
+
+## Vertical Slice Status
+
+| Slice | Built | Ports | What it is |
+|-------|-------|-------|-----------|
+| SC-001 | ✅ | 8000 / 8001 / 8002 | Freight invoice overcharge — rate mismatch detection |
+| SC-002 | ✅ | 8010 / 8011 / 8012 | Carrier claim — damage/loss/delay claim pipeline |
+| SC-003 | ✅ | 8020 / 8021 | Shipment exception — SLA breach → penalty credit pipeline |
 
 ---
 
@@ -123,14 +136,33 @@ zoiko-logistics/
 │   └── api/                         ← Frontend-facing reverse proxy (port 8080, optional)
 │       └── app.py                   ← Routes /v1/* to gateway/governance/execution
 │
+│
+├── slices/                          ← Self-contained vertical scenario spines
+│   ├── sc-001-freight-invoice-overcharge/spine/  ← ports 8000/8001/8002 (shared with main gateway/execution)
+│   ├── sc-002-carrier-claim/spine/               ← gateway:8010  execution:8011  governance:8012
+│   │   ├── gateway/services/api_gateway/app.py   ← FastAPI port 8010
+│   │   ├── execution/services/api_gateway/app.py ← FastAPI port 8011
+│   │   └── governance/services/api_gateway/app.py← FastAPI port 8012
+│   └── sc-003-shipment-exception/spine/          ← gateway:8020  execution:8021
+│       ├── gateway/                              ← ingestion → canonical → case → evidence → reasoning → governance → token
+│       │   ├── paths.py                          ← sys.path bootstrap; falls back to SC-002 core_lib/platform_lib
+│       │   ├── shared/ (db, signer, redis_idem)
+│       │   └── services/ (ingestion_svc, canonical_truth, case_orchestration, evidence_svc,
+│       │                   reasoning_svc, governance_svc, token_svc, api_gateway)
+│       └── execution/                            ← 8-gate → reconciliation (Commitment Match) → ACR
+│           ├── paths.py
+│           ├── shared/ (db, signer, redis_token)
+│           └── services/ (execution_gateway, reconciliation_svc, audit_acr_svc, api_gateway)
+│
 └── zoiko-frontend/frontend/
-    ├── src/api/client.ts            ← Axios instances (api/api4) · /v1/ API base · auth + idempotency headers
+    ├── src/api/client.ts            ← Axios instances · api/api4 (SC-001) · apiClaim*/apiClaim4 (SC-002) · apiException/apiException4 (SC-003)
     ├── src/api/zoiko.ts             ← API service layer (USE_MOCK gate on every method)
     ├── src/features/recovery/RecoveryDashboard.tsx     ← Phase 6 recovery pipeline UI
     ├── src/features/reconciliation/ReconciliationPage.tsx ← envelope reconciliation + variances
+    ├── src/features/exceptions/     ← SC-003 pages: Exceptions.tsx, NewException.tsx, ExceptionDetail.tsx
     ├── src/features/compliance/     ← C07 pages: LegalHolds, DataRetention, CryptoShred,
     │                                   ArchiveJobs, RestoreJobs, PurgeJobs, DataGovernance (admin-only)
-    ├── vite.config.ts               ← Dev proxy: /api → :8000, /api4 → :8001
+    ├── vite.config.ts               ← Dev proxy: /api→:8000, /api4→:8001, /claimapi→:8010, /excapi→:8020, /excapi4→:8021
     ├── Dockerfile                   ← Multi-stage: dev + build + nginx prod
     └── .env.local                   ← VITE_USE_MOCK=false · VITE_API_BASE=/api
 ```
@@ -144,6 +176,15 @@ VITE_USE_MOCK=false
 VITE_API_BASE=/api
 VITE_DEV_JWT=<HS256 JWT signed with zoiko-dev-secret-for-testing-only>
 VITE_DEV_TENANT=11111111-1111-1111-1111-111111111111
+
+# SC-002 (carrier claims) — separate gateway/execution ports
+VITE_API_CLAIM_BASE=/claimapi
+VITE_API_CLAIM3_BASE=/claimapi3
+VITE_API_CLAIM4_BASE=/claimapi4
+
+# SC-003 (shipment exceptions) — separate gateway/execution ports
+VITE_API_EXC_BASE=/excapi
+VITE_API_EXC4_BASE=/excapi4
 ```
 
 - `VITE_USE_MOCK=false` — all API calls hit the real backend (never use mock fixtures)
@@ -151,7 +192,18 @@ VITE_DEV_TENANT=11111111-1111-1111-1111-111111111111
 - `VITE_DEV_JWT` — injected as `Authorization: Bearer <token>` on every request
 - `VITE_DEV_TENANT` — injected as `X-Tenant-ID` on every request
 
-The Vite proxy in `vite.config.ts` rewrites `/api/*` → `http://localhost:8000/*`.
+**Vite proxy rewrites** (defined in `vite.config.ts`, longer prefixes listed first):
+
+| Proxy prefix | Backend port | Slice |
+|---|---|---|
+| `/api3` | 8002 | SC-001 governance |
+| `/api4` | 8001 | SC-001 execution |
+| `/api` | 8000 | SC-001 gateway |
+| `/claimapi3` | 8012 | SC-002 governance |
+| `/claimapi4` | 8011 | SC-002 execution |
+| `/claimapi` | 8010 | SC-002 gateway |
+| `/excapi4` | 8021 | SC-003 execution |
+| `/excapi` | 8020 | SC-003 gateway |
 
 **To switch back to mock mode** (no backend needed):
 ```
@@ -248,11 +300,34 @@ $env:PYTHONIOENCODING = "utf-8"
 cd backend\core; py scripts\demo_sc001.py; cd ..\..   # full SC-001 walkthrough across all phases
 ```
 
+### SC-003 Gateway (port 8020)
+```powershell
+cd backend\slices\sc-003-shipment-exception\spine\gateway
+..\..\..\..\venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8020
+```
+
+### SC-003 Execution (port 8021)
+```powershell
+cd backend\slices\sc-003-shipment-exception\spine\execution
+..\..\..\..\venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8021
+```
+
 ### Check live API
 ```powershell
 curl http://localhost:8000/health
-curl http://localhost:8000/docs         # Swagger UI — gateway routes
-curl http://localhost:8001/docs         # Swagger UI — execution gateway (recovery/reconciliation/ACR)
+curl http://localhost:8000/docs         # Swagger UI — SC-001 gateway routes
+curl http://localhost:8001/docs         # Swagger UI — SC-001 execution (recovery/reconciliation/ACR)
+curl http://localhost:8020/health
+curl http://localhost:8020/docs         # Swagger UI — SC-003 gateway routes
+curl http://localhost:8021/docs         # Swagger UI — SC-003 execution routes
 curl http://localhost:5173/api/health   # same, through Vite proxy
 ```
 
@@ -315,6 +390,34 @@ Required headers on every request:
 
 ---
 
+## SC-003 Gateway API Routes (port 8020, /v1/ prefix)
+
+| Route | Notes |
+|-------|-------|
+| `GET  /health` | `{"status":"ok","service":"sc003-gateway","version":"1.0.0"}` |
+| `POST /shipment-exceptions/submit` | Full pipeline: ingest → canonical → open case → evidence + reasoning (background thread) |
+| `GET  /shipment-exceptions` | Paginated list; params: `state`, `page`, `page_size` |
+| `GET  /shipment-exceptions/{id}` | Single exception with breach hours, penalty, confidence |
+| `GET  /shipment-exceptions/{id}/finding` | AI confidence score + rule trace |
+| `GET  /shipment-exceptions/{id}/events` | Case FSM audit trail (append-only) |
+| `GET  /shipment-exceptions/{id}/shipment-events` | Carrier event stream from `shipment_events` table |
+| `POST /shipment-exceptions/{id}/propose` | Analyst proposes SLA credit (requires finding_id, amount, currency) |
+| `POST /shipment-exceptions/{id}/decide` | Manager approves/rejects — SoD: actor_sub ≠ proposer_sub |
+
+Required headers: `Authorization: Bearer <JWT>` · `X-Tenant-ID: <uuid>` · `Idempotency-Key: <uuid>` (mutations)
+
+## SC-003 Execution Gateway API Routes (port 8021, /v1/ prefix)
+
+| Route | Notes |
+|-------|-------|
+| `GET  /health` | `{"status":"ok","service":"sc003-execution","version":"1.0.0"}` |
+| `POST /execute` | 8-gate check (sig/expiry/consumed/binding/scope/sanctions/FX/connector) → action `ISSUE_SLA_CREDIT` |
+| `POST /reconcile` | "Commitment Match": committed_eta vs actual_delivery → reconciliations + outcomes |
+| `GET  /cases/{id}/variances` | Reconciliation variance records |
+| `POST /cases/{id}/variances/{vid}/resolve` | Resolve or waive an OPEN variance |
+| `POST /cases/{id}/acr` | Issue 8-artifact Merkle ACR (WORM-locked, irreversible) |
+| `GET  /cases/{id}/acr` | Fetch ACR record |
+
 ## C07 Data Governance API Routes (gateway, port 8000, /v1/ prefix, admin-only)
 
 | Route | Notes |
@@ -371,17 +474,34 @@ Defined in `backend/governance/shared/signer.py` and `backend/gateway/shared/sig
 
 ---
 
-## SC-001 Confidence Formula
+## Confidence Formulas (deterministic — never change any of these)
 
+### SC-001 — Freight Invoice Overcharge
 ```python
 _RULES = {
     "fuel_charge":  {"confidence": 1.00, "weight": 0.50},
     "accessorial":  {"confidence": 0.92, "weight": 0.50},
 }
-SC001_CONFIDENCE = 0.96  # = 0.50×1.00 + 0.50×0.92 — MUST be exactly this value
+SC001_CONFIDENCE = 0.96  # = 0.50×1.00 + 0.50×0.92
 ```
 
-This is deterministic. Any change to formula or weights is a breaking change.
+### SC-002 — Carrier Claim
+Defined in `backend/slices/sc-002-carrier-claim/spine/gateway/services/reasoning_svc/rules.py`
+
+### SC-003 — Shipment Exception / SLA Penalty
+```python
+RULES = {
+    "delivery_window_breach": {"confidence": 1.00, "weight": 0.60},
+    "sla_clause_applicable":  {"confidence": 0.88, "weight": 0.40},
+}
+SC003_CONFIDENCE = 0.9520  # = 1.00×0.60 + 0.88×0.40 — MUST be exactly this value
+```
+
+### SC-003 Breach & Penalty (also deterministic)
+```python
+sla_breach_hours   = max(0, (actual_delivery - committed_eta).total_seconds() / 3600)
+sla_penalty_amount = min(penalty_cap, sla_breach_hours * penalty_rate_per_hour)
+```
 
 ---
 
@@ -419,6 +539,7 @@ lineage_records
 case_events
 evidence_items
 audit_worm_index
+shipment_events        ← SC-003 carrier event stream
 ```
 
 ---
@@ -445,11 +566,16 @@ audit_worm_index
 | Passing topic string as broker argument | `EvidenceHandler(DB_URL, broker_object, slug)` — broker is the MockKafkaBroker instance |
 | Forgetting `paths.py` import in governance modules | Always `import paths` as the first import |
 | Changing SC001_CONFIDENCE | This value is deterministic — never change it |
+| Changing SC003_CONFIDENCE | Also deterministic (0.9520) — never change it |
 | Using `psycopg2.extras.register_uuid()` late | Call it before any psycopg2 connection that handles UUIDs |
-| UPDATE/DELETE on append-only tables | Only INSERT is permitted |
+| UPDATE/DELETE on append-only tables | Only INSERT is permitted on lineage_records, case_events, evidence_items, audit_worm_index, shipment_events |
+| SC-003 canonical model field name | Field is `penalty_amount` (not `sla_penalty_amount`) in CanonicalShipmentExceptionResult |
+| SC-003 exceptions not loading in UI | Check SC-003 gateway on port 8020: `curl http://localhost:8020/health` |
+| SC-003 frontend showing no data | Ensure VITE_API_EXC_BASE=/excapi and VITE_API_EXC4_BASE=/excapi4 in .env.local |
 | Frontend showing 47 mock cases | `VITE_USE_MOCK=false` in .env.local, then restart `npm run dev` + hard refresh browser |
 | "Submission failed" in UI | Check backend is running on port 8000: `curl http://localhost:8000/health` |
 | Backend not picking up .py changes | Kill Python process and restart uvicorn — `--reload` watches files but can miss them |
+| SC-003 paths.py pointing to missing core_lib | paths.py falls back to SC-002's core_lib/platform_lib — if SC-002 spine is missing, SC-003 also breaks |
 
 ---
 

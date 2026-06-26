@@ -49,6 +49,9 @@ const ArchiveJobs    = lazy(() => import("./features/compliance/ArchiveJobs"));
 const PurgeJobs      = lazy(() => import("./features/compliance/PurgeJobs"));
 const RecoveryDashboard = lazy(() => import("./features/recovery/RecoveryDashboard"));
 const ReconciliationPage= lazy(() => import("./features/reconciliation/ReconciliationPage"));
+const Exceptions        = lazy(() => import("./features/exceptions/Exceptions"));
+const NewException      = lazy(() => import("./features/exceptions/NewException"));
+const ExceptionDetail   = lazy(() => import("./features/exceptions/ExceptionDetail"));
 
 function PageLoader() {
   return (
@@ -131,6 +134,11 @@ export default function App() {
         <Route path="/claims"     element={<Claims />} />
         <Route path="/claims/new" element={<NewClaim />} />
         <Route path="/claims/:id" element={<ClaimDetail />} />
+
+        {/* Shipment Exceptions (SC-003) */}
+        <Route path="/exceptions"     element={<Exceptions />} />
+        <Route path="/exceptions/new" element={<NewException />} />
+        <Route path="/exceptions/:id" element={<ExceptionDetail />} />
 
         {/* Governance — role-gated */}
         <Route path="/analyst" element={

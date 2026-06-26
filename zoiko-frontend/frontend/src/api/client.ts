@@ -129,4 +129,11 @@ const apiClaim  = attachInterceptors(axios.create({ baseURL: API_CLAIM_BASE,  ti
 const apiClaim3 = attachInterceptors(axios.create({ baseURL: API_CLAIM3_BASE, timeout: 60000, withCredentials: true }));
 const apiClaim4 = attachInterceptors(axios.create({ baseURL: API_CLAIM4_BASE, timeout: 60000, withCredentials: true }));
 
-export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, USE_MOCK };
+// SC-003 (shipment exception) spine — gateway port 8020, execution port 8021
+const API_EXC_BASE  = (import.meta.env.VITE_API_EXC_BASE  || "/excapi")  + "/v1"; // SC-003 gateway port 8020
+const API_EXC4_BASE = (import.meta.env.VITE_API_EXC4_BASE || "/excapi4") + "/v1"; // SC-003 execution port 8021
+
+const apiException  = attachInterceptors(axios.create({ baseURL: API_EXC_BASE,  timeout: 90000, withCredentials: true }));
+const apiException4 = attachInterceptors(axios.create({ baseURL: API_EXC4_BASE, timeout: 60000, withCredentials: true }));
+
+export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, USE_MOCK };

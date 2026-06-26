@@ -125,6 +125,28 @@ export interface CaseEvent {
   payload?: Record<string, unknown> | string | null;
 }
 
+// SC-003 — Shipment Exception / SLA Penalty case
+export type ExceptionState = CaseState;  // same FSM
+
+export interface ShipmentException {
+  id: string;
+  tenant_id: string;
+  state: ExceptionState;
+  case_type: "SHIPMENT_EXCEPTION";
+  carrier: string;
+  carrier_id?: string;
+  shipment_reference: string;
+  committed_eta: string;
+  actual_delivery: string;
+  sla_breach_hours: number;
+  sla_penalty_amount: number;
+  currency: string;
+  confidence?: number;
+  opened_at: string;
+  updated_at: string;
+  duplicate?: boolean;
+}
+
 export interface EvidenceItem {
   id: string;
   bundle_id: string;

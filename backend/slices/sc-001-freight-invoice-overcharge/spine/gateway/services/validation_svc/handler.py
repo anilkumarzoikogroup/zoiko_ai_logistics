@@ -47,10 +47,14 @@ class ValidationHandler:
         carrier_id: str,
         total_amount: float,
         currency: str = "INR",
+        event_date: date = None,
     ) -> ValidationResult:
         tenant_id        = str(tenant_id)
         source_record_id = uuid.UUID(str(source_record_id))
-        today            = date.today()
+        # as_of_event: use the invoice's own date so replay returns the same
+        # contract rates that were active when the invoice was received, not
+        # today's rates. Falls back to today only if no event_date is provided.
+        as_of = event_date or date.today()
 
         conn = psycopg2.connect(self.db_url)
         conn.autocommit = True
@@ -92,7 +96,7 @@ class ValidationHandler:
               AND  COALESCE(effective_from, effective_on) <= %s
               AND  (COALESCE(effective_to, expires_on) IS NULL
                     OR COALESCE(effective_to, expires_on) >= %s)
-        """, (tenant_id, lane_hash, today, today))
+        """, (tenant_id, lane_hash, as_of, as_of))
         rates = cur.fetchall()
 
         if not rates:
@@ -105,7 +109,7 @@ class ValidationHandler:
                   AND  superseded_at IS NULL
                   AND  effective_on <= %s
                   AND  (expires_on IS NULL OR expires_on >= %s)
-            """, (tenant_id, carrier_id, today, today))
+            """, (tenant_id, carrier_id, as_of, as_of))
             rates = cur.fetchall()
 
         conn.close()
