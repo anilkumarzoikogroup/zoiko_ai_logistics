@@ -136,4 +136,8 @@ const API_EXC4_BASE = (import.meta.env.VITE_API_EXC4_BASE || "/excapi4") + "/v1"
 const apiException  = attachInterceptors(axios.create({ baseURL: API_EXC_BASE,  timeout: 90000, withCredentials: true }));
 const apiException4 = attachInterceptors(axios.create({ baseURL: API_EXC4_BASE, timeout: 60000, withCredentials: true }));
 
-export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, USE_MOCK };
+// SC-004 (supplier scorecard) spine — gateway port 8030
+const API_SCORE_BASE = (import.meta.env.VITE_API_SCORE_BASE || "/scoreapi") + "/v1";
+const apiScore = attachInterceptors(axios.create({ baseURL: API_SCORE_BASE, timeout: 90000, withCredentials: true }));
+
+export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, apiScore, USE_MOCK };

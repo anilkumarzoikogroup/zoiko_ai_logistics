@@ -1,4 +1,4 @@
-import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, USE_MOCK } from "./client";
+import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, apiScore, USE_MOCK } from "./client";
 import * as mocks from "@/mocks/fixtures";
 import type {
   Case, Claim, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
@@ -11,6 +11,8 @@ import type {
   RestoreJob, RestoreVerification,
   ArchiveJob, PurgeJob,
   ObservabilityMetrics, ObservabilityAlert,
+  ScorecardPeriod,
+  ShipmentException,
 } from "@/types";
 
 // Simulates network latency for mock mode so loading states are visible
@@ -129,7 +131,7 @@ export const zoikoApi = {
   // ---------- Dashboard ----------
   async getStats(): Promise<DashboardStats> {
     if (USE_MOCK) { await delay(); return mocks.mockStats; }
-    const { data } = await api.get<DashboardStats>("/dashboard/stats");
+    const { data } = await api.get<DashboardStats>("/stats");
     return data;
   },
 
@@ -332,7 +334,7 @@ export const zoikoApi = {
 
   async executeClaimRecovery(tokenId: string, claimId: string, amount: number, currency: string): Promise<ExecutionResult> {
     if (USE_MOCK) { await delay(1200); throw new Error("Not available in mock mode"); }
-    const { data } = await apiClaim.post<ExecutionResult>("/execute", { token_id: tokenId, case_id: claimId, amount, currency });
+    const { data } = await apiClaim4.post<ExecutionResult>("/execute", { token_id: tokenId, case_id: claimId, amount, currency });
     return data;
   },
 
@@ -468,13 +470,13 @@ export const zoikoApi = {
   // ---------- Phase 4 — Variances ----------
   async listVariances(caseId: string): Promise<VarianceRecord[]> {
     if (USE_MOCK) { await delay(); return []; }
-    const { data } = await api.get<VarianceRecord[]>(`/cases/${caseId}/variances`);
+    const { data } = await api4.get<VarianceRecord[]>(`/cases/${caseId}/variances`);
     return data;
   },
 
   async resolveVariance(caseId: string, varianceId: string, action: "RESOLVE" | "WAIVE"): Promise<VarianceRecord> {
     if (USE_MOCK) { await delay(300); return {} as VarianceRecord; }
-    const { data } = await api.patch<VarianceRecord>(`/cases/${caseId}/variances/${varianceId}/resolve`, { action });
+    const { data } = await api4.patch<VarianceRecord>(`/cases/${caseId}/variances/${varianceId}/resolve`, { action });
     return data;
   },
 
@@ -899,7 +901,7 @@ export const zoikoApi = {
   }): Promise<ShipmentException> {
     if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
     const { data: job } = await apiException.post<{ job_id: string } | ShipmentException>(
-      "/shipment-exceptions/submit", payload, { timeout: 10000 }
+      "/shipment-exceptions/submit", payload
     );
     if ("job_id" in job) {
       for (let i = 0; i < 45; i++) {
@@ -972,6 +974,39 @@ export const zoikoApi = {
   async issueExceptionACR(caseId: string, envelopeId: string): Promise<unknown> {
     if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
     const { data } = await apiException4.post(`/cases/${caseId}/acr`, { case_id: caseId, envelope_id: envelopeId });
+    return data;
+  },
+};
+
+// ── SC-004 Supplier Performance Scorecard ─────────────────────────────────────
+export const scorecardApi = {
+  async listCarriers(): Promise<string[]> {
+    if (USE_MOCK) { await delay(200); return ["BlueDart", "FedEx", "DHL"]; }
+    const { data } = await apiScore.get("/scorecards/carriers");
+    return Array.isArray(data) ? data : [];
+  },
+
+  async listScorecards(carrierId?: string): Promise<ScorecardPeriod[]> {
+    if (USE_MOCK) { await delay(300); return []; }
+    const params: Record<string, string> = {};
+    if (carrierId) params.carrier_id = carrierId;
+    const { data } = await apiScore.get("/scorecards", { params });
+    return Array.isArray(data) ? data : [];
+  },
+
+  async computeScorecard(carrierId: string, periodDays = 30, threshold = 70): Promise<ScorecardPeriod> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore.post("/scorecards/compute", {
+      carrier_id: carrierId,
+      period_days: periodDays,
+      contracted_threshold: threshold,
+    });
+    return data;
+  },
+
+  async getScorecard(id: string): Promise<ScorecardPeriod> {
+    if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore.get(`/scorecards/${id}`);
     return data;
   },
 };

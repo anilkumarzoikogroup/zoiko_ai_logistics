@@ -76,7 +76,7 @@ class ExecutionGatewayHandler:
 
         # G1 — fetch token row and verify signature
         token_row = q1(
-            "SELECT case_id::text, expires_at, status, allowed_actions, signature, tenant_id::text "
+            "SELECT case_id::text, expires_at, status, scope, signature, tenant_id::text "
             "FROM governance_tokens WHERE id=%s::uuid AND tenant_id=%s::uuid",
             (token_id, tenant_id),
         )
@@ -105,31 +105,27 @@ class ExecutionGatewayHandler:
         if str(token_row["case_id"]) != str(case_id):
             errors.append(f"G4: token bound to case {token_row['case_id']} not {case_id}")
 
-        # G5 — scope
-        allowed = token_row["allowed_actions"] or []
-        if isinstance(allowed, str):
-            try:
-                allowed = json.loads(allowed)
-            except Exception:
-                allowed = [allowed]
-        if action not in allowed:
-            errors.append(f"G5: action {action!r} not in token allowed_actions {allowed}")
+        # G5 — scope: token.scope is a single action string (not a list)
+        scope = token_row["scope"] or ""
+        if action != scope:
+            errors.append(f"G5: action {action!r} does not match token scope {scope!r}")
 
-        # G6 — sanctions
-        case_row = q1(
-            "SELECT carrier_id FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+        # G6/G7 — carrier sanctions + currency; cases has no carrier_id/currency columns
+        # for SHIPMENT_EXCEPTION — join via canonical_shipment_exceptions
+        cse_row = q1(
+            """SELECT cse.carrier_id, cse.currency
+               FROM cases c
+               JOIN canonical_shipment_exceptions cse
+                   ON cse.shipment_reference = c.shipment_reference
+                   AND cse.tenant_id = c.tenant_id
+               WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid""",
             (case_id, tenant_id),
         )
-        carrier_id = (case_row or {}).get("carrier_id") or ""
+        carrier_id = (cse_row or {}).get("carrier_id") or ""
         if carrier_id and carrier_id in _SANCTIONED_CARRIERS:
             errors.append(f"G6: carrier {carrier_id!r} is on the sanctions watch-list")
 
-        # G7 — currency / FX
-        case_row2 = q1(
-            "SELECT currency FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
-            (case_id, tenant_id),
-        )
-        currency = (case_row2 or {}).get("currency", "INR") or "INR"
+        currency = (cse_row or {}).get("currency", "INR") or "INR"
         if currency not in _SUPPORTED_CURRENCIES:
             errors.append(f"G7: currency {currency!r} not in supported set {_SUPPORTED_CURRENCIES}")
 

@@ -138,6 +138,12 @@ class IngestionHandler:
         source_id = uuid.uuid4()
         now       = datetime.now(timezone.utc)
 
+        # received_by_user column is UUID — email subjects (DEV_MODE) must be dropped to NULL
+        try:
+            _recv_by_user = uuid.UUID(str(received_by_user)) if received_by_user else None
+        except (ValueError, AttributeError):
+            _recv_by_user = None
+
         # ── Step 5: Compute deduplication key ──────────────────────────────
         dedup_key = compute_dedup_key(
             domain_tag          = DOMAIN_TAG_STR,
@@ -214,7 +220,7 @@ class IngestionHandler:
                 channel, json.dumps(ch_metadata),
                 "SHIPMENT_EXCEPTION", "v1",
                 exc.shipment_reference,
-                recv_at, SERVICE_SPIFFE, received_by_user,
+                recv_at, SERVICE_SPIFFE, _recv_by_user,
                 "application/json", "utf-8",
                 payload_size, "sha-256",
                 aad, dek_id,
@@ -299,15 +305,14 @@ class IngestionHandler:
                 cur.execute("""
                     INSERT INTO shipment_events
                         (id, tenant_id, shipment_reference, event_type,
-                         event_timestamp, location, description, carrier_id, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         occurred_at, location, carrier_id, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                 """, (
                     uuid.uuid4(), tenant_id, exc.shipment_reference,
                     evt.get("event_type", "UNKNOWN"),
                     ts,
                     evt.get("location", ""),
-                    evt.get("description", ""),
                     exc.carrier_id,
                     now,
                 ))

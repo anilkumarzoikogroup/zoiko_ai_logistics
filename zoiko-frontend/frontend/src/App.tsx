@@ -52,6 +52,9 @@ const ReconciliationPage= lazy(() => import("./features/reconciliation/Reconcili
 const Exceptions        = lazy(() => import("./features/exceptions/Exceptions"));
 const NewException      = lazy(() => import("./features/exceptions/NewException"));
 const ExceptionDetail   = lazy(() => import("./features/exceptions/ExceptionDetail"));
+const ScorecardList     = lazy(() => import("./features/scorecards/ScorecardList"));
+const ComputeScorecard  = lazy(() => import("./features/scorecards/ComputeScorecard"));
+const ScorecardDetail   = lazy(() => import("./features/scorecards/ScorecardDetail"));
 
 function PageLoader() {
   return (
@@ -139,6 +142,11 @@ export default function App() {
         <Route path="/exceptions"     element={<Exceptions />} />
         <Route path="/exceptions/new" element={<NewException />} />
         <Route path="/exceptions/:id" element={<ExceptionDetail />} />
+
+        {/* SC-004 Supplier Performance Scorecards */}
+        <Route path="/scorecards"     element={<ScorecardList />} />
+        <Route path="/scorecards/new" element={<ComputeScorecard />} />
+        <Route path="/scorecards/:id" element={<ScorecardDetail />} />
 
         {/* Governance — role-gated */}
         <Route path="/analyst" element={

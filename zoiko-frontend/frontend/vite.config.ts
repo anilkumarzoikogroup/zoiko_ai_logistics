@@ -67,6 +67,14 @@ export default defineConfig({
         proxyTimeout: 90000,
         timeout: 90000,
       },
+      // SC-004 (supplier scorecard) spine — gateway port 8030.
+      "/scoreapi": {
+        target: "http://localhost:8030",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/scoreapi/, ""),
+        proxyTimeout: 90000,
+        timeout: 90000,
+      },
     },
   },
   build: {

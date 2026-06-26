@@ -70,32 +70,56 @@ class CaseHandler:
             row = cur.fetchone()
 
             if row is None:
-                # Should not happen without ON CONFLICT — treat as new
-                row = {"id": case_id, "state": "NEW", "opened_at": now}
+                # ON CONFLICT fired — case already exists for this shipment_reference.
+                # Fetch the real existing case; using the un-inserted case_id would
+                # cause a FK violation on case_events.
+                cur.execute(
+                    "SELECT id, state, opened_at FROM cases "
+                    "WHERE tenant_id=%s AND shipment_reference=%s AND sla_breach_hours IS NOT NULL LIMIT 1",
+                    (tenant_id, shipment_reference),
+                )
+                existing = cur.fetchone()
+                if existing:
+                    actual_case_id = existing["id"] if isinstance(existing, dict) else existing[0]
+                    state          = existing["state"] if isinstance(existing, dict) else "NEW"
+                    opened_at      = existing["opened_at"] if isinstance(existing, dict) else now
+                else:
+                    # Shouldn't happen, but fall back gracefully
+                    actual_case_id = case_id
+                    state          = "NEW"
+                    opened_at      = now
 
-            actual_case_id = row["id"] if isinstance(row, dict) else row[0]
+                # Still tag orphaned shipment events with the real case_id
+                cur.execute(
+                    "UPDATE shipment_events SET case_id=%s "
+                    "WHERE tenant_id=%s AND shipment_reference=%s AND case_id IS NULL",
+                    (actual_case_id, tenant_id, shipment_reference),
+                )
+                conn.commit()
+            else:
+                actual_case_id = row["id"]       if isinstance(row, dict) else row[0]
+                state          = row["state"]     if isinstance(row, dict) else "NEW"
+                opened_at      = row["opened_at"] if isinstance(row, dict) else now
 
-            # Tag shipment events with this case_id
-            cur.execute(
-                "UPDATE shipment_events SET case_id=%s WHERE tenant_id=%s AND shipment_reference=%s AND case_id IS NULL",
-                (actual_case_id, tenant_id, shipment_reference),
-            )
+                # Tag shipment events with this case_id
+                cur.execute(
+                    "UPDATE shipment_events SET case_id=%s WHERE tenant_id=%s AND shipment_reference=%s AND case_id IS NULL",
+                    (actual_case_id, tenant_id, shipment_reference),
+                )
 
-            # Append CASE_OPENED event
-            cur.execute("""
-                INSERT INTO case_events
-                    (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
-                VALUES (%s, %s, %s, 'CASE_OPENED', NULL, 'NEW', %s, %s::jsonb, %s)
-            """, (
-                uuid.uuid4(), tenant_id, actual_case_id, actor_sub,
-                json.dumps({"case_type": "SHIPMENT_EXCEPTION", "shipment_reference": shipment_reference}),
-                now,
-            ))
+                # Append CASE_OPENED event only for newly created cases
+                cur.execute("""
+                    INSERT INTO case_events
+                        (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
+                    VALUES (%s, %s, %s, 'CASE_OPENED', NULL, 'NEW', %s, %s::jsonb, %s)
+                """, (
+                    uuid.uuid4(), tenant_id, actual_case_id, actor_sub,
+                    json.dumps({"case_type": "SHIPMENT_EXCEPTION", "shipment_reference": shipment_reference}),
+                    now,
+                ))
+                conn.commit()
 
-            conn.commit()
-
-            state     = row["state"]      if isinstance(row, dict) else "NEW"
-            opened_at = row["opened_at"]  if isinstance(row, dict) else now
+            is_new = row is not None
 
         except Exception:
             conn.rollback()
@@ -103,7 +127,7 @@ class CaseHandler:
         finally:
             conn.close()
 
-        return CaseResult(case_id=actual_case_id, state=state, opened_at=opened_at, is_new=True)
+        return CaseResult(case_id=actual_case_id, tenant_id=tenant_id, state=state, opened_at=opened_at, is_new=is_new)
 
     def transition_state(
         self, tenant_id: str, case_id: str, to_state: str, actor_sub: str = "system"

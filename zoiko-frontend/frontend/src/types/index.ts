@@ -159,6 +159,56 @@ export interface ShipmentException {
   duplicate?: boolean;
 }
 
+// SC-004 Supplier Performance Scorecard
+export interface ScorecardSubScore {
+  score: number;    // 0-100
+  weight: number;
+  label: string;
+}
+
+export interface ScorecardPeriod {
+  id: string;
+  tenant_id: string;
+  carrier_id: string;
+  period_start: string;
+  period_end: string;
+  on_time_rate: number;
+  damage_rate: number;
+  claim_frequency: number;
+  dispute_turnaround_days: number;
+  composite_score: number;
+  contracted_threshold: number;
+  breach_detected: boolean;
+  breach_amount: number;
+  currency: string;
+  created_at: string;
+  // detail-only fields
+  sub_scores?: {
+    on_time:    ScorecardSubScore;
+    quality:    ScorecardSubScore;
+    frequency:  ScorecardSubScore;
+    resolution: ScorecardSubScore;
+  };
+  raw_metrics?: {
+    total_claims: number;
+    total_claimed: number;
+    total_approved: number;
+    avg_turnaround_days: number;
+    sla_cases: number;
+    on_time_cases: number;
+  };
+  recent_claims?: Array<{
+    id: string;
+    claim_reference: string;
+    claim_type: string;
+    claimed_amount: number;
+    approved_amount: number | null;
+    status: string;
+    filed_at: string;
+    currency: string;
+  }>;
+}
+
 export interface EvidenceItem {
   id: string;
   bundle_id: string;

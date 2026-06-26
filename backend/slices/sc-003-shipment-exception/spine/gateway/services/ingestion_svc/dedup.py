@@ -31,7 +31,9 @@ def write_dedup_index(
     payload_hash_hex: str, source_type: str, source_type_version: str,
 ) -> None:
     import uuid, datetime
+    # Use a savepoint so a failure (e.g. table missing) doesn't abort the outer transaction.
     try:
+        cur.execute("SAVEPOINT write_dedup_index")
         cur.execute("""
             INSERT INTO deduplication_index
                 (id, tenant_id, dedup_key, outcome, source_record_id, original_record_id,
@@ -43,5 +45,6 @@ def write_dedup_index(
             original_id, external_source_ref, payload_hash_hex,
             source_type, source_type_version,
         ))
+        cur.execute("RELEASE SAVEPOINT write_dedup_index")
     except Exception:
-        pass  # table may not exist in all environments
+        cur.execute("ROLLBACK TO SAVEPOINT write_dedup_index")

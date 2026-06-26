@@ -22,7 +22,7 @@ import paths  # noqa: F401 — must be first
 
 load_dotenv()
 
-from fastapi import FastAPI, Depends, Header, HTTPException, Request
+from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.api_gateway.auth import get_claims
@@ -44,6 +44,8 @@ def _make_broker():
 
 
 _BROKER = _make_broker()
+
+_v1 = APIRouter()
 
 app = FastAPI(
     title="Zoiko SC-003 — Shipment Exception Execution Gateway",
@@ -68,7 +70,7 @@ def health():
 
 # ── Execute ───────────────────────────────────────────────────────────────────
 
-@app.post("/execute")
+@_v1.post("/execute")
 def execute(
     body: ExecuteRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -86,7 +88,7 @@ def execute(
 
 # ── Reconcile ─────────────────────────────────────────────────────────────────
 
-@app.post("/reconcile")
+@_v1.post("/reconcile")
 def reconcile(
     body: ReconcileRequest,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
@@ -102,12 +104,12 @@ def reconcile(
 
 # ── Variances ─────────────────────────────────────────────────────────────────
 
-@app.get("/cases/{case_id}/variances")
+@_v1.get("/cases/{case_id}/variances")
 def get_variances(case_id: str, claims=Depends(get_claims)):
     return ReconciliationHandler(DB_URL, _BROKER).get_variances(claims.tenant_id, case_id)
 
 
-@app.post("/cases/{case_id}/variances/{variance_id}/resolve")
+@_v1.post("/cases/{case_id}/variances/{variance_id}/resolve")
 def resolve_variance(
     case_id: str,
     variance_id: str,
@@ -129,7 +131,7 @@ def resolve_variance(
 
 # ── ACR ───────────────────────────────────────────────────────────────────────
 
-@app.post("/cases/{case_id}/acr")
+@_v1.post("/cases/{case_id}/acr")
 def issue_acr(
     case_id: str,
     body: IssueACRRequest,
@@ -147,9 +149,13 @@ def issue_acr(
     return result
 
 
-@app.get("/cases/{case_id}/acr")
+@_v1.get("/cases/{case_id}/acr")
 def get_acr(case_id: str, claims=Depends(get_claims)):
     record = AuditACRHandler(DB_URL, _BROKER).get_acr(claims.tenant_id, case_id)
     if not record:
         raise HTTPException(status_code=404, detail="ACR not yet issued for this case")
     return record
+
+
+# ── Mount router ──────────────────────────────────────────────────────────────
+app.include_router(_v1, prefix="/v1")

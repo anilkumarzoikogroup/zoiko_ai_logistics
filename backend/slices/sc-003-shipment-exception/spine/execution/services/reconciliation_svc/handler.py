@@ -5,12 +5,14 @@ Matches:  committed ETA  vs  actual_delivery  timestamp from carrier.
 Writes:   reconciliations  +  case_outcomes  +  reconciliation_variances (if drift > threshold).
 """
 import uuid
+import hashlib
 import json
 from datetime import datetime, timezone
 
 import paths  # noqa: F401
 
 from shared.db import q, q1, DB_URL as _DEFAULT_DB_URL
+from shared.signer import sign as _sign
 
 
 _BREACH_TOLERANCE_HOURS = 0.25   # 15-min grace window before raising a variance
@@ -91,9 +93,9 @@ class ReconciliationHandler:
 
     def get_variances(self, tenant_id: str, case_id: str) -> list[dict]:
         rows = q("""
-            SELECT id::text, field_name, expected_value, actual_value,
-                   variance_type, status, created_at
-            FROM   reconciliation_variances
+            SELECT id::text, expected_value, actual_value,
+                   delta, variance_type, status, created_at
+            FROM   variance_records
             WHERE  case_id=%s::uuid AND tenant_id=%s::uuid
             ORDER BY created_at ASC
         """, (case_id, tenant_id))
@@ -109,10 +111,10 @@ class ReconciliationHandler:
         note:        str = "",
     ) -> dict:
         q("""
-            UPDATE reconciliation_variances
-            SET    status=%s, resolved_by=%s, resolution_note=%s, resolved_at=NOW()
+            UPDATE variance_records
+            SET    status=%s, resolved_by=%s, resolved_at=NOW()
             WHERE  id=%s::uuid AND case_id=%s::uuid AND tenant_id=%s::uuid
-        """, (resolution, actor_sub, note, variance_id, case_id, tenant_id))
+        """, (resolution, actor_sub, variance_id, case_id, tenant_id))
         return {"status": resolution, "variance_id": variance_id}
 
     # ── DB writes ─────────────────────────────────────────────────────────────
@@ -148,17 +150,21 @@ class ReconciliationHandler:
     def _write_outcome(
         self, tenant_id, case_id, rec_id, actor_sub, match_status,
     ) -> uuid.UUID:
-        outcome_id = uuid.uuid4()
+        outcome_id   = uuid.uuid4()
+        outcome_type = "SLA_CREDIT_ISSUED" if match_status == "MATCHED" else "SLA_CREDIT_VARIANCE"
+        payload      = json.dumps({"case_id": case_id, "recon_id": str(rec_id), "outcome_type": outcome_type})
+        outcome_hash = hashlib.sha256(b"zoiko.outcome.v1:" + payload.encode()).digest()
+        sig_bytes, kid = _sign("default", outcome_hash)
         q("""
-            INSERT INTO case_outcomes
-                (id, tenant_id, case_id, reconciliation_id,
-                 outcome_type, status, actor_sub, created_at)
-            VALUES (%s, %s::uuid, %s::uuid, %s, %s, 'RECORDED', %s, NOW())
+            INSERT INTO outcomes
+                (id, tenant_id, case_id, recon_id,
+                 outcome_type, outcome_hash, signature, kid, recorded_at)
+            VALUES (%s, %s::uuid, %s::uuid, %s,
+                    %s, %s, %s, %s, NOW())
             ON CONFLICT DO NOTHING
         """, (
             outcome_id, tenant_id, case_id, str(rec_id),
-            "SLA_CREDIT_ISSUED" if match_status == "MATCHED" else "SLA_CREDIT_VARIANCE",
-            actor_sub,
+            outcome_type, outcome_hash, sig_bytes, kid,
         ))
         return outcome_id
 
@@ -167,16 +173,16 @@ class ReconciliationHandler:
         expected: float, actual: float, delta: float,
     ) -> None:
         q("""
-            INSERT INTO reconciliation_variances
-                (id, tenant_id, case_id, reconciliation_id,
-                 field_name, expected_value, actual_value,
+            INSERT INTO variance_records
+                (id, tenant_id, case_id,
+                 expected_value, actual_value, delta,
                  variance_type, status, created_at)
-            VALUES (gen_random_uuid(), %s::uuid, %s::uuid, %s,
-                    'sla_breach_hours', %s, %s,
+            VALUES (gen_random_uuid(), %s::uuid, %s::uuid,
+                    %s, %s, %s,
                     'BREACH_DELTA', 'OPEN', NOW())
         """, (
-            tenant_id, case_id, str(rec_id),
-            str(round(expected, 4)), str(round(actual, 4)),
+            tenant_id, case_id,
+            round(expected, 4), round(actual, 4), round(delta, 4),
         ))
 
     def _advance_case(self, tenant_id: str, case_id: str, actor_sub: str) -> None:
@@ -197,7 +203,7 @@ class ReconciliationHandler:
             from kafka.producer import ZoikoProducer, KafkaMessage
             prod = ZoikoProducer(self._broker)
             prod.publish(KafkaMessage(
-                topic="zoiko.reconciliation.done", key=case_id,
+                topic="zoiko.reconciliation.updated", key=case_id,
                 payload={"case_id": case_id, "reconciliation_id": rec_id, "status": status},
                 tenant_id=tenant_id,
             ))

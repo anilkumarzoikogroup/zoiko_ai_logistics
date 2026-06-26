@@ -481,11 +481,12 @@ class ExecutionGateway:
             if settings and settings.get("recovery_executed_email") is False:
                 return
 
-            # Get claim/carrier info
+            # Get claim/carrier info — cases has no carrier_id; join via claims
             case_row = q1(
                 """SELECT c.id, ca.name AS carrier_name
                    FROM cases c
-                   LEFT JOIN carriers ca ON ca.id = c.carrier_id
+                   LEFT JOIN claims cl ON cl.id = c.claim_id
+                   LEFT JOIN carriers ca ON ca.id = cl.carrier_id::uuid
                    WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1""",
                 (case_id, tenant_id),
                 db_url=self._db_url,

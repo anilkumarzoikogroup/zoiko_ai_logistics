@@ -114,7 +114,7 @@ class AgentRuntime:
             "finding": f"Case state: {case_data.get('state', 'unknown')}",
         })
 
-        # Step 3b — ambiguity_penalty: count unresolved ambiguity_queue_entries
+        # Step 3b — ambiguity_penalty: count unresolved ambiguity_queue entries
         # for this case. Each unresolved entry reduces confidence by 0.05,
         # capped at 0.20. Zero ambiguities (normal SC-001 path) → penalty = 0.0.
         import psycopg2 as _psycopg2
@@ -122,7 +122,7 @@ class AgentRuntime:
         try:
             _acur = _aconn.cursor()
             _acur.execute(
-                "SELECT COUNT(*) FROM ambiguity_queue_entries "
+                "SELECT COUNT(*) FROM ambiguity_queue "
                 "WHERE case_id=%s AND tenant_id=%s AND resolved_at IS NULL",
                 (uuid.UUID(case_id), tenant_id),
             )

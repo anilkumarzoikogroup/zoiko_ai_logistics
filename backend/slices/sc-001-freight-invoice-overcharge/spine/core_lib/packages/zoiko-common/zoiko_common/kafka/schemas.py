@@ -63,6 +63,9 @@ PRODUCER_TOPICS: set = {
     "zoiko.governance.decision.issued", "zoiko.governance.token.issued",    "zoiko.governance.token.consumed",
     "zoiko.execution.dispatched",       "zoiko.execution.completed",
     "zoiko.reconciliation.updated",     "zoiko.acr.generated",              "zoiko.audit.artifact.written",
+    # SC-003 — Shipment Exception / SLA penalty pipeline
+    "zoiko.shipment.exception.received",
+    "zoiko.shipment.exception.canonical",
     # Security event stream (FR-024)
     "zoiko.security.event-detected.v1",
     # Retry topics — transient failures re-queued for backoff/retry

@@ -205,21 +205,22 @@ CREATE TABLE IF NOT EXISTS transparency_log_entries (
                         'EXECUTION_DISPATCHED','RECOVERY_CLOSED',
                         'KEY_ROTATION','AUDIT_CHECKPOINT'
                     )),
-    entry_hash      BYTEA NOT NULL,     -- SHA-256("zoiko.transparency.v1:" + jcs_payload)
-    prev_entry_hash BYTEA,              -- hash of previous entry (NULL for genesis)
-    payload         JSONB NOT NULL,     -- canonicalized event content
-    -- Primary signature (system/ACR service)
+    entry_hash      BYTEA NOT NULL,
+    prev_entry_hash BYTEA,
+    payload         JSONB NOT NULL,
     signature       BYTEA NOT NULL,
     kid             TEXT NOT NULL,
-    -- Co-signature (second authority — compliance officer or external auditor)
     co_signature    BYTEA,
     co_kid          TEXT,
     co_signed_at    TIMESTAMPTZ,
     co_signed_by    TEXT,
-    is_locked       BOOLEAN NOT NULL DEFAULT FALSE,  -- WORM: once true, irreversible
+    is_locked       BOOLEAN NOT NULL DEFAULT FALSE,
     logged_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- Schema drift guards for pre-existing transparency_log_entries table
+ALTER TABLE transparency_log_entries ADD COLUMN IF NOT EXISTS case_id UUID REFERENCES cases(id);
+ALTER TABLE transparency_log_entries ADD COLUMN IF NOT EXISTS logged_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 CREATE INDEX IF NOT EXISTS idx_transparency_log_tenant
     ON transparency_log_entries(tenant_id, logged_at DESC);

@@ -6,6 +6,46 @@ import { cn } from "@/utils/cn";
 import { Search, Plus, ChevronRight, AlertTriangle } from "lucide-react";
 import type { ExceptionState } from "@/types";
 
+// Inline timeline sparkline: PICKUP → IN_TRANSIT → DELAYED → DELIVERED
+// Built from data already on the exception row — no extra API calls.
+function ShipmentSparkline({ state, breachHours }: { state: string; breachHours: number }) {
+  const isLate  = breachHours > 0;
+  const isDone  = ["DISPATCHED", "OUTCOME_RECORDED", "CLOSED"].includes(state);
+
+  // [label, is filled, fill color]
+  const nodes: [string, boolean, string][] = [
+    ["PU", true,               "#10b981"],
+    ["IT", true,               "#10b981"],
+    ["DL", isLate,             isLate ? "#f59e0b" : "#cbd5e1"],
+    ["DV", isDone,             isDone && isLate ? "#ef4444" : isDone ? "#10b981" : "#cbd5e1"],
+  ];
+
+  const W = 88, H = 22, r = 5;
+  const xs = [r, W / 3, (W * 2) / 3, W - r];
+
+  return (
+    <svg width={W} height={H} aria-label="Shipment journey">
+      {nodes.slice(0, -1).map(([, , c], i) => (
+        <line
+          key={i}
+          x1={xs[i] + r} y1={H / 2}
+          x2={xs[i + 1] - r} y2={H / 2}
+          stroke={nodes[i + 1][1] ? nodes[i + 1][2] : "#e2e8f0"}
+          strokeWidth={2}
+        />
+      ))}
+      {nodes.map(([label, filled, color], i) => (
+        <g key={label}>
+          <circle cx={xs[i]} cy={H / 2} r={r} fill={filled ? color : "#f1f5f9"} stroke={color} strokeWidth={1.5} />
+          <text x={xs[i]} y={H - 1} textAnchor="middle" fontSize={6} fill="#94a3b8" fontFamily="monospace">
+            {label}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 const STATE_TABS: (ExceptionState | "ALL")[] = [
   "ALL", "FINDING_GENERATED", "APPROVAL_PENDING",
   "EXECUTION_READY", "DISPATCHED", "CLOSED", "ABORTED",
@@ -140,6 +180,7 @@ export default function Exceptions() {
               <tr className="border-b border-slate-100 bg-slate-50 text-left">
                 <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wide">Shipment Ref</th>
                 <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wide">Carrier</th>
+                <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wide">Journey</th>
                 <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wide">Breach</th>
                 <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wide">Penalty</th>
                 <th className="px-4 py-3 text-[11px] font-bold text-slate-500 uppercase tracking-wide">Confidence</th>
@@ -159,6 +200,9 @@ export default function Exceptions() {
                     {exc.shipment_reference}
                   </td>
                   <td className="px-4 py-3 text-slate-700 font-medium">{exc.carrier || exc.carrier_id || "—"}</td>
+                  <td className="px-4 py-3">
+                    <ShipmentSparkline state={exc.state} breachHours={exc.sla_breach_hours ?? 0} />
+                  </td>
                   <td className="px-4 py-3">
                     <BreachBadge hours={exc.sla_breach_hours ?? 0} />
                   </td>

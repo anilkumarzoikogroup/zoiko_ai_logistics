@@ -31,11 +31,17 @@ def exceptions_q(_r, where: str, params: tuple, limit: int = 50, offset: int = 0
             COALESCE(c.sla_breach_hours, 0)::float                  AS sla_breach_hours,
             COALESCE(c.sla_penalty_amount, 0)::float                AS sla_penalty_amount,
             COALESCE((
-                SELECT sr.external_source_ref FROM source_records sr
-                WHERE  sr.tenant_id = c.tenant_id
-                  AND  sr.external_source_ref = c.shipment_reference
+                SELECT cse.carrier_id FROM canonical_shipment_exceptions cse
+                WHERE  cse.shipment_reference = c.shipment_reference
+                  AND  cse.tenant_id = c.tenant_id
                 LIMIT 1
-            ), '')                                                  AS carrier_id,
+            ), '')                                                  AS carrier,
+            COALESCE((
+                SELECT cse.currency FROM canonical_shipment_exceptions cse
+                WHERE  cse.shipment_reference = c.shipment_reference
+                  AND  cse.tenant_id = c.tenant_id
+                LIMIT 1
+            ), 'INR')                                               AS currency,
             COALESCE((
                 SELECT f.confidence::float
                 FROM   findings f WHERE f.case_id = c.id LIMIT 1
@@ -85,7 +91,7 @@ def submit_exception(
         event_stream          = [e.dict() for e in body.event_stream],
     )
 
-    ing_r = ingestion_cls(db_url, broker, slug).ingest_exception(
+    ing_r = ingestion_cls(db_url, broker, slug).ingest_shipment_exception(
         tenant_id, exc_in, idempotency_key,
         channel=channel, channel_metadata=ch_metadata,
         received_by_user=actor_sub if actor_sub else None,
@@ -223,21 +229,72 @@ def run_evidence_and_reasoning_exception(
     # EVIDENCE_PENDING
     CaseHandler(db_url, _broker).transition_state(tenant_id, case_id, "EVIDENCE_PENDING", actor_sub)
 
-    bundle_id = EvidenceHandler(db_url, _broker, slug).build_bundle(
-        tenant_id          = tenant_id,
-        case_id            = case_id,
-        source_record_id   = source_record_id,
-        canonical_hash     = canonical_hash if isinstance(canonical_hash, bytes)
-                             else bytes.fromhex(canonical_hash) if isinstance(canonical_hash, str)
-                             else canonical_hash,
-        shipment_reference = shipment_reference,
-        carrier_id         = carrier_id,
-        sla_breach_hours   = sla_breach_hours,
-        sla_penalty_amount = sla_penalty_amount,
-        penalty_rate_per_hour = penalty_rate_per_hour,
-        committed_eta      = committed_eta,
-        actual_delivery    = actual_delivery,
-        currency           = currency,
+    _ev = EvidenceHandler(db_url, _broker, slug)
+
+    # Artifact 1: source_record
+    r1 = _ev.add_item(
+        tenant_id     = tenant_id,
+        case_id       = case_id,
+        item_type     = "source_record",
+        content_bytes = json.dumps({
+            "source_record_id":   str(source_record_id),
+            "shipment_reference": shipment_reference,
+            "carrier_id":         carrier_id,
+        }, sort_keys=True).encode(),
+        actor_sub     = actor_sub or "system",
+    )
+    bundle_id = r1.bundle_id
+
+    # Artifact 2: canonical_shipment_exception
+    _can_bytes = (
+        canonical_hash if isinstance(canonical_hash, bytes)
+        else bytes.fromhex(canonical_hash) if isinstance(canonical_hash, str)
+        else str(canonical_hash).encode()
+    )
+    _ev.add_item(
+        tenant_id     = tenant_id,
+        case_id       = case_id,
+        item_type     = "canonical_shipment_exception",
+        content_bytes = _can_bytes,
+        actor_sub     = actor_sub or "system",
+    )
+
+    # Artifact 3: sla_contract_clause
+    _ev.add_item(
+        tenant_id     = tenant_id,
+        case_id       = case_id,
+        item_type     = "sla_contract_clause",
+        content_bytes = json.dumps({
+            "penalty_rate_per_hour": penalty_rate_per_hour,
+            "currency":              currency,
+        }, sort_keys=True).encode(),
+        actor_sub     = actor_sub or "system",
+    )
+
+    # Artifact 4: breach_calculation
+    _ev.add_item(
+        tenant_id     = tenant_id,
+        case_id       = case_id,
+        item_type     = "breach_calculation",
+        content_bytes = json.dumps({
+            "committed_eta":    committed_eta.isoformat() if hasattr(committed_eta, "isoformat") else str(committed_eta),
+            "actual_delivery":  actual_delivery.isoformat() if hasattr(actual_delivery, "isoformat") else str(actual_delivery),
+            "sla_breach_hours": sla_breach_hours,
+            "sla_penalty_amount": sla_penalty_amount,
+        }, sort_keys=True).encode(),
+        actor_sub     = actor_sub or "system",
+    )
+
+    # Artifact 5: rule_trace
+    _ev.add_item(
+        tenant_id     = tenant_id,
+        case_id       = case_id,
+        item_type     = "rule_trace",
+        content_bytes = json.dumps({
+            "delivery_window_breach": {"confidence": 1.00, "weight": 0.60},
+            "sla_clause_applicable":  {"confidence": 0.88, "weight": 0.40},
+        }, sort_keys=True).encode(),
+        actor_sub     = actor_sub or "system",
     )
 
     ReasoningHandler(db_url, _broker, slug).generate_finding(
@@ -257,9 +314,9 @@ def run_evidence_and_reasoning_exception(
     try:
         from kafka.producer import ZoikoProducer, KafkaMessage
         prod = ZoikoProducer(_broker)
-        prod.publish(KafkaMessage(topic="zoiko.evidence.bundled", key=case_id,
+        prod.publish(KafkaMessage(topic="evidence.bundled", key=case_id,
                                   payload={"case_id": case_id, "bundle_id": str(bundle_id)}, tenant_id=tenant_id))
-        prod.publish(KafkaMessage(topic="zoiko.finding.generated", key=case_id,
+        prod.publish(KafkaMessage(topic="finding.created", key=case_id,
                                   payload={"case_id": case_id, "confidence": SC003_CONFIDENCE}, tenant_id=tenant_id))
     except Exception:
         pass

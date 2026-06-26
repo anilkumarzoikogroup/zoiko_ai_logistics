@@ -60,7 +60,7 @@ function EventRow({ event }: { event: Record<string, unknown> }) {
             {occurred ? new Date(occurred).toLocaleString("en-IN") : ""}
           </span>
         </div>
-        {event.actor_sub && (
+        {(event.actor_sub as string | undefined) && (
           <span className="text-[11px] text-slate-400">{event.actor_sub as string}</span>
         )}
       </div>
@@ -70,6 +70,87 @@ function EventRow({ event }: { event: Record<string, unknown> }) {
 
 function fmt(n: number, currency = "INR") {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency, maximumFractionDigits: 0 }).format(n);
+}
+
+function CommitmentMatchPanel({
+  committedEta, actualDelivery, breachHours, penaltyAmount, currency,
+}: {
+  committedEta: string; actualDelivery: string;
+  breachHours: number; penaltyAmount: number; currency: string;
+}) {
+  const eta    = new Date(committedEta).getTime();
+  const actual = new Date(actualDelivery).getTime();
+
+  // Use committed_eta as the 100% baseline; actual extends past it
+  const totalMs      = actual - eta + (eta - (eta - breachHours * 3_600_000));
+  const committedPct = Math.min(100, Math.round(((eta - (eta - breachHours * 3_600_000)) / totalMs) * 100));
+  // committed bar: proportion of total window that is on-time
+  const onTimePct    = breachHours > 0 ? Math.round(100 * (1 - breachHours / (breachHours + 24))) : 100;
+  const breachPct    = 100 - onTimePct;
+
+  const fmtTs = (s: string) => new Date(s).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" });
+  const breachLabel = `${breachHours.toFixed(1)}h over SLA`;
+  const breachColor = breachHours >= 24 ? "bg-red-500" : breachHours >= 4 ? "bg-amber-500" : "bg-amber-400";
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-sm font-semibold text-slate-700">Commitment Match</h2>
+        <span className={cn(
+          "text-[10px] font-bold px-2 py-0.5 rounded-full",
+          breachHours > 0 ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"
+        )}>
+          {breachHours > 0 ? `Breach: ${breachLabel}` : "On Time"}
+        </span>
+      </div>
+
+      {/* Two-bar comparison chart */}
+      <div className="space-y-3">
+        {/* Bar 1 — Committed delivery window */}
+        <div>
+          <div className="flex justify-between text-[11px] text-slate-500 mb-1">
+            <span className="font-semibold">Committed ETA</span>
+            <span>{fmtTs(committedEta)}</span>
+          </div>
+          <div className="h-5 bg-slate-100 rounded-full overflow-hidden flex">
+            <div
+              className="h-full bg-emerald-400 rounded-full transition-all"
+              style={{ width: `${onTimePct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Bar 2 — Actual delivery (on-time portion + breach overhang) */}
+        <div>
+          <div className="flex justify-between text-[11px] text-slate-500 mb-1">
+            <span className="font-semibold">Actual Delivery</span>
+            <span>{fmtTs(actualDelivery)}</span>
+          </div>
+          <div className="h-5 bg-slate-100 rounded-full overflow-hidden flex">
+            <div className="h-full bg-emerald-400" style={{ width: `${onTimePct}%` }} />
+            {breachPct > 0 && (
+              <div className={cn("h-full rounded-r-full", breachColor)} style={{ width: `${breachPct}%` }} />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="flex items-center gap-4 mt-4 text-[11px] text-slate-500">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />On-time window
+        </span>
+        {breachHours > 0 && (
+          <span className="flex items-center gap-1.5">
+            <span className={cn("h-2.5 w-2.5 rounded-full", breachColor)} />{breachLabel}
+          </span>
+        )}
+        <span className="ml-auto font-semibold text-slate-700">
+          Penalty: {fmt(penaltyAmount, currency)}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 export default function ExceptionDetail() {
@@ -133,7 +214,7 @@ export default function ExceptionDetail() {
       const res: Record<string, unknown> = await zoikoApi.proposeExceptionCredit(id!, {
         finding_id: findingId || finding?.id || "",
         amount:     penaltyAmt,
-        currency:   exc.currency,
+        currency:   exc?.currency ?? "INR",
       }) as Record<string, unknown>;
       setTaskId((res?.task_id as string) || "");
       setActionStatus("Proposal submitted. Awaiting manager approval.");
@@ -185,30 +266,31 @@ export default function ExceptionDetail() {
         </button>
       </div>
 
-      {/* 4 KPI Tiles */}
+      {/* 4 KPI Tiles — per spec: Committed ETA, Actual Delivery, SLA Breach Duration, AI Confidence */}
       <div className="grid grid-cols-4 gap-4">
         <KPITile
-          label="SLA Breach"
-          value={`${breachH.toFixed(2)}h`}
-          sub={`${Math.floor(breachH)}h ${Math.round((breachH % 1) * 60)}m over SLA`}
-          accent={breachH >= 24 ? "text-red-600" : breachH >= 4 ? "text-amber-600" : "text-emerald-600"}
+          label="Committed ETA"
+          value={exc.committed_eta ? new Date(exc.committed_eta).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—"}
+          sub={exc.committed_eta ? new Date(exc.committed_eta).toLocaleDateString("en-IN") : "No ETA set"}
+          accent="text-slate-800"
         />
         <KPITile
-          label="SLA Penalty"
-          value={fmt(penaltyAmt, exc.currency)}
-          sub={`${exc.currency} · SLA credit due`}
-          accent="text-slate-800"
+          label="Actual Delivery"
+          value={exc.actual_delivery ? new Date(exc.actual_delivery).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—"}
+          sub={exc.actual_delivery ? new Date(exc.actual_delivery).toLocaleDateString("en-IN") : "Not delivered"}
+          accent={breachH > 0 ? (breachH >= 24 ? "text-red-600" : "text-amber-600") : "text-emerald-600"}
+        />
+        <KPITile
+          label="SLA Breach Duration"
+          value={`${breachH.toFixed(1)}h`}
+          sub={`${Math.floor(breachH)}h ${Math.round((breachH % 1) * 60)}m · ${fmt(penaltyAmt, exc.currency)} due`}
+          accent={breachH >= 24 ? "text-red-600" : breachH >= 4 ? "text-amber-600" : "text-emerald-600"}
         />
         <KPITile
           label="AI Confidence"
           value={confidence}
           sub="SC-003 reasoning engine"
           accent={exc.confidence && exc.confidence >= 0.9 ? "text-emerald-600" : "text-amber-600"}
-        />
-        <KPITile
-          label="Pipeline State"
-          value={STATE_CONFIG[exc.state]?.label ?? exc.state}
-          sub={`FSM · ${events.length} event${events.length !== 1 ? "s" : ""}`}
         />
       </div>
 
@@ -234,6 +316,17 @@ export default function ExceptionDetail() {
               ))}
             </div>
           </div>
+
+          {/* Reconciliation — Commitment Match */}
+          {exc.committed_eta && exc.actual_delivery && (
+            <CommitmentMatchPanel
+              committedEta={exc.committed_eta}
+              actualDelivery={exc.actual_delivery}
+              breachHours={exc.sla_breach_hours ?? 0}
+              penaltyAmount={exc.sla_penalty_amount ?? 0}
+              currency={exc.currency}
+            />
+          )}
 
           {/* Finding */}
           {finding && (

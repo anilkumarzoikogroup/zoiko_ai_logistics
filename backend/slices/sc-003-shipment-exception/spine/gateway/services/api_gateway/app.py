@@ -25,7 +25,7 @@ import paths  # noqa: F401 — must be first
 load_dotenv()
 
 import uuid
-from fastapi import FastAPI, Depends, Header, HTTPException, Request
+from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -61,6 +61,8 @@ def _make_broker():
 
 
 _BROKER = _make_broker()
+
+_v1 = APIRouter()
 
 app = FastAPI(
     title="Zoiko SC-003 — Shipment Exception Gateway",
@@ -109,7 +111,7 @@ def health():
 
 # ── Submit ────────────────────────────────────────────────────────────────────
 
-@app.post("/shipment-exceptions/submit")
+@_v1.post("/shipment-exceptions/submit")
 def post_submit(
     request: Request,
     body: ShipmentExceptionSubmitRequest,
@@ -136,7 +138,7 @@ def post_submit(
 
 # ── List / Get ────────────────────────────────────────────────────────────────
 
-@app.get("/shipment-exceptions")
+@_v1.get("/shipment-exceptions")
 def list_exceptions(
     state: str | None = None,
     page: int = 1,
@@ -146,29 +148,29 @@ def list_exceptions(
     return ui_list_exceptions(_row, claims.tenant_id, state, page, page_size)
 
 
-@app.get("/shipment-exceptions/{case_id}")
+@_v1.get("/shipment-exceptions/{case_id}")
 def get_exception(case_id: str, claims=Depends(get_claims)):
     return ui_get_exception(_row, claims.tenant_id, case_id)
 
 
-@app.get("/shipment-exceptions/{case_id}/finding")
+@_v1.get("/shipment-exceptions/{case_id}/finding")
 def get_finding(case_id: str, claims=Depends(get_claims)):
     return ui_get_exception_finding(_row, claims.tenant_id, case_id)
 
 
-@app.get("/shipment-exceptions/{case_id}/events")
+@_v1.get("/shipment-exceptions/{case_id}/events")
 def get_events(case_id: str, claims=Depends(get_claims)):
     return ui_get_exception_events(_row, claims.tenant_id, case_id)
 
 
-@app.get("/shipment-exceptions/{case_id}/shipment-events")
+@_v1.get("/shipment-exceptions/{case_id}/shipment-events")
 def get_shipment_events(case_id: str, claims=Depends(get_claims)):
     return ui_get_shipment_events(_row, claims.tenant_id, case_id)
 
 
 # ── Governance ────────────────────────────────────────────────────────────────
 
-@app.post("/shipment-exceptions/{case_id}/propose")
+@_v1.post("/shipment-exceptions/{case_id}/propose")
 def propose(
     case_id: str,
     body: UIProposalRequest,
@@ -185,7 +187,7 @@ def propose(
     )
 
 
-@app.post("/shipment-exceptions/{case_id}/decide")
+@_v1.post("/shipment-exceptions/{case_id}/decide")
 def decide(
     case_id: str,
     body: UIDecideRequest,
@@ -202,3 +204,7 @@ def decide(
         decision  = body.decision,
         note      = body.note or "",
     )
+
+
+# ── Mount router ──────────────────────────────────────────────────────────────
+app.include_router(_v1, prefix="/v1")

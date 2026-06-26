@@ -188,15 +188,19 @@ class GovernanceHandler:
             )
 
             decision_id = uuid.uuid4()
+            # Map SC-003 fields to the shared governance_decisions schema:
+            # proposal_id = task_uuid (the governance task acts as the proposal anchor)
+            # policy_bundle_id = task_uuid (no separate policy_bundles table in SC-003)
+            # outcome = "EXECUTION_READY" | "REJECTED"
             cur.execute("""
                 INSERT INTO governance_decisions
-                    (id, tenant_id, case_id, task_id, decision, actor_sub,
-                     decision_hash, signature, kid, policy_version, note, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, tenant_id, proposal_id, policy_bundle_id, outcome,
+                     decision_hash, signature, kid, decided_at, policy_version)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
-                decision_id, tenant_id, case_uuid, task_uuid,
-                decision, actor_sub, decision_hash, d_sig, d_kid,
-                POLICY_ID, note, now,
+                decision_id, tenant_id, task_uuid, task_uuid,
+                "EXECUTION_READY" if decision == "APPROVE" else "REJECTED",
+                decision_hash, d_sig, d_kid, now, POLICY_ID,
             ))
 
             cur.execute(

@@ -151,7 +151,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END; $$;
 CREATE TABLE IF NOT EXISTS service_levels (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id       UUID NOT NULL REFERENCES tenants(id),
-    carrier_id      TEXT REFERENCES carriers(carrier_id) ON UPDATE CASCADE,
+    carrier_id      TEXT,
     code            TEXT NOT NULL,
     name            TEXT NOT NULL,
     transit_days_min INTEGER,

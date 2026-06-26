@@ -84,7 +84,7 @@ export default function NewException() {
         description:          form.description,
         event_stream:         [],
       });
-      nav(`/exceptions/${exc.id}`);
+      nav("/exceptions");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Submission failed. Check that the SC-003 gateway is running on port 8020.");
     } finally {

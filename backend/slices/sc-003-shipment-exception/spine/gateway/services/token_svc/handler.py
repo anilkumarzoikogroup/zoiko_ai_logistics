@@ -55,21 +55,25 @@ class TokenHandler:
         token_hash  = hashlib.sha256(b"zoiko.token.v1:" + token_bytes).digest()
         t_sig, t_kid = sign(self.tenant_slug, token_hash)
 
+        # tenant_binding = SHA-256(tenant_id_utf8 || decision_id_utf8)
+        tenant_binding = hashlib.sha256(
+            tenant_id.encode("utf-8") + (decision_id or "").encode("utf-8")
+        ).digest()
+
         psycopg2.extras.register_uuid()
         conn = psycopg2.connect(self.db_url)
         try:
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO governance_tokens
-                    (id, tenant_id, case_id, decision_id, action, amount, currency,
-                     issued_to, token_hash, signature, kid, status, expires_at, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (id, tenant_id, decision_id, scope, tenant_binding, status,
+                     expires_at, token_hash, signature, kid, issued_at)
+                VALUES (%s, %s, %s, %s, %s, 'ACTIVE', %s, %s, %s, %s, %s)
             """, (
-                token_id, tenant_id, case_uuid,
+                token_id, tenant_id,
                 uuid.UUID(decision_id) if decision_id else None,
-                "ISSUE_SLA_CREDIT", amount, currency,
-                actor_sub, token_hash, t_sig, t_kid,
-                "ACTIVE", expires_at, now,
+                "ISSUE_SLA_CREDIT", tenant_binding,
+                expires_at, token_hash, t_sig, t_kid, now,
             ))
 
             # Advance case to EXECUTION_READY
