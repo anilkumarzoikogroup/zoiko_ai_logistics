@@ -1,4 +1,4 @@
-import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, USE_MOCK } from "./client";
+import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, USE_MOCK } from "./client";
 import * as mocks from "@/mocks/fixtures";
 import type {
   Case, Claim, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
@@ -873,6 +873,107 @@ export const zoikoApi = {
     return data;
   },
 
+  // ── SC-003 — Shipment Exceptions (apiException = port 8020, apiException4 = port 8021) ──
+  async listExceptionsPaged(filters?: { state?: string; page?: number; page_size?: number }): Promise<{
+    exceptions: ShipmentException[]; total: number; page: number; pages: number;
+  }> {
+    if (USE_MOCK) { await delay(); return { exceptions: [], total: 0, page: 1, pages: 1 }; }
+    const { data } = await apiException.get<{ exceptions: ShipmentException[]; total: number; page: number; pages: number }>(
+      "/shipment-exceptions", { params: filters }
+    );
+    return data;
+  },
+
+  async getException(id: string): Promise<ShipmentException> {
+    if (USE_MOCK) { await delay(); throw new Error("Not available in mock mode"); }
+    const { data } = await apiException.get<ShipmentException>(`/shipment-exceptions/${id}`);
+    return data;
+  },
+
+  async createException(payload: {
+    carrier: string; shipment_reference: string;
+    committed_eta: string; actual_delivery: string;
+    penalty_rate_per_hour: number; penalty_cap: number; currency: string;
+    origin?: string; destination?: string; description?: string;
+    event_stream?: { event_type: string; occurred_at: string; location?: string; raw_payload?: Record<string, unknown> }[];
+  }): Promise<ShipmentException> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data: job } = await apiException.post<{ job_id: string } | ShipmentException>(
+      "/shipment-exceptions/submit", payload, { timeout: 10000 }
+    );
+    if ("job_id" in job) {
+      for (let i = 0; i < 45; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const { data: s } = await apiException.get<{ status: string; case: ShipmentException | null; error: string | null }>(
+          `/shipment-exceptions/submit-status/${job.job_id}`, { timeout: 8000 }
+        );
+        if (s.status === "done" && s.case) return s.case;
+        if (s.status === "error") throw new Error(s.error || "Pipeline failed");
+      }
+      throw new Error("Timed out waiting for exception (90s)");
+    }
+    return job as ShipmentException;
+  },
+
+  async getExceptionFinding(caseId: string): Promise<{ id: string; confidence: number; rule_trace: unknown; created_at: string } | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    try {
+      const { data } = await apiException.get(`/shipment-exceptions/${caseId}/finding`);
+      return data;
+    } catch { return null; }
+  },
+
+  async getExceptionEvents(caseId: string): Promise<CaseEvent[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    const { data } = await apiException.get<CaseEvent[]>(`/shipment-exceptions/${caseId}/events`);
+    return data;
+  },
+
+  async getShipmentEvents(caseId: string): Promise<{ id: string; event_type: string; occurred_at: string; location?: string; carrier_id?: string; raw_payload?: unknown }[]> {
+    if (USE_MOCK) { await delay(); return []; }
+    try {
+      const { data } = await apiException.get(`/shipment-exceptions/${caseId}/shipment-events`);
+      return data;
+    } catch { return []; }
+  },
+
+  async proposeExceptionCredit(caseId: string, payload: { finding_id: string; amount: number; currency: string }): Promise<unknown> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await apiException.post(`/shipment-exceptions/${caseId}/propose`, payload);
+    return data;
+  },
+
+  async decideExceptionCredit(caseId: string, payload: { task_id: string; decision: "APPROVE" | "REJECT"; note?: string }): Promise<unknown> {
+    if (USE_MOCK) { await delay(500); throw new Error("Not available in mock mode"); }
+    const { data } = await apiException.post(`/shipment-exceptions/${caseId}/decide`, payload);
+    return data;
+  },
+
+  async executeException(payload: { case_id: string; token_id: string; action?: string }): Promise<{ status: string; envelope_id?: string; case_id: string; executed_at?: string }> {
+    if (USE_MOCK) { await delay(1200); throw new Error("Not available in mock mode"); }
+    const { data } = await apiException4.post("/execute", payload);
+    return data;
+  },
+
+  async reconcileException(payload: { case_id: string; envelope_id: string }): Promise<unknown> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data } = await apiException4.post("/reconcile", payload);
+    return data;
+  },
+
+  async getExceptionACR(caseId: string): Promise<{ acr_id: string; acr_root_hash: string; artifact_count: number; is_locked: boolean; issued_at: string } | null> {
+    if (USE_MOCK) { await delay(); return null; }
+    try {
+      const { data } = await apiException4.get(`/cases/${caseId}/acr`);
+      return data;
+    } catch { return null; }
+  },
+
+  async issueExceptionACR(caseId: string, envelopeId: string): Promise<unknown> {
+    if (USE_MOCK) { await delay(800); throw new Error("Not available in mock mode"); }
+    const { data } = await apiException4.post(`/cases/${caseId}/acr`, { case_id: caseId, envelope_id: envelopeId });
+    return data;
+  },
 };
 
 // ── Carrier types ─────────────────────────────────────────────────────────────

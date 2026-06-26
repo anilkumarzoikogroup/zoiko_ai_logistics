@@ -9,15 +9,17 @@ stays in the platform services it already lives in — `backend/gateway`, `backe
 
 ## Where each slice's code actually lives today
 
-| Slice | Status | Slice folder | What's still in the shared services |
+| Slice | Status | Ports | Slice folder |
 |---|---|---|---|
-| SC-001 Freight Invoice Overcharge | Built, live | [`sc-001-freight-invoice-overcharge/`](sc-001-freight-invoice-overcharge/) | `open_case()`, `_read_case_metadata()`, the generic Phase 3-8 route handlers (proposal/decide/tokens/execute/variances/acr), the in-memory job store — shared infra used by both slices |
-| SC-002 Carrier Claim | Built, live | [`sc-002-carrier-claim/`](sc-002-carrier-claim/) | same as above |
-| SC-003 Shipment Exception / SLA Penalty | Scaffolded only | [`sc-003-shipment-exception/`](sc-003-shipment-exception/) | — |
-| SC-004 Supplier Performance Scorecard | Scaffolded only | [`sc-004-supplier-scorecard/`](sc-004-supplier-scorecard/) | — |
-| SC-005 Accessorial Charge Dispute | Scaffolded only | [`sc-005-accessorial-dispute/`](sc-005-accessorial-dispute/) | — |
-| SC-006 Procurement Anomaly Detection | Scaffolded only | [`sc-006-procurement-anomaly/`](sc-006-procurement-anomaly/) | — |
-| SC-007 Inventory Movement Exception | Scaffolded only | [`sc-007-inventory-movement/`](sc-007-inventory-movement/) | — |
+| SC-001 Freight Invoice Overcharge | ✅ Built, live | 8000 / 8001 | [`sc-001-freight-invoice-overcharge/`](sc-001-freight-invoice-overcharge/) |
+| SC-002 Carrier Claim | ✅ Built, live | 8010 / 8011 / 8012 | [`sc-002-carrier-claim/`](sc-002-carrier-claim/) |
+| SC-003 Shipment Exception / SLA Penalty | ✅ Built, live | 8020 / 8021 | [`sc-003-shipment-exception/`](sc-003-shipment-exception/) |
+| SC-004 Supplier Performance Scorecard | Scaffolded only | — | [`sc-004-supplier-scorecard/`](sc-004-supplier-scorecard/) |
+| SC-005 Accessorial Charge Dispute | Scaffolded only | — | [`sc-005-accessorial-dispute/`](sc-005-accessorial-dispute/) |
+| SC-006 Procurement Anomaly Detection | Scaffolded only | — | [`sc-006-procurement-anomaly/`](sc-006-procurement-anomaly/) |
+| SC-007 Inventory Movement Exception | Scaffolded only | — | [`sc-007-inventory-movement/`](sc-007-inventory-movement/) |
+
+**SC-003 architecture note:** Unlike SC-001/SC-002 which delegate to the shared `backend/gateway` and `backend/execution` services, SC-003 is a **fully self-contained spine** under `sc-003-shipment-exception/spine/`. It has its own FastAPI apps on ports 8020 (gateway) and 8021 (execution), its own `paths.py` that falls back to SC-002's `core_lib`/`platform_lib`, and its own Alembic migration (0005). See [`sc-003-shipment-exception/README.md`](sc-003-shipment-exception/README.md) for the full breakdown.
 
 SC-001 and SC-002 each hold **only the genuinely slice-specific pieces**, physically relocated
 (not just re-exported) from the shared services. Files are prefixed with `invoice_`/`claim_` —

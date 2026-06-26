@@ -11,6 +11,15 @@ Every add_item call:
 
 Merkle domain tag: "zoiko/v1/evidence-item"  (matches MerkleTree domain format)
 Item hash domain:  b"zoiko.evidence.item.v1:"
+
+SC-003 requires exactly 5 artifact types (spec §SC-003 evidence domain):
+  1. source_record               — raw shipment event stream hash
+  2. canonical_shipment_exception — canonical truth hash (breach + penalty computed)
+  3. sla_contract_clause          — the SLA clause that governs the breach
+  4. breach_calculation           — detailed breach-hours and penalty computation
+  5. rule_trace                   — the reasoning rule weights (delivery_window_breach, sla_clause_applicable)
+
+No contract_rate_version artifact — shipment_exception has no contract rate version.
 """
 import hashlib, uuid, json
 from datetime import datetime, timezone
@@ -28,14 +37,13 @@ from services.evidence_svc.models import EvidenceItemResult, EvidenceBundleResul
 DOMAIN_TAG    = b"zoiko.evidence.item.v1:"
 MERKLE_DOMAIN = "zoiko/v1/evidence-item"
 
-# All 6 artifact types required by SC-001 acceptance criteria (F-06).
+# All 5 artifact types required by SC-003 acceptance criteria.
 # seal_bundle() will reject with ValueError if any are absent.
 REQUIRED_ITEM_TYPES = {
     "source_record",
-    "canonical_invoice",
-    "canonical_shipment",
-    "contract_rate_version",
-    "charge_comparison",
+    "canonical_shipment_exception",
+    "sla_contract_clause",
+    "breach_calculation",
     "rule_trace",
 }
 
@@ -229,7 +237,7 @@ class EvidenceHandler:
                     completeness_status = "COMPLETE",
                 )
 
-            # Completeness check — all 6 required artifact types must be present
+            # Completeness check — all 5 required artifact types must be present
             # before the bundle can be sealed. Reasoning is blocked until this passes.
             cur.execute(
                 "SELECT DISTINCT item_type FROM evidence_items WHERE bundle_id=%s",
@@ -240,7 +248,7 @@ class EvidenceHandler:
             if missing_types:
                 raise ValueError(
                     f"Evidence bundle {bundle['id']} is missing required artifact "
-                    f"type(s): {sorted(missing_types)}. All 6 types must be added "
+                    f"type(s): {sorted(missing_types)}. All 5 types must be added "
                     f"before sealing: {sorted(REQUIRED_ITEM_TYPES)}"
                 )
 

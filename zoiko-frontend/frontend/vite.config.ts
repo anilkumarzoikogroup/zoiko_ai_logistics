@@ -53,6 +53,20 @@ export default defineConfig({
         proxyTimeout: 90000,
         timeout: 90000,
       },
+      // SC-003 (shipment exception) spine — gateway port 8020, execution port 8021.
+      // Longer prefix "/excapi4" must precede "/excapi" stem.
+      "/excapi4": {
+        target: "http://localhost:8021",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/excapi4/, ""),
+      },
+      "/excapi": {
+        target: "http://localhost:8020",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/excapi/, ""),
+        proxyTimeout: 90000,
+        timeout: 90000,
+      },
     },
   },
   build: {

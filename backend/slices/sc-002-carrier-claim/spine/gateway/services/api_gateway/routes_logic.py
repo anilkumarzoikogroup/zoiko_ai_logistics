@@ -475,6 +475,28 @@ def submit_claim_async_worker(
             destination_location=getattr(body, "destination_location", "") or "",
         )
         ing_r = ingestion_cls(db_url, broker, slug).ingest_claim(tenant_id, claim_in, idempotency_key)
+
+        # Validate claim before canonicalization — structural/semantic FAIL blocks progression;
+        # POLICY_CAP_EXCEEDED is a WARN (proceeds but is recorded in validation_results).
+        try:
+            from services.validation_svc.handler import ClaimValidationHandler
+            val_r = ClaimValidationHandler(db_url, broker, slug).validate(
+                tenant_id=tenant_id,
+                source_record_id=ing_r.source_record_id,
+                carrier_id=body.carrier,
+                claim_reference=claim_ref,
+                claim_type=body.claim_type,
+                claimed_amount=float(body.claimed_amount),
+                currency=body.currency,
+            )
+            if val_r.status == "FAIL":
+                rules = [v.rule for v in val_r.rule_violations]
+                raise ValueError(f"Claim validation failed ({rules}) — claim not accepted")
+        except ValueError:
+            raise
+        except Exception:
+            pass  # validation is best-effort; never block on unexpected DB error
+
         can_r = canonical_cls(db_url, broker, slug).canonicalize_claim(
                     tenant_id, ing_r.source_record_id, claim_ref,
                     body.carrier, body.claim_type, float(body.claimed_amount), body.currency,
@@ -574,6 +596,28 @@ def submit_claim(
         received_by_user=actor_sub if actor_sub else None,
         correlation_id=request.headers.get("X-Correlation-ID"),
     )
+
+    # Validate before canonicalization — FAIL blocks; WARN passes through.
+    try:
+        from services.validation_svc.handler import ClaimValidationHandler
+        _val = ClaimValidationHandler(db_url, broker, slug).validate(
+            tenant_id=tenant_id,
+            source_record_id=ing_r.source_record_id,
+            carrier_id=body.carrier,
+            claim_reference=claim_ref,
+            claim_type=body.claim_type,
+            claimed_amount=float(body.claimed_amount),
+            currency=body.currency,
+        )
+        if _val.status == "FAIL":
+            rules = [v.rule for v in _val.rule_violations]
+            from fastapi import HTTPException as _HE
+            raise _HE(status_code=422, detail=f"Claim validation failed: {rules}")
+    except Exception as _ve:
+        if hasattr(_ve, "status_code"):
+            raise  # propagate HTTPException
+        pass  # best-effort; never block on unexpected errors
+
     can_r  = canonical_cls(db_url, broker, slug).canonicalize_claim(
                  tenant_id, ing_r.source_record_id, claim_ref,
                  body.carrier, body.claim_type, float(body.claimed_amount), body.currency,
