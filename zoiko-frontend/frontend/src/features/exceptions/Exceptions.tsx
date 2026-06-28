@@ -11,7 +11,7 @@ import type { ExceptionState } from "@/types";
 function ShipmentSparkline({ state, breachHours }: { state: string; breachHours: number }) {
   const isLate  = breachHours > 0;
   const isDone  = ["DISPATCHED", "OUTCOME_RECORDED", "CLOSED"].includes(state);
-
+ 
   // [label, is filled, fill color]
   const nodes: [string, boolean, string][] = [
     ["PU", true,               "#10b981"],

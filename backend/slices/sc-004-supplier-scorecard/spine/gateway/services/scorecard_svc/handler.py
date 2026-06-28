@@ -9,6 +9,13 @@ Composite formula (deterministic weights — never change):
   0.30 × quality_score    (inverse overcharge rate)
   0.20 × frequency_score  (fewer claims = better)
   0.10 × resolution_score (faster resolution = better)
+
+Confidence formula (deterministic — never change):
+  _RULES = {
+    "breach_detected_rule": {"confidence": 1.00, "weight": 0.70},
+    "data_coverage_rule":   {"confidence": 0.88, "weight": 0.30},
+  }
+  SC004_CONFIDENCE = 0.9640  # = 1.00×0.70 + 0.88×0.30
 """
 import paths  # noqa: F401
 import uuid
@@ -28,6 +35,14 @@ WEIGHTS = {
 }
 
 SC004_THRESHOLD_DEFAULT = 70.0
+
+# ── Confidence score — deterministic, never change ────────────────────────────
+SC004_CONFIDENCE = 0.9640  # = 1.00×0.70 + 0.88×0.30
+
+_RULES = {
+    "breach_detected_rule": {"confidence": 1.00, "weight": 0.70},
+    "data_coverage_rule":   {"confidence": 0.88, "weight": 0.30},
+}
 
 
 class ScorecardHandler:
@@ -191,9 +206,196 @@ class ScorecardHandler:
             conn.close()
 
         raw_metrics = {**claim_m, **sla_m}
-        return self._build_detail(period_id, tenant_id, carrier_id,
-                                   period_start, period_end, scores, threshold, now,
-                                   raw_metrics=raw_metrics)
+
+        # Open a governed case for breach recovery
+        case_id    = None
+        finding_id = None
+        if scores["breach_detected"]:
+            case_id, finding_id = self._open_breach_case(
+                conn_url    = self.db_url,
+                tenant_id   = tenant_id,
+                carrier_id  = carrier_id,
+                period_id   = period_id,
+                scores      = scores,
+                threshold   = threshold,
+                claim_m     = claim_m,
+                sla_m       = sla_m,
+                now         = now,
+            )
+            if case_id:
+                conn2 = psycopg2.connect(self.db_url)
+                try:
+                    cur2 = conn2.cursor()
+                    cur2.execute(
+                        "UPDATE scorecard_periods SET case_id=%s, finding_id=%s WHERE id=%s",
+                        (str(case_id), str(finding_id) if finding_id else None, str(period_id)),
+                    )
+                    conn2.commit()
+                finally:
+                    conn2.close()
+
+        detail = self._build_detail(period_id, tenant_id, carrier_id,
+                                    period_start, period_end, scores, threshold, now,
+                                    raw_metrics=raw_metrics)
+        if case_id:
+            detail["case_id"]    = str(case_id)
+            detail["case_state"] = "FINDING_GENERATED"
+            detail["finding_id"] = str(finding_id) if finding_id else None
+        return detail
+
+    # ── Governed case opening ──────────────────────────────────────────────────
+
+    def _open_breach_case(
+        self,
+        conn_url: str,
+        tenant_id: str,
+        carrier_id: str,
+        period_id: uuid.UUID,
+        scores: dict,
+        threshold: float,
+        claim_m: dict,
+        sla_m: dict,
+        now: datetime,
+    ) -> tuple:
+        """Open a SCORECARD_BREACH governed case with evidence bundle and finding."""
+        import psycopg2, psycopg2.extras
+        from zoiko_common.crypto.jcs import canonicalize
+
+        psycopg2.extras.register_uuid()
+        case_id    = uuid.uuid4()
+        finding_id = uuid.uuid4()
+        bundle_id  = uuid.uuid4()
+        item_id    = uuid.uuid4()
+
+        # ── Evidence item: scorecard payload ──────────────────────────────────
+        evidence_payload = json.dumps({
+            "scorecard_period_id": str(period_id),
+            "carrier_id":          carrier_id,
+            "composite_score":     scores["composite_score"],
+            "contracted_threshold": threshold,
+            "breach_delta":        round(scores["composite_score"] - threshold, 2),
+            "sub_scores":          {
+                "on_time":    scores["on_time_score"],
+                "quality":    scores["quality_score"],
+                "frequency":  scores["frequency_score"],
+                "resolution": scores["resolution_score"],
+            },
+            "raw_metrics": {**claim_m, **sla_m},
+        }, sort_keys=True).encode()
+        item_hash  = hashlib.sha256(b"zoiko.evidence.item.v1:" + evidence_payload).digest()
+
+        # ── Bundle hash (single-item Merkle) ─────────────────────────────────
+        bundle_hash = hashlib.sha256(b"zoiko/v1/evidence-item:" + item_hash).digest()
+
+        # ── Finding hash ──────────────────────────────────────────────────────
+        rule_traces = [
+            {
+                "rule":       "breach_detected_rule",
+                "confidence": _RULES["breach_detected_rule"]["confidence"],
+                "weight":     _RULES["breach_detected_rule"]["weight"],
+                "passed":     True,
+                "detail":     f"composite {scores['composite_score']} < threshold {threshold}",
+            },
+            {
+                "rule":       "data_coverage_rule",
+                "confidence": _RULES["data_coverage_rule"]["confidence"],
+                "weight":     _RULES["data_coverage_rule"]["weight"],
+                "passed":     claim_m["total_claims"] > 0,
+                "detail":     f"total_claims={claim_m['total_claims']} sla_cases={sla_m['sla_cases']}",
+            },
+        ]
+        finding_payload = {
+            "case_id":            str(case_id),
+            "finding_type":       "aggregation",
+            "composite_score":    scores["composite_score"],
+            "threshold":          threshold,
+            "breach_delta":       round(scores["composite_score"] - threshold, 2),
+            "confidence":         SC004_CONFIDENCE,
+            "rule_traces":        rule_traces,
+            "proposed_action":    "NOTIFY_FLAG",
+        }
+        finding_bytes = canonicalize(finding_payload)
+        finding_hash  = hashlib.sha256(b"zoiko.finding.v1:" + finding_bytes).digest()
+
+        conn = psycopg2.connect(conn_url)
+        try:
+            cur = conn.cursor()
+
+            # Open case — cases has scorecard_period_id not carrier_id
+            cur.execute("""
+                INSERT INTO cases
+                    (id, tenant_id, case_type, state, scorecard_period_id, opened_at)
+                VALUES (%s, %s::uuid, 'SCORECARD_BREACH', 'FINDING_GENERATED', %s::uuid, %s)
+                ON CONFLICT DO NOTHING
+            """, (str(case_id), tenant_id, str(period_id), now))
+
+            cur.execute("""
+                INSERT INTO case_events
+                    (id, tenant_id, case_id, event_type, from_state, to_state,
+                     actor_sub, payload, occurred_at)
+                VALUES (gen_random_uuid(), %s::uuid, %s::uuid, 'CASE_OPENED',
+                        'NEW', 'FINDING_GENERATED',
+                        'system', %s::jsonb, %s)
+            """, (
+                tenant_id, str(case_id),
+                json.dumps({"scorecard_id": str(period_id), "carrier_id": carrier_id}),
+                now,
+            ))
+
+            # Evidence bundle — no item_count column in real schema
+            from shared.signer import sign as _sign
+            eb_sig, eb_kid = _sign("default", bundle_hash if isinstance(bundle_hash, bytes) else bundle_hash.encode())
+            cur.execute("""
+                INSERT INTO evidence_bundles
+                    (id, tenant_id, case_id, bundle_hash, signature, kid, created_at)
+                VALUES (%s, %s::uuid, %s::uuid, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (str(bundle_id), tenant_id, str(case_id), bundle_hash, eb_sig, eb_kid, now))
+
+            entity_payload = json.dumps({
+                "scorecard_period_id": str(period_id),
+                "carrier_id":          carrier_id,
+                "composite_score":     scores["composite_score"],
+                "breach_amount":       scores["breach_amount"],
+            })
+            ei_hash = hashlib.sha256(b"zoiko.evidence.item.v1:" + entity_payload.encode()).hexdigest()
+            ei_sig, ei_kid = _sign("default", ei_hash.encode())
+            cur.execute("""
+                INSERT INTO evidence_items
+                    (id, tenant_id, bundle_id, item_type, entity_id, item_hash, signature, kid, added_at)
+                VALUES (gen_random_uuid(), %s::uuid, %s::uuid,
+                        'SCORECARD_METRICS', %s::uuid, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (
+                tenant_id, str(bundle_id),
+                str(period_id), ei_hash, ei_sig, ei_kid, now,
+            ))
+
+            # Aggregation finding — use real column names: confidence, rule_trace (not rule_traces)
+            fi_sig, fi_kid = _sign("default", finding_hash if isinstance(finding_hash, bytes) else finding_hash.encode())
+            cur.execute("""
+                INSERT INTO findings
+                    (id, tenant_id, case_id, bundle_id,
+                     finding_type, confidence, finding_hash,
+                     rule_trace, signature, kid, created_at)
+                VALUES (%s, %s::uuid, %s::uuid, %s::uuid,
+                        'aggregation', %s, %s,
+                        %s::jsonb, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+            """, (
+                str(finding_id), tenant_id, str(case_id), str(bundle_id),
+                SC004_CONFIDENCE, finding_hash,
+                json.dumps(rule_traces), fi_sig, fi_kid, now,
+            ))
+
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            return None, None
+        finally:
+            conn.close()
+
+        return case_id, finding_id
 
     def list_scorecards(self, tenant_id: str, carrier_id: str | None = None,
                          limit: int = 50, offset: int = 0) -> list[dict]:
@@ -218,7 +420,7 @@ class ScorecardHandler:
             SELECT id, tenant_id, carrier_id, period_start, period_end,
                    on_time_rate, damage_rate, claim_frequency, dispute_turnaround_days,
                    composite_score, contracted_threshold, breach_detected, breach_amount,
-                   currency, created_at
+                   currency, created_at, case_id, finding_id
             FROM scorecard_periods
             WHERE id = %s::uuid AND tenant_id = %s::uuid
         """, (scorecard_id, tenant_id), db_url=self.db_url)
@@ -297,6 +499,43 @@ class ScorecardHandler:
             }
             for c in recent_claims
         ]
+
+        # Attach governed case info if a breach case was opened
+        linked_case_id  = row.get("case_id")
+        linked_finding_id = row.get("finding_id")
+        if linked_case_id:
+            case_row = q1(
+                "SELECT state FROM cases WHERE id=%s::uuid AND tenant_id=%s::uuid",
+                (str(linked_case_id), tenant_id),
+                db_url=self.db_url,
+            )
+            detail["case_id"]    = str(linked_case_id)
+            detail["case_state"] = case_row["state"] if case_row else "UNKNOWN"
+            detail["finding_id"] = str(linked_finding_id) if linked_finding_id else None
+
+            task_row = q1(
+                "SELECT id, status, proposer_sub FROM governance_tasks "
+                "WHERE case_id=%s::uuid AND tenant_id=%s::uuid ORDER BY created_at DESC LIMIT 1",
+                (str(linked_case_id), tenant_id),
+                db_url=self.db_url,
+            )
+            if task_row:
+                detail["task_id"]     = str(task_row["id"])
+                detail["task_status"] = task_row["status"]
+
+            token_row = q1(
+                """SELECT gt.id
+                   FROM governance_tokens gt
+                   JOIN governance_decisions gd ON gd.id = gt.decision_id
+                   JOIN governance_tasks task   ON task.id = gd.proposal_id
+                   WHERE task.case_id=%s::uuid AND gt.tenant_id=%s::uuid AND gt.status='ACTIVE'
+                   ORDER BY gt.issued_at DESC LIMIT 1""",
+                (str(linked_case_id), tenant_id),
+                db_url=self.db_url,
+            )
+            if token_row:
+                detail["token_id"] = str(token_row["id"])
+
         return detail
 
     def list_carriers(self, tenant_id: str) -> list[str]:

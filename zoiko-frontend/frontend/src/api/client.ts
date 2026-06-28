@@ -136,8 +136,18 @@ const API_EXC4_BASE = (import.meta.env.VITE_API_EXC4_BASE || "/excapi4") + "/v1"
 const apiException  = attachInterceptors(axios.create({ baseURL: API_EXC_BASE,  timeout: 90000, withCredentials: true }));
 const apiException4 = attachInterceptors(axios.create({ baseURL: API_EXC4_BASE, timeout: 60000, withCredentials: true }));
 
-// SC-004 (supplier scorecard) spine — gateway port 8030
-const API_SCORE_BASE = (import.meta.env.VITE_API_SCORE_BASE || "/scoreapi") + "/v1";
-const apiScore = attachInterceptors(axios.create({ baseURL: API_SCORE_BASE, timeout: 90000, withCredentials: true }));
+// SC-004 (supplier scorecard) spine — gateway port 8030, execution port 8031
+const API_SCORE_BASE  = (import.meta.env.VITE_API_SCORE_BASE  || "/scoreapi")  + "/v1";
+const API_SCORE4_BASE = (import.meta.env.VITE_API_SCORE4_BASE || "/scoreapi4") + "/v1";
 
-export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, apiScore, USE_MOCK };
+const apiScore  = attachInterceptors(axios.create({ baseURL: API_SCORE_BASE,  timeout: 90000, withCredentials: true }));
+const apiScore4 = attachInterceptors(axios.create({ baseURL: API_SCORE4_BASE, timeout: 60000, withCredentials: true }));
+
+// SC-005 (accessorial charge dispute) spine — gateway port 8040, execution port 8041
+const API_ACC_BASE  = (import.meta.env.VITE_API_ACC_BASE  || "/accapi")  + "/v1";
+const API_ACC4_BASE = (import.meta.env.VITE_API_ACC4_BASE || "/accapi4") + "/v1";
+
+const apiAcc  = attachInterceptors(axios.create({ baseURL: API_ACC_BASE,  timeout: 90000, withCredentials: true }));
+const apiAcc4 = attachInterceptors(axios.create({ baseURL: API_ACC4_BASE, timeout: 60000, withCredentials: true }));
+
+export { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, apiScore, apiScore4, apiAcc, apiAcc4, USE_MOCK };

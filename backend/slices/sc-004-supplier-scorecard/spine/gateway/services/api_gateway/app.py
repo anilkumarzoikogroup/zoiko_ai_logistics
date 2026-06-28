@@ -22,16 +22,29 @@ load_dotenv()
 
 from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI, Depends, Header, HTTPException, Request
+from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.api_gateway.auth   import get_claims
-from services.api_gateway.models import ComputeScorecardRequest
+from services.api_gateway.models import (
+    ComputeScorecardRequest, UIProposalRequest, UIDecideRequest,
+)
 from services.scorecard_svc.handler import ScorecardHandler
+from services.governance_svc.handler import GovernanceHandler
 from shared.db import DB_URL
 from middleware.oidc.claims import ZoikoClaims
 
-_DB_URL = os.getenv("DB_URL", DB_URL)
+_DB_URL          = os.getenv("DB_URL", DB_URL)
+TENANT_SLUG      = os.getenv("TENANT_SLUG", "default")
+KAFKA_BOOTSTRAP  = os.getenv("KAFKA_BOOTSTRAP", "").strip()
+
+
+def _make_broker():
+    from kafka.mock_kafka import MockKafkaBroker
+    return MockKafkaBroker()
+
+
+_BROKER = _make_broker()
 
 app = FastAPI(
     title="Zoiko SC-004 — Supplier Performance Scorecard",
@@ -109,3 +122,54 @@ def get_scorecard(
     """Fetch a single scorecard with sub-score breakdown, raw metrics, and recent claims."""
     handler = ScorecardHandler(_DB_URL)
     return handler.get_scorecard(str(claims.tenant_id), scorecard_id)
+
+
+# ── Governance ─────────────────────────────────────────────────────────────────
+
+@app.post("/v1/scorecards/{scorecard_id}/propose", status_code=201, tags=["governance"])
+@app.post("/scorecards/{scorecard_id}/propose",    status_code=201, tags=["governance"], include_in_schema=False)
+def propose(
+    scorecard_id: str,
+    body: UIProposalRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """Analyst proposes flagging the carrier for review (breach recovery).
+    Requires finding_id, amount, currency. Advances case to APPROVAL_PENDING."""
+    sc = ScorecardHandler(_DB_URL).get_scorecard(str(claims.tenant_id), scorecard_id)
+    if not sc.get("case_id"):
+        raise HTTPException(status_code=422, detail="No governed case on this scorecard — breach may not have been detected")
+    case_id = sc["case_id"]
+    return GovernanceHandler(_DB_URL, _BROKER, TENANT_SLUG).propose(
+        tenant_id  = str(claims.tenant_id),
+        case_id    = case_id,
+        finding_id = body.finding_id,
+        amount     = body.amount,
+        currency   = body.currency,
+        actor_sub  = claims.sub,
+    )
+
+
+@app.post("/v1/scorecards/{scorecard_id}/decide", tags=["governance"])
+@app.post("/scorecards/{scorecard_id}/decide",    tags=["governance"], include_in_schema=False)
+def decide(
+    scorecard_id: str,
+    body: UIDecideRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims: ZoikoClaims = Depends(get_claims),
+):
+    """Manager approves or rejects the carrier flag. SoD: actor ≠ proposer."""
+    if body.decision not in ("APPROVE", "REJECT"):
+        raise HTTPException(status_code=422, detail="decision must be APPROVE or REJECT")
+    sc = ScorecardHandler(_DB_URL).get_scorecard(str(claims.tenant_id), scorecard_id)
+    if not sc.get("case_id"):
+        raise HTTPException(status_code=422, detail="No governed case on this scorecard")
+    case_id = sc["case_id"]
+    return GovernanceHandler(_DB_URL, _BROKER, TENANT_SLUG).decide(
+        tenant_id = str(claims.tenant_id),
+        case_id   = case_id,
+        task_id   = body.task_id,
+        actor_sub = claims.sub,
+        decision  = body.decision,
+        note      = body.note or "",
+    )

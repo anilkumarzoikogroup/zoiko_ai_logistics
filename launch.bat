@@ -30,8 +30,8 @@ if %errorlevel%==0 (
 echo.
 
 REM ── Kill any stale services on our ports ─────────────────────
-echo  Stopping any stale services on ports 8000 8001 8002 8010 8011 8012 8020 8021 8030 5173...
-for %%P in (8000 8001 8002 8010 8011 8012 8020 8021 8030 5173) do (
+echo  Stopping any stale services on ports 8000 8001 8002 8010 8011 8012 8020 8021 8030 8031 8040 8041 5173...
+for %%P in (8000 8001 8002 8010 8011 8012 8020 8021 8030 8031 8040 8041 5173) do (
     for /f "tokens=5" %%A in ('netstat -aon 2^>nul ^| findstr ":%%P " ^| findstr "LISTENING"') do (
         taskkill /PID %%A /F >nul 2>&1
     )
@@ -88,13 +88,28 @@ echo  Starting SC-003 Execution on port 8021...
 start "SC003-Execution" /d "%SC003%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "REDIS_URL=!REDIS_URL!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC003%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8021"
 
 REM ════════════════════════════════════════════════════════════
-REM  SC-004 (supplier scorecard) — gateway only
+REM  SC-004 (supplier scorecard) — gateway + execution
 REM ════════════════════════════════════════════════════════════
 set SC004=%ROOT%backend\slices\sc-004-supplier-scorecard\spine
 set PYPATH_SC004=%SC002%\platform_lib;%SC002%\core_lib\packages\zoiko-common
 
 echo  Starting SC-004 Scorecard Gateway on port 8030...
 start "SC004-Gateway" /d "%SC004%\gateway" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC004%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8030"
+
+echo  Starting SC-004 Scorecard Execution on port 8031...
+start "SC004-Execution" /d "%SC004%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "REDIS_URL=!REDIS_URL!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC004%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8031"
+
+REM ════════════════════════════════════════════════════════════
+REM  SC-005 (accessorial charge dispute) — gateway + execution
+REM ════════════════════════════════════════════════════════════
+set SC005=%ROOT%backend\slices\sc-005-accessorial-dispute\spine
+set PYPATH_SC005=%SC002%\platform_lib;%SC002%\core_lib\packages\zoiko-common
+
+echo  Starting SC-005 Accessorial Gateway on port 8040...
+start "SC005-Gateway" /d "%SC005%\gateway" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC005%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8040"
+
+echo  Starting SC-005 Accessorial Execution on port 8041...
+start "SC005-Execution" /d "%SC005%\execution" cmd /k "call ..\..\..\..\..\.venv\Scripts\activate.bat && set "DB_URL=!DB_URL!" && set "ZOIKO_DEV_MODE=!ZOIKO_DEV_MODE!" && set "ZOIKO_DEV_SECRET=!ZOIKO_DEV_SECRET!" && set "ZOIKO_ISSUER=!ZOIKO_ISSUER!" && set "REDIS_URL=!REDIS_URL!" && set "TOKEN_TTL_MINUTES=!TOKEN_TTL_MINUTES!" && set "PYTHONIOENCODING=utf-8" && set "PYTHONPATH=%PYPATH_SC005%" && python -m uvicorn services.api_gateway.app:app --workers 4 --host 0.0.0.0 --port 8041"
 
 REM ── Poll both gateways before starting frontend ─────────────
 echo  Waiting for both gateways to be ready...
@@ -124,11 +139,29 @@ start "" "http://localhost:5173/login"
 
 echo ============================================================
 echo  LIVE MODE
-echo  Frontend        :  http://localhost:5173
-echo  SC-001 Gateway  :  http://localhost:8000/docs
-echo  SC-002 Gateway  :  http://localhost:8010/docs
-echo  SC-003 Gateway  :  http://localhost:8020/docs
-echo  SC-004 Scorecard:  http://localhost:8030/docs
+echo  Frontend              :  http://localhost:5173
+echo  ------------------------------------------------------------
+echo  [SC-001] Freight Invoice Overcharge
+echo    Gateway              :  http://localhost:8000/docs
+echo    Governance           :  http://localhost:8002/docs
+echo    Execution            :  http://localhost:8001/docs
+echo  ------------------------------------------------------------
+echo  [SC-002] Carrier Claim
+echo    Gateway              :  http://localhost:8010/docs
+echo    Governance           :  http://localhost:8012/docs
+echo    Execution            :  http://localhost:8011/docs
+echo  ------------------------------------------------------------
+echo  [SC-003] Shipment Exception / SLA Breach
+echo    Gateway              :  http://localhost:8020/docs
+echo    Execution            :  http://localhost:8021/docs
+echo  ------------------------------------------------------------
+echo  [SC-004] Supplier Scorecard Breach
+echo    Gateway              :  http://localhost:8030/docs
+echo    Execution            :  http://localhost:8031/docs
+echo  ------------------------------------------------------------
+echo  [SC-005] Accessorial Charge Dispute
+echo    Gateway              :  http://localhost:8040/docs
+echo    Execution            :  http://localhost:8041/docs
 echo ============================================================
 echo.
 echo  Press any key to close. Servers keep running.

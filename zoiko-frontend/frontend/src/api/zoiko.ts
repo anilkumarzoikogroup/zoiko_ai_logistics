@@ -1,4 +1,4 @@
-import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, apiScore, USE_MOCK } from "./client";
+import { api, api3, api4, apiClaim, apiClaim3, apiClaim4, apiException, apiException4, apiScore, apiScore4, apiAcc, apiAcc4, USE_MOCK } from "./client";
 import * as mocks from "@/mocks/fixtures";
 import type {
   Case, Claim, CanonicalInvoice, ValidationResult, EvidenceBundle, Finding,
@@ -1008,6 +1008,113 @@ export const scorecardApi = {
     if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
     const { data } = await apiScore.get(`/scorecards/${id}`);
     return data;
+  },
+
+  async propose(scorecardId: string, findingId: string, amount: number, currency = "INR"): Promise<any> {
+    if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore.post(`/scorecards/${scorecardId}/propose`, {
+      finding_id: findingId, amount, currency,
+    });
+    return data;
+  },
+
+  async decide(scorecardId: string, taskId: string, decision: "APPROVE" | "REJECT", note?: string): Promise<any> {
+    if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore.post(`/scorecards/${scorecardId}/decide`, {
+      task_id: taskId, decision, note,
+    });
+    return data;
+  },
+
+  async execute(caseId: string, tokenId: string, actorSub: string): Promise<any> {
+    if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore4.post("/execute", {
+      case_id: caseId, token_id: tokenId, actor_sub: actorSub, action: "NOTIFY_FLAG",
+    });
+    return data;
+  },
+
+  async reconcile(caseId: string, envelopeId: string, actorSub: string): Promise<any> {
+    if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore4.post("/reconcile", {
+      case_id: caseId, envelope_id: envelopeId, actor_sub: actorSub,
+    });
+    return data;
+  },
+
+  async issueACR(caseId: string, actorSub: string): Promise<any> {
+    if (USE_MOCK) { await delay(300); throw new Error("Not available in mock mode"); }
+    const { data } = await apiScore4.post(`/cases/${caseId}/acr`, { actor_sub: actorSub });
+    return data;
+  },
+
+  async getACR(caseId: string): Promise<any> {
+    if (USE_MOCK) { await delay(300); return null; }
+    const { data } = await apiScore4.get(`/cases/${caseId}/acr`);
+    return data;
+  },
+};
+
+// ── SC-005 Accessorial Dispute ────────────────────────────────────────────────
+// apiAcc = port 8040 (gateway), apiAcc4 = port 8041 (execution)
+export const accessorialApi = {
+  async submit(data: unknown): Promise<any> {
+    const { data: res } = await apiAcc.post("/accessorial-disputes/submit", data);
+    return res;
+  },
+
+  async list(params?: Record<string, unknown>): Promise<any> {
+    const { data: res } = await apiAcc.get("/accessorial-disputes", { params });
+    return res;
+  },
+
+  async getById(id: string): Promise<any> {
+    const { data: res } = await apiAcc.get("/accessorial-disputes/" + id);
+    return res;
+  },
+
+  async getFinding(id: string): Promise<any> {
+    const { data: res } = await apiAcc.get("/accessorial-disputes/" + id + "/finding");
+    return res;
+  },
+
+  async getEvents(id: string): Promise<any> {
+    const { data: res } = await apiAcc.get("/accessorial-disputes/" + id + "/events");
+    return res;
+  },
+
+  async propose(id: string, data: unknown): Promise<any> {
+    const { data: res } = await apiAcc.post("/accessorial-disputes/" + id + "/propose", data);
+    return res;
+  },
+
+  async decide(id: string, data: unknown): Promise<any> {
+    const { data: res } = await apiAcc.post("/accessorial-disputes/" + id + "/decide", data);
+    return res;
+  },
+
+  async execute(caseId: string, tokenId: string, actorSub: string): Promise<any> {
+    const { data: res } = await apiAcc4.post("/execute", {
+      case_id: caseId, token_id: tokenId, actor_sub: actorSub, action: "ISSUE_PARTIAL_CREDIT",
+    });
+    return res;
+  },
+
+  async reconcile(caseId: string, envelopeId: string, actorSub: string): Promise<any> {
+    const { data: res } = await apiAcc4.post("/reconcile", {
+      case_id: caseId, envelope_id: envelopeId, actor_sub: actorSub,
+    });
+    return res;
+  },
+
+  async issueACR(caseId: string, actorSub: string): Promise<any> {
+    const { data: res } = await apiAcc4.post("/cases/" + caseId + "/acr", { actor_sub: actorSub });
+    return res;
+  },
+
+  async getACR(caseId: string): Promise<any> {
+    const { data: res } = await apiAcc4.get("/cases/" + caseId + "/acr");
+    return res;
   },
 };
 

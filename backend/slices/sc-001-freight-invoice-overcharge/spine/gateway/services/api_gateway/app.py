@@ -2363,7 +2363,7 @@ def _sign_dev(tenant_id: str, data: bytes) -> tuple[bytes, str]:
 
 # ── Dashboard stats ────────────────────────────────────────────────────────────
 
-@v1_router.get("/dashboard/stats", tags=["ui"])
+@v1_router.get("/stats", tags=["ui"])
 def ui_stats(claims: ZoikoClaims = Depends(get_claims)):
     tid = claims.tenant_id
     cnt = q1("""

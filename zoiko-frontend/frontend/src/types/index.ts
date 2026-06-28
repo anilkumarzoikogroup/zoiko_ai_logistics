@@ -207,6 +207,13 @@ export interface ScorecardPeriod {
     filed_at: string;
     currency: string;
   }>;
+  // governance spine fields — populated when breach_detected=true
+  case_id?:     string | null;
+  case_state?:  string | null;
+  finding_id?:  string | null;
+  task_id?:     string | null;
+  task_status?: string | null;
+  token_id?:    string | null;
 }
 
 export interface EvidenceItem {
@@ -570,4 +577,34 @@ export interface ObservabilityAlert {
   severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
   count: number;
   detail: string;
+}
+
+// ── SC-005 — Accessorial Charge Dispute types ─────────────────────────────────
+
+export interface ChargeLine {
+  charge_type:     string;
+  billed_amount:   number;
+  contracted_cap:  number;
+  dispute_amount:  number;
+  tariff_id?:      string | null;
+  tariff_version?: string | null;
+}
+
+export interface AccessorialDispute {
+  id:                 string;
+  case_id?:           string | null;
+  case_state?:        string | null;
+  carrier_id:         string;
+  invoice_reference:  string;
+  invoice_date?:      string | null;
+  dispute_total:      number;
+  currency:           string;
+  confidence?:        number | null;
+  finding_id?:        string | null;
+  task_id?:           string | null;
+  task_status?:       string | null;
+  token_id?:          string | null;
+  breach_detected?:   boolean;
+  charge_lines?:      ChargeLine[];
+  opened_at?:         string | null;
 }
