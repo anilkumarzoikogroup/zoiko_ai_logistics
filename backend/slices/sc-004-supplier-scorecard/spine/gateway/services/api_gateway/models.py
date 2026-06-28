@@ -65,3 +65,20 @@ class ScorecardDetail(ScorecardListItem):
     sub_scores:    Optional[SubScores]   = None
     raw_metrics:   Optional[RawMetrics]  = None
     recent_claims: Optional[list[RecentClaim]] = None
+    case_id:       Optional[str]         = None
+    case_state:    Optional[str]         = None
+    finding_id:    Optional[str]         = None
+    task_id:       Optional[str]         = None
+    task_status:   Optional[str]         = None
+
+
+class UIProposalRequest(BaseModel):
+    finding_id: str   = Field(..., description="Finding UUID to attach this proposal to")
+    amount:     float = Field(..., gt=0, description="Proposed recovery/penalty amount")
+    currency:   str   = Field("INR", description="ISO currency code")
+
+
+class UIDecideRequest(BaseModel):
+    task_id:  str           = Field(..., description="Governance task UUID to decide on")
+    decision: str           = Field(..., description="APPROVE or REJECT")
+    note:     Optional[str] = Field(None, description="Optional decision note")

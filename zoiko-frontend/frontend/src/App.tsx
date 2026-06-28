@@ -55,6 +55,9 @@ const ExceptionDetail   = lazy(() => import("./features/exceptions/ExceptionDeta
 const ScorecardList     = lazy(() => import("./features/scorecards/ScorecardList"));
 const ComputeScorecard  = lazy(() => import("./features/scorecards/ComputeScorecard"));
 const ScorecardDetail   = lazy(() => import("./features/scorecards/ScorecardDetail"));
+const AccessorialList   = lazy(() => import("./features/accessorial/AccessorialList"));
+const NewAccessorial    = lazy(() => import("./features/accessorial/NewAccessorial"));
+const AccessorialDetail = lazy(() => import("./features/accessorial/AccessorialDetail"));
 
 function PageLoader() {
   return (
@@ -147,6 +150,11 @@ export default function App() {
         <Route path="/scorecards"     element={<ScorecardList />} />
         <Route path="/scorecards/new" element={<ComputeScorecard />} />
         <Route path="/scorecards/:id" element={<ScorecardDetail />} />
+
+        {/* SC-005 Accessorial Charges */}
+        <Route path="/accessorial"      element={<Suspense fallback={<PageLoader/>}><AccessorialList/></Suspense>} />
+        <Route path="/accessorial/new"  element={<Suspense fallback={<PageLoader/>}><NewAccessorial/></Suspense>} />
+        <Route path="/accessorial/:id"  element={<Suspense fallback={<PageLoader/>}><AccessorialDetail/></Suspense>} />
 
         {/* Governance — role-gated */}
         <Route path="/analyst" element={

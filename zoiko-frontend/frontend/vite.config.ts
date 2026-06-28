@@ -67,11 +67,31 @@ export default defineConfig({
         proxyTimeout: 90000,
         timeout: 90000,
       },
-      // SC-004 (supplier scorecard) spine — gateway port 8030.
+      // SC-004 (supplier scorecard) spine — gateway port 8030, execution port 8031.
+      // Longer prefix "/scoreapi4" must precede "/scoreapi" stem.
+      "/scoreapi4": {
+        target: "http://localhost:8031",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/scoreapi4/, ""),
+      },
       "/scoreapi": {
         target: "http://localhost:8030",
         changeOrigin: true,
         rewrite: (p) => p.replace(/^\/scoreapi/, ""),
+        proxyTimeout: 90000,
+        timeout: 90000,
+      },
+      // SC-005 (accessorial charge dispute) spine — gateway port 8040, execution port 8041.
+      // Longer prefix "/accapi4" must precede "/accapi" stem.
+      "/accapi4": {
+        target: "http://localhost:8041",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/accapi4/, ""),
+      },
+      "/accapi": {
+        target: "http://localhost:8040",
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/accapi/, ""),
         proxyTimeout: 90000,
         timeout: 90000,
       },

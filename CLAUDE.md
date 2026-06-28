@@ -8,10 +8,12 @@ Project context for Claude Code. Read this before making any changes.
 
 Zoiko detects freight overcharges, carrier claim disputes, and SLA breaches automatically and recovers money through a cryptographically auditable pipeline.
 
-Three live scenarios:
+Five live scenarios:
 - **SC-001** — BlueDart bills Amazon India ₹12,500, contract allows ₹8,000 → ₹4,500 overcharge caught, two humans approve, money recovered, ACR locked.
 - **SC-002** — Carrier claim filed for damaged goods → AI scores claim, analyst proposes settlement, manager approves, credit issued.
 - **SC-003** — BlueDart commits to 14:00 delivery, arrives at 20:00 → 6-hour SLA breach at ₹500/h = ₹3,000 penalty, two humans approve, SLA credit issued, ACR locked.
+- **SC-004** — Carrier composite performance score falls below contracted threshold → AI detects breach (confidence 0.9640), analyst proposes flag, manager approves, NOTIFY_FLAG actioned, ACR locked.
+- **SC-005** — Carrier bills ₹3,200 in accessorial charges but tariff caps allow only ₹2,000 → ₹1,200 excess (confidence 0.9720), analyst proposes partial credit, manager approves, ISSUE_PARTIAL_CREDIT actioned, ACR locked.
 
 ---
 
@@ -35,6 +37,8 @@ Three live scenarios:
 | SC-001 | ✅ | 8000 / 8001 / 8002 | Freight invoice overcharge — rate mismatch detection |
 | SC-002 | ✅ | 8010 / 8011 / 8012 | Carrier claim — damage/loss/delay claim pipeline |
 | SC-003 | ✅ | 8020 / 8021 | Shipment exception — SLA breach → penalty credit pipeline |
+| SC-004 | ✅ | 8030 / 8031 | Supplier scorecard — composite score breach → NOTIFY_FLAG pipeline |
+| SC-005 | ✅ | 8040 / 8041 | Accessorial charge dispute — tariff cap breach → ISSUE_PARTIAL_CREDIT pipeline |
 
 ---
 
@@ -162,7 +166,7 @@ zoiko-logistics/
     ├── src/features/exceptions/     ← SC-003 pages: Exceptions.tsx, NewException.tsx, ExceptionDetail.tsx
     ├── src/features/compliance/     ← C07 pages: LegalHolds, DataRetention, CryptoShred,
     │                                   ArchiveJobs, RestoreJobs, PurgeJobs, DataGovernance (admin-only)
-    ├── vite.config.ts               ← Dev proxy: /api→:8000, /api4→:8001, /claimapi→:8010, /excapi→:8020, /excapi4→:8021
+    ├── vite.config.ts               ← Dev proxy: /api→:8000, /api4→:8001, /claimapi→:8010, /excapi→:8020, /excapi4→:8021, /scoreapi→:8030, /scoreapi4→:8031
     ├── Dockerfile                   ← Multi-stage: dev + build + nginx prod
     └── .env.local                   ← VITE_USE_MOCK=false · VITE_API_BASE=/api
 ```
@@ -204,6 +208,8 @@ VITE_API_EXC4_BASE=/excapi4
 | `/claimapi` | 8010 | SC-002 gateway |
 | `/excapi4` | 8021 | SC-003 execution |
 | `/excapi` | 8020 | SC-003 gateway |
+| `/scoreapi4` | 8031 | SC-004 execution |
+| `/scoreapi` | 8030 | SC-004 gateway |
 
 **To switch back to mock mode** (no backend needed):
 ```
@@ -320,6 +326,46 @@ $env:PYTHONIOENCODING = "utf-8"
 python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8021
 ```
 
+### SC-004 Gateway (port 8030)
+```powershell
+cd backend\slices\sc-004-supplier-scorecard\spine\gateway
+..\..\..\..\venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8030
+```
+
+### SC-004 Execution (port 8031)
+```powershell
+cd backend\slices\sc-004-supplier-scorecard\spine\execution
+..\..\..\..\venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8031
+```
+
+### SC-005 Gateway (port 8040)
+```powershell
+cd backend\slices\sc-005-accessorial-dispute\spine\gateway
+..\..\..\..\venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8040
+```
+
+### SC-005 Execution (port 8041)
+```powershell
+cd backend\slices\sc-005-accessorial-dispute\spine\execution
+..\..\..\..\venv\Scripts\activate
+$env:DB_URL = "postgresql://postgres:1234@localhost/zoiko"
+$env:ZOIKO_DEV_MODE = "true"
+$env:PYTHONIOENCODING = "utf-8"
+python -m uvicorn services.api_gateway.app:app --reload --host 0.0.0.0 --port 8041
+```
+
 ### Check live API
 ```powershell
 curl http://localhost:8000/health
@@ -328,6 +374,12 @@ curl http://localhost:8001/docs         # Swagger UI — SC-001 execution (recov
 curl http://localhost:8020/health
 curl http://localhost:8020/docs         # Swagger UI — SC-003 gateway routes
 curl http://localhost:8021/docs         # Swagger UI — SC-003 execution routes
+curl http://localhost:8030/health
+curl http://localhost:8030/docs         # Swagger UI — SC-004 scorecard gateway routes
+curl http://localhost:8031/docs         # Swagger UI — SC-004 scorecard execution routes
+curl http://localhost:8040/health
+curl http://localhost:8040/docs         # Swagger UI — SC-005 accessorial gateway routes
+curl http://localhost:8041/docs         # Swagger UI — SC-005 accessorial execution routes
 curl http://localhost:5173/api/health   # same, through Vite proxy
 ```
 
@@ -418,6 +470,33 @@ Required headers: `Authorization: Bearer <JWT>` · `X-Tenant-ID: <uuid>` · `Ide
 | `POST /cases/{id}/acr` | Issue 8-artifact Merkle ACR (WORM-locked, irreversible) |
 | `GET  /cases/{id}/acr` | Fetch ACR record |
 
+## SC-005 Gateway API Routes (port 8040, /v1/ prefix)
+
+| Route | Notes |
+|-------|-------|
+| `GET  /health` | `{"status":"ok","service":"sc005-gateway","version":"1.0.0"}` |
+| `POST /accessorial-disputes/submit` | Full pipeline: ingest → canonical → case → evidence + reasoning (background thread) |
+| `GET  /accessorial-disputes` | Paginated list; params: `state`, `page`, `page_size` |
+| `GET  /accessorial-disputes/{id}` | Single dispute with charge_lines, accepted/disputed totals, confidence |
+| `GET  /accessorial-disputes/{id}/finding` | AI confidence score + rule trace (SC005_CONFIDENCE = 0.9720) |
+| `GET  /accessorial-disputes/{id}/events` | Case FSM audit trail (append-only) |
+| `POST /accessorial-disputes/{id}/propose` | Analyst proposes partial credit (requires finding_id, amount, currency) |
+| `POST /accessorial-disputes/{id}/decide` | Manager approves/rejects — SoD: actor_sub ≠ proposer_sub |
+
+Required headers: `Authorization: Bearer <JWT>` · `X-Tenant-ID: <uuid>` · `Idempotency-Key: <uuid>` (mutations)
+
+## SC-005 Execution Gateway API Routes (port 8041, /v1/ prefix)
+
+| Route | Notes |
+|-------|-------|
+| `GET  /health` | `{"status":"ok","service":"sc005-execution","version":"1.0.0"}` |
+| `POST /execute` | 8-gate check (sig/expiry/consumed/binding/scope/sanctions/FX/connector) → action `ISSUE_PARTIAL_CREDIT` |
+| `POST /reconcile` | PARTIAL_ACCEPTANCE: 3-way split (accepted/disputed/written_off) from accessorial_charges |
+| `GET  /cases/{id}/variances` | Reconciliation variance records |
+| `POST /cases/{id}/variances/{vid}/resolve` | Resolve or waive an OPEN variance |
+| `POST /cases/{id}/acr` | Issue 8-artifact Merkle ACR (WORM-locked, irreversible) |
+| `GET  /cases/{id}/acr` | Fetch ACR record |
+
 ## C07 Data Governance API Routes (gateway, port 8000, /v1/ prefix, admin-only)
 
 | Route | Notes |
@@ -503,6 +582,32 @@ sla_breach_hours   = max(0, (actual_delivery - committed_eta).total_seconds() / 
 sla_penalty_amount = min(penalty_cap, sla_breach_hours * penalty_rate_per_hour)
 ```
 
+### SC-004 — Supplier Scorecard Breach
+```python
+_RULES = {
+    "breach_detected_rule": {"confidence": 1.00, "weight": 0.70},
+    "data_coverage_rule":   {"confidence": 0.88, "weight": 0.30},
+}
+SC004_CONFIDENCE = 0.9640  # = 1.00×0.70 + 0.88×0.30 — MUST be exactly this value
+```
+
+Action: `NOTIFY_FLAG` (flag carrier for review — not a money movement)
+Reconciliation strategy: `SCORE_OUTCOME` (composite_score vs contracted_threshold)
+Policy: `scorecard-breach-policy@2026.05.01`, task_type: `APPROVE_SCORECARD_FLAG`
+
+### SC-005 — Accessorial Charge Dispute
+```python
+_RULES = {
+    "cap_exceeded_rule":       {"confidence": 1.00, "weight": 0.65},
+    "tariff_clause_match_rule": {"confidence": 0.92, "weight": 0.35},
+}
+SC005_CONFIDENCE = 0.9720  # = 1.00×0.65 + 0.92×0.35 — MUST be exactly this value
+```
+
+Action: `ISSUE_PARTIAL_CREDIT` (partial credit memo for the over-cap amount)
+Reconciliation strategy: `PARTIAL_ACCEPTANCE` (3-way split: accepted=sum(min(billed,cap)), disputed=sum(max(0,billed-cap)), written_off=0)
+Policy: `accessorial-dispute-policy@2026.05.01`, task_type: `APPROVE_ACCESSORIAL_DISPUTE`
+
 ---
 
 ## SoD Rule
@@ -567,6 +672,8 @@ shipment_events        ← SC-003 carrier event stream
 | Forgetting `paths.py` import in governance modules | Always `import paths` as the first import |
 | Changing SC001_CONFIDENCE | This value is deterministic — never change it |
 | Changing SC003_CONFIDENCE | Also deterministic (0.9520) — never change it |
+| Changing SC004_CONFIDENCE | Also deterministic (0.9640) — never change it |
+| Changing SC005_CONFIDENCE | Also deterministic (0.9720) — never change it |
 | Using `psycopg2.extras.register_uuid()` late | Call it before any psycopg2 connection that handles UUIDs |
 | UPDATE/DELETE on append-only tables | Only INSERT is permitted on lineage_records, case_events, evidence_items, audit_worm_index, shipment_events |
 | SC-003 canonical model field name | Field is `penalty_amount` (not `sla_penalty_amount`) in CanonicalShipmentExceptionResult |
@@ -576,6 +683,10 @@ shipment_events        ← SC-003 carrier event stream
 | "Submission failed" in UI | Check backend is running on port 8000: `curl http://localhost:8000/health` |
 | Backend not picking up .py changes | Kill Python process and restart uvicorn — `--reload` watches files but can miss them |
 | SC-003 paths.py pointing to missing core_lib | paths.py falls back to SC-002's core_lib/platform_lib — if SC-002 spine is missing, SC-003 also breaks |
+| SC-004 disputes not loading in UI | Check SC-004 gateway on port 8030: `curl http://localhost:8030/health` |
+| SC-005 disputes not loading in UI | Check SC-005 gateway on port 8040: `curl http://localhost:8040/health` |
+| SC-005 frontend showing no data | Ensure VITE_API_ACC_BASE=/accapi and VITE_API_ACC4_BASE=/accapi4 in .env.local |
+| SC-004/005 paths.py pointing to missing core_lib | Both slices fall back to SC-002's core_lib/platform_lib — SC-002 spine must be present |
 
 ---
 

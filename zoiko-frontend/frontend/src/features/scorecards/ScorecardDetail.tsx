@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { scorecardApi } from "@/api/zoiko";
 import type { ScorecardPeriod } from "@/types";
 
@@ -23,32 +24,22 @@ function SubScoreBar({ label, score, weight, color }: { label: string; score: nu
 
 // ── Large circular gauge ──────────────────────────────────────────────────────
 function BigGauge({ score, threshold }: { score: number; threshold: number }) {
-  const r = 52;
-  const cx = 64;
-  const cy = 64;
+  const r = 52, cx = 64, cy = 64;
   const circ = 2 * Math.PI * r;
-  const dash = (score / 100) * circ;
+  const dash  = (score / 100) * circ;
   const color = score >= threshold ? "#10b981" : score >= threshold - 10 ? "#f59e0b" : "#ef4444";
   const label = score >= threshold ? "Good" : score >= threshold - 10 ? "At Risk" : "Breach";
   return (
     <div className="flex flex-col items-center gap-1">
       <svg width={128} height={128} viewBox="0 0 128 128">
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f1f5f9" strokeWidth={12} />
-        <circle
-          cx={cx} cy={cy} r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth={12}
-          strokeDasharray={`${dash} ${circ - dash}`}
-          strokeLinecap="round"
-          transform={`rotate(-90 ${cx} ${cy})`}
-        />
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke={color} strokeWidth={12}
+          strokeDasharray={`${dash} ${circ - dash}`} strokeLinecap="round"
+          transform={`rotate(-90 ${cx} ${cy})`} />
         <text x={cx} y={cy - 4} textAnchor="middle" fontSize={26} fontWeight="800" fill={color} fontFamily="monospace">
           {score.toFixed(0)}
         </text>
-        <text x={cx} y={cy + 16} textAnchor="middle" fontSize={11} fill="#94a3b8">
-          / 100
-        </text>
+        <text x={cx} y={cy + 16} textAnchor="middle" fontSize={11} fill="#94a3b8">/ 100</text>
       </svg>
       <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: `${color}20`, color }}>
         {label}
@@ -57,7 +48,27 @@ function BigGauge({ score, threshold }: { score: number; threshold: number }) {
   );
 }
 
-// ── Claim status badge ────────────────────────────────────────────────────────
+// ── Case state chip ───────────────────────────────────────────────────────────
+const CASE_STATE_COLORS: Record<string, string> = {
+  FINDING_GENERATED: "bg-blue-50 text-blue-700 border-blue-200",
+  APPROVAL_PENDING:  "bg-amber-50 text-amber-700 border-amber-200",
+  EXECUTION_READY:   "bg-violet-50 text-violet-700 border-violet-200",
+  DISPATCHED:        "bg-indigo-50 text-indigo-700 border-indigo-200",
+  OUTCOME_RECORDED:  "bg-teal-50 text-teal-700 border-teal-200",
+  CLOSED:            "bg-emerald-50 text-emerald-700 border-emerald-200",
+  ABORTED:           "bg-red-50 text-red-700 border-red-200",
+};
+
+function CaseStateChip({ state }: { state: string }) {
+  const cls = CASE_STATE_COLORS[state] ?? "bg-slate-50 text-slate-600 border-slate-200";
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-semibold ${cls}`}>
+      <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" />
+      {state.replace(/_/g, " ")}
+    </span>
+  );
+}
+
 const STATUS_COLORS: Record<string, string> = {
   OPEN:      "bg-blue-50 text-blue-700",
   RESOLVED:  "bg-emerald-50 text-emerald-700",
@@ -89,14 +100,198 @@ const SUB_COLORS = {
   resolution: "#3b82f6",
 };
 
+// ── Governance flow panel ─────────────────────────────────────────────────────
+function GovernancePanel({ sc, onRefresh }: { sc: ScorecardPeriod; onRefresh: () => void }) {
+  const [proposeAmount, setProposeAmount] = useState(sc.breach_amount?.toString() ?? "");
+  const [decideNote, setDecideNote]       = useState("");
+  const [error, setError]                 = useState<string | null>(null);
+
+  const DEV_MANAGER = "manager@zoikogroup.com";
+
+  const proposeMut = useMutation({
+    mutationFn: () =>
+      scorecardApi.propose(sc.id, sc.finding_id!, parseFloat(proposeAmount)),
+    onSuccess: () => { setError(null); onRefresh(); },
+    onError:   (e: any) => setError(e?.response?.data?.detail ?? e.message),
+  });
+
+  const decideMut = useMutation({
+    mutationFn: (decision: "APPROVE" | "REJECT") =>
+      scorecardApi.decide(sc.id, sc.task_id!, decision, decideNote || undefined),
+    onSuccess: () => { setError(null); onRefresh(); },
+    onError:   (e: any) => setError(e?.response?.data?.detail ?? e.message),
+  });
+
+  const executeMut = useMutation({
+    mutationFn: () =>
+      scorecardApi.execute(sc.case_id!, sc.token_id!, DEV_MANAGER),
+    onSuccess: (res: any) => {
+      setError(null);
+      if (res?.envelope_id) {
+        reconcileMut.mutate(res.envelope_id);
+      } else {
+        onRefresh();
+      }
+    },
+    onError: (e: any) => setError(e?.response?.data?.detail ?? e.message),
+  });
+
+  const reconcileMut = useMutation({
+    mutationFn: (envelopeId: string) =>
+      scorecardApi.reconcile(sc.case_id!, envelopeId, DEV_MANAGER),
+    onSuccess: () => { setError(null); onRefresh(); },
+    onError:   (e: any) => setError(e?.response?.data?.detail ?? e.message),
+  });
+
+  const acrMut = useMutation({
+    mutationFn: () => scorecardApi.issueACR(sc.case_id!, DEV_MANAGER),
+    onSuccess: () => { setError(null); onRefresh(); },
+    onError:   (e: any) => setError(e?.response?.data?.detail ?? e.message),
+  });
+
+  const state = sc.case_state;
+  if (!state) return null;
+
+  const busy = proposeMut.isPending || decideMut.isPending || executeMut.isPending || reconcileMut.isPending || acrMut.isPending;
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-slate-700">Governance Flow</h2>
+        <CaseStateChip state={state} />
+      </div>
+
+      {error && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
+          {error}
+        </div>
+      )}
+
+      {/* Step 1 — Analyst proposes */}
+      {state === "FINDING_GENERATED" && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Breach detected with confidence <span className="font-mono font-semibold">0.9640</span>.
+            Analyst proposes a flag action for manager review.
+          </p>
+          <div className="flex items-center gap-3">
+            <label className="text-xs text-slate-600 whitespace-nowrap">Exposure (₹)</label>
+            <input
+              type="number"
+              value={proposeAmount}
+              onChange={e => setProposeAmount(e.target.value)}
+              className="flex-1 border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={() => proposeMut.mutate()}
+              disabled={busy || !sc.finding_id}
+              className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {proposeMut.isPending ? "Proposing…" : "Propose Flag"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2 — Manager approves / rejects */}
+      {state === "APPROVAL_PENDING" && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Proposal pending manager decision (task <span className="font-mono">{sc.task_id?.slice(0, 8)}…</span>).
+            Approver must differ from proposer (SoD rule).
+          </p>
+          <textarea
+            rows={2}
+            placeholder="Optional approval note…"
+            value={decideNote}
+            onChange={e => setDecideNote(e.target.value)}
+            className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          />
+          <div className="flex gap-3">
+            <button
+              onClick={() => decideMut.mutate("APPROVE")}
+              disabled={busy}
+              className="flex-1 px-4 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+            >
+              {decideMut.isPending ? "Approving…" : "Approve"}
+            </button>
+            <button
+              onClick={() => decideMut.mutate("REJECT")}
+              disabled={busy}
+              className="flex-1 px-4 py-1.5 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
+            >
+              Reject
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3 — Execute (token redemption) */}
+      {state === "EXECUTION_READY" && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Governance token issued. 8-gate execution check will redeem the token and flag the carrier.
+          </p>
+          <button
+            onClick={() => executeMut.mutate()}
+            disabled={busy || !sc.token_id}
+            className="w-full px-4 py-2 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 disabled:opacity-50 transition-colors"
+          >
+            {executeMut.isPending || reconcileMut.isPending ? "Executing…" : "Execute & Reconcile (NOTIFY_FLAG)"}
+          </button>
+        </div>
+      )}
+
+      {/* Step 4 — Issue ACR */}
+      {state === "OUTCOME_RECORDED" && (
+        <div className="space-y-3">
+          <p className="text-xs text-slate-500">
+            Outcome recorded. Issue the 8-artifact Merkle ACR to close and WORM-lock this case.
+          </p>
+          <button
+            onClick={() => acrMut.mutate()}
+            disabled={busy}
+            className="w-full px-4 py-2 bg-slate-800 text-white text-sm rounded-lg hover:bg-slate-900 disabled:opacity-50 transition-colors"
+          >
+            {acrMut.isPending ? "Issuing ACR…" : "Issue ACR & Close Case"}
+          </button>
+        </div>
+      )}
+
+      {/* Closed / WORM-locked */}
+      {state === "CLOSED" && (
+        <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 flex items-start gap-3">
+          <span className="text-emerald-500 text-lg mt-0.5">✓</span>
+          <div>
+            <p className="text-sm font-semibold text-emerald-700">Case closed — ACR WORM-locked</p>
+            <p className="text-xs text-emerald-600 mt-0.5">
+              Carrier flagged · 8-artifact Merkle ACR issued · Audit trail immutable
+            </p>
+          </div>
+        </div>
+      )}
+
+      {state === "ABORTED" && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-2.5 text-sm text-red-700">
+          Case aborted by manager decision.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 export default function ScorecardDetail() {
-  const { id } = useParams<{ id: string }>();
+  const { id }        = useParams<{ id: string }>();
+  const queryClient   = useQueryClient();
 
   const { data: sc, isLoading, error } = useQuery<ScorecardPeriod>({
     queryKey: ["scorecard", id],
     queryFn:  () => scorecardApi.getScorecard(id!),
     enabled:  !!id,
   });
+
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["scorecard", id] });
 
   if (isLoading) {
     return (
@@ -117,7 +312,7 @@ export default function ScorecardDetail() {
   }
 
   const subScores = sc.sub_scores;
-  const raw = sc.raw_metrics;
+  const raw       = sc.raw_metrics;
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -134,18 +329,21 @@ export default function ScorecardDetail() {
           <BigGauge score={sc.composite_score} threshold={sc.contracted_threshold} />
 
           <div className="flex-1 space-y-3">
-            <div>
-              <h1 className="text-xl font-bold text-slate-900">{sc.carrier_id}</h1>
-              <p className="text-sm text-slate-500">{formatPeriod(sc.period_start, sc.period_end)}</p>
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h1 className="text-xl font-bold text-slate-900">{sc.carrier_id}</h1>
+                <p className="text-sm text-slate-500">{formatPeriod(sc.period_start, sc.period_end)}</p>
+              </div>
+              {sc.case_state && <CaseStateChip state={sc.case_state} />}
             </div>
 
             {/* KPI row */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
-                { label: "On-Time Rate",  val: `${(sc.on_time_rate * 100).toFixed(0)}%` },
-                { label: "Claim Quality", val: `${((1 - sc.damage_rate) * 100).toFixed(0)}%` },
-                { label: "Total Claims",  val: sc.claim_frequency.toFixed(0) },
-                { label: "Avg Turnaround",val: `${sc.dispute_turnaround_days.toFixed(0)}d` },
+                { label: "On-Time Rate",   val: `${(sc.on_time_rate * 100).toFixed(0)}%` },
+                { label: "Claim Quality",  val: `${((1 - sc.damage_rate) * 100).toFixed(0)}%` },
+                { label: "Total Claims",   val: sc.claim_frequency.toFixed(0) },
+                { label: "Avg Turnaround", val: `${sc.dispute_turnaround_days.toFixed(0)}d` },
               ].map(k => (
                 <div key={k.label} className="rounded-lg bg-slate-50 px-3 py-2">
                   <div className="text-xs text-slate-500">{k.label}</div>
@@ -168,13 +366,17 @@ export default function ScorecardDetail() {
               </div>
             )}
 
-            {/* Threshold line */}
             <p className="text-xs text-slate-400">
               Contracted threshold: <span className="font-mono font-semibold text-slate-600">{sc.contracted_threshold}/100</span>
             </p>
           </div>
         </div>
       </div>
+
+      {/* Governance flow — only shown when a case has been opened for a breach */}
+      {sc.breach_detected && sc.case_id && (
+        <GovernancePanel sc={sc} onRefresh={refresh} />
+      )}
 
       {/* Sub-score breakdown */}
       {subScores && (
@@ -194,7 +396,6 @@ export default function ScorecardDetail() {
               );
             })}
           </div>
-
           <div className="mt-5 pt-4 border-t border-slate-100">
             <div className="flex justify-between text-sm font-semibold text-slate-700">
               <span>Composite Score</span>
@@ -213,12 +414,12 @@ export default function ScorecardDetail() {
           <h2 className="text-sm font-semibold text-slate-700 mb-4">Underlying Data</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             {[
-              { label: "Total Claims",     val: raw.total_claims },
-              { label: "Total Claimed",    val: `₹${raw.total_claimed.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` },
-              { label: "Total Approved",   val: `₹${raw.total_approved.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` },
-              { label: "Avg Turnaround",   val: `${raw.avg_turnaround_days.toFixed(1)} days` },
-              { label: "SLA Cases",        val: raw.sla_cases },
-              { label: "On-Time Cases",    val: raw.on_time_cases },
+              { label: "Total Claims",   val: raw.total_claims },
+              { label: "Total Claimed",  val: `₹${raw.total_claimed.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` },
+              { label: "Total Approved", val: `₹${raw.total_approved.toLocaleString("en-IN", { maximumFractionDigits: 0 })}` },
+              { label: "Avg Turnaround", val: `${raw.avg_turnaround_days.toFixed(1)} days` },
+              { label: "SLA Cases",      val: raw.sla_cases },
+              { label: "On-Time Cases",  val: raw.on_time_cases },
             ].map(m => (
               <div key={m.label} className="rounded-lg bg-slate-50 px-3 py-2">
                 <div className="text-xs text-slate-500">{m.label}</div>
