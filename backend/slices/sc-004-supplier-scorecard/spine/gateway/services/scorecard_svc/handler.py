@@ -265,7 +265,6 @@ class ScorecardHandler:
         case_id    = uuid.uuid4()
         finding_id = uuid.uuid4()
         bundle_id  = uuid.uuid4()
-        item_id    = uuid.uuid4()
 
         # ── Evidence item: scorecard payload ──────────────────────────────────
         evidence_payload = json.dumps({

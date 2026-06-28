@@ -20,10 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY backend/core/packages/zoiko-common/  ./backend/core/packages/zoiko-common/
-COPY backend/platform/packages/zoiko-kms/ ./backend/platform/packages/zoiko-kms/
-RUN pip install --no-cache-dir -e ./backend/core/packages/zoiko-common \
- && pip install --no-cache-dir -e ./backend/platform/packages/zoiko-kms
+COPY backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/  ./backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/
+COPY backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms/ ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms/
+RUN pip install --no-cache-dir -e ./backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common \
+ && pip install --no-cache-dir -e ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
 # ── Stage 2: lean runtime ──────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
@@ -62,4 +62,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # Default: API Gateway on $PORT (Render injects PORT)
-CMD ["sh", "-c", "cd /app/backend/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]
+CMD ["sh", "-c", "cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2"]

@@ -20,8 +20,8 @@ class ReasoningHandler:
         confidence, rule_trace = compute_confidence(charge_lines)
 
         dispute_total = sum(
-            max(0, float(l["billed_amount"]) - float(l["contracted_cap"]))
-            for l in charge_lines
+            max(0, float(line["billed_amount"]) - float(line["contracted_cap"]))
+            for line in charge_lines
         )
 
         now = datetime.now(timezone.utc)
@@ -71,7 +71,7 @@ class ReasoningHandler:
             "rule_trace": rule_trace,
             "dispute_total": dispute_total,
             "disputed_lines": [
-                l for l in charge_lines
-                if float(l.get("billed_amount", 0)) > float(l.get("contracted_cap", 0))
+                line for line in charge_lines
+                if float(line.get("billed_amount", 0)) > float(line.get("contracted_cap", 0))
             ],
         }

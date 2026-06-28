@@ -79,7 +79,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -122,7 +122,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -159,8 +159,8 @@ services:
   - type: web
     name: zoiko-opa
     runtime: docker
-    dockerfilePath: ./backend/platform/opa/Dockerfile
-    dockerContext: ./backend/platform/opa
+    dockerfilePath: ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/opa/Dockerfile
+    dockerContext: ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/opa
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)

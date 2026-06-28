@@ -476,7 +476,6 @@ class ExecutionGateway:
     ) -> None:
         """Email finance managers about the recovery execution — best effort."""
         try:
-            import os
             from shared.db import q, q1
             # Respect tenant notification toggle
             settings = q1(

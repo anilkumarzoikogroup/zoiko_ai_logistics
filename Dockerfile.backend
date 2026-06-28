@@ -20,10 +20,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Install internal packages so every service can import them without relying
 # purely on paths.py (belt-and-suspenders approach)
-COPY backend/core/packages/zoiko-common/  ./backend/core/packages/zoiko-common/
-COPY backend/platform/packages/zoiko-kms/ ./backend/platform/packages/zoiko-kms/
-RUN pip install --no-cache-dir -e ./backend/core/packages/zoiko-common \
- && pip install --no-cache-dir -e ./backend/platform/packages/zoiko-kms
+COPY backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/  ./backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/
+COPY backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms/ ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms/
+RUN pip install --no-cache-dir -e ./backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common \
+ && pip install --no-cache-dir -e ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
 # ── Stage 2: lean runtime image ───────────────────────────────────────────────
 FROM python:3.11-slim AS runtime

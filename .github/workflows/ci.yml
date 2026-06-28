@@ -91,10 +91,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
       - name: JCS canonical vectors (must be 100%)
-        run: python -m pytest backend/core/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
+        run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 3a  Crypto + Merkle
@@ -115,8 +115,8 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common
-      - run: python -m pytest backend/core/packages/zoiko-common/tests/ -v --tb=short
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common
+      - run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/tests/ -v --tb=short
 
   kms:
     name: KMS Hierarchy
@@ -132,8 +132,8 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
-      - run: python -m pytest backend/platform/packages/zoiko-kms/tests/ -v --tb=short
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
+      - run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms/tests/ -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 4  Platform — Kafka + OPA + OIDC
@@ -152,8 +152,8 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
-      - run: python -m pytest backend/platform/tests/ -v --tb=short
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
+      - run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/tests/ -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 5a  Gateway Integration     — uses Neon DB (secret: NEON_DB_URL)
@@ -178,7 +178,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
       - name: Write .env
         run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
@@ -188,7 +188,7 @@ jobs:
 
       - name: Run Gateway tests
         run: python -m pytest -v --tb=short -q
-        working-directory: backend/gateway
+        working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/gateway
 
   governance:
     name: Governance Integration
@@ -207,7 +207,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
       - name: Write .env
         run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
@@ -217,7 +217,7 @@ jobs:
 
       - name: Run Governance tests
         run: python -m pytest -v --tb=short -q
-        working-directory: backend/governance
+        working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/governance
 
   execution:
     name: Execution Tests
@@ -237,10 +237,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
       - run: python -m pytest tests/ -v --tb=short -q
-        working-directory: backend/execution
+        working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/execution
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 6  Frontend — TypeScript build + type check
@@ -309,10 +309,10 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/core/packages/zoiko-common -e backend/platform/packages/zoiko-kms
+      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
 
       - name: Write .env
         run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
 
       - run: alembic upgrade head
-      - run: python backend/core/scripts/tenant_fuzzer.py
+      - run: python backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/scripts/tenant_fuzzer.py
