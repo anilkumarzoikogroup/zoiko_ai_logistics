@@ -1,7 +1,8 @@
 name: Deploy Backend → Render
 
 # Only fires after "Zoiko CI" completes successfully on main.
-# Render's autoDeploy is OFF — this workflow is the single deploy trigger.
+# Render's autoDeploy is OFF for every service — this workflow is the
+# single deploy trigger for all four (api, execution, governance, opa).
 on:
   workflow_run:
     workflows: ["Zoiko CI"]
@@ -15,29 +16,75 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
 
     steps:
-      # Trigger Render deploy via deploy hook (set RENDER_DEPLOY_HOOK_URL in GitHub Secrets)
-      # Get it from: Render dashboard → your service → Settings → Deploy Hook
-      - name: Trigger Render deploy
+      # Each Render service has its own unique deploy hook URL
+      # (Render dashboard → service → Settings → Deploy Hook). One curl
+      # call only redeploys the one service whose hook you call, so all
+      # four must be triggered explicitly.
+      - name: Trigger zoiko-api deploy
         run: |
-          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" \
-            --fail \
-            --silent \
-            --show-error
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" --fail --silent --show-error
 
-      # Render free plan cold starts can take 2–3 min — poll until healthy
-      - name: Wait for Render to come up
+      - name: Trigger zoiko-execution deploy
         run: |
-          echo "Waiting for Render deploy to complete..."
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_EXECUTION }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-governance deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_GOVERNANCE }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-opa deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_OPA }}" --fail --silent --show-error
+
+      # Render free plan cold starts can take 2–3 min — poll each service until healthy
+      - name: Wait for zoiko-api to come up
+        run: |
+          echo "Waiting for zoiko-api..."
           for i in $(seq 1 20); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-              https://zoiko-ai-logistics.onrender.com/health)
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-ai-logistics.onrender.com/health)
             echo "Attempt $i — HTTP $STATUS"
-            if [ "$STATUS" = "200" ]; then
-              echo "Backend is healthy."
-              exit 0
-            fi
+            if [ "$STATUS" = "200" ]; then echo "zoiko-api is healthy."; exit 0; fi
             sleep 15
           done
-          echo "Smoke test timed out after 5 minutes."
+          echo "zoiko-api smoke test timed out after 5 minutes."
           exit 1
         continue-on-error: true   # alert but don't roll back automatically yet
+
+      - name: Wait for zoiko-execution to come up
+        run: |
+          echo "Waiting for zoiko-execution..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-execution.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-execution is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-execution smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-governance to come up
+        run: |
+          echo "Waiting for zoiko-governance..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-governance.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-governance is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-governance smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-opa to come up
+        run: |
+          echo "Waiting for zoiko-opa..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-opa.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-opa is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-opa smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
