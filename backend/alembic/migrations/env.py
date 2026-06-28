@@ -6,7 +6,7 @@ from logging.config import fileConfig
 
 from dotenv import load_dotenv
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import pool
 
 # Load .env first so DB_URL is available in both local dev and CI
 load_dotenv()

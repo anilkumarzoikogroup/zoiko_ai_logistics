@@ -408,7 +408,7 @@ def _log_notification(db_url: str, tenant_id: str, event_type: str,
                       status: str = "SENT", error: str | None = None) -> None:
     """Write to email_notification_log table — best effort, never raises."""
     try:
-        import psycopg2, uuid as _uuid
+        import psycopg2
         conn = psycopg2.connect(db_url)
         try:
             cur = conn.cursor()

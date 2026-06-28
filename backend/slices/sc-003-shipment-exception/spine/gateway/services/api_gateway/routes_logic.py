@@ -8,12 +8,11 @@ Pattern mirrors sc-002's routes_logic.py:
 """
 import json
 import threading
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from shared.db import q, q1, DB_URL
+from shared.db import q, q1
 
 
 # ── Query helper ──────────────────────────────────────────────────────────────

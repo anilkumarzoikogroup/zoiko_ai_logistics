@@ -1,7 +1,6 @@
 """SC-003 API gateway request/response models."""
 from pydantic import BaseModel, Field
 from typing import Optional
-from datetime import datetime
 
 
 class ShipmentEventItem(BaseModel):

@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 
 from shared.db import q, q1, DB_URL as _DEFAULT_DB_URL
 from shared.signer import sign
-from zoiko_common.crypto.jcs import canonicalize as jcs
 
 try:
     from zoiko_common.crypto.merkle import MerkleTree

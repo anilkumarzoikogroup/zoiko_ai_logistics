@@ -27,7 +27,6 @@ load_dotenv()
 import uuid
 from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from services.api_gateway.auth import get_claims
 from services.api_gateway.models import (
@@ -42,7 +41,7 @@ from services.ingestion_svc.handler    import IngestionHandler
 from services.canonical_truth.handler  import CanonicalHandler
 from services.case_orchestration.handler import CaseHandler
 from services.governance_svc.handler   import GovernanceHandler
-from shared.db import q, q1, DB_URL
+from shared.db import DB_URL
 
 DB_URL          = os.getenv("DB_URL", DB_URL)
 TENANT_SLUG     = os.getenv("TENANT_SLUG", "default")
@@ -80,7 +79,6 @@ app.add_middleware(
 
 def _row(r: dict) -> dict:
     """Serialize a DB row — convert UUID and datetime to str."""
-    import datetime
     out = {}
     for k, v in r.items():
         if hasattr(v, "isoformat"):

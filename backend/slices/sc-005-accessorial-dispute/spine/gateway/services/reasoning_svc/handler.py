@@ -4,10 +4,10 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from shared.db import q, q1, DB_URL
+from shared.db import q
 from zoiko_common.crypto.jcs import canonicalize as jcs
 from shared.signer import sign
-from services.reasoning_svc.rules import compute_confidence, SC005_CONFIDENCE
+from services.reasoning_svc.rules import compute_confidence
 
 
 class ReasoningHandler:

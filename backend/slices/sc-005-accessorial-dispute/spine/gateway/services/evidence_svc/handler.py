@@ -1,10 +1,9 @@
 import paths  # noqa: F401
 import uuid
 import hashlib
-import json
 from datetime import datetime, timezone
 
-from shared.db import q, q1, DB_URL
+from shared.db import q, DB_URL
 from zoiko_common.crypto.jcs import canonicalize as jcs
 from shared.signer import sign
 

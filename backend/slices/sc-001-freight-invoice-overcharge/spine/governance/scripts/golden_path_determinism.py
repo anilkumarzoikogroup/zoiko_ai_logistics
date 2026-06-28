@@ -26,7 +26,6 @@ import sys
 _HERE       = os.path.dirname(os.path.abspath(__file__))
 _GOVERNANCE = os.path.normpath(os.path.join(_HERE, ".."))
 sys.path.insert(0, _GOVERNANCE)
-import paths  # noqa: E402  — governance's sys.path bootstrap
 
 import psycopg2          # noqa: E402
 import psycopg2.extras   # noqa: E402
@@ -104,7 +103,7 @@ def main() -> int:
         print(f"  finding_hash: {next(iter(seen_hashes))}")
         return 0
     else:
-        print(f"FAIL — non-determinism detected.")
+        print("FAIL — non-determinism detected.")
         print(f"  distinct rule_trace encodings: {len(seen_traces)}")
         print(f"  distinct finding_hash values: {len(seen_hashes)}")
         return 1

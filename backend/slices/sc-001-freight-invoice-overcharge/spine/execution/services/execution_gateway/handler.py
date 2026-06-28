@@ -505,7 +505,6 @@ class ExecutionGateway:
                 db_url=self._db_url,
             )
             from shared.email_sender import send_recovery_executed, _log_notification
-            app_url = os.getenv("APP_URL", "http://localhost:5173")
             for r in recipients:
                 try:
                     send_recovery_executed(

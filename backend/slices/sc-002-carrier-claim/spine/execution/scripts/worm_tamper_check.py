@@ -30,7 +30,6 @@ import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.normpath(os.path.join(_HERE, "..")))
-import paths  # noqa: E402  — execution's sys.path bootstrap
 
 import psycopg2          # noqa: E402
 import psycopg2.extras   # noqa: E402
