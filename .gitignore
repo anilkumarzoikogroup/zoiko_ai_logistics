@@ -3,6 +3,7 @@ __pycache__/
 # Local temp/debug scripts with hardcoded credentials — never commit
 _backend.py
 _*.py
+!__*.py
 *.egg-info/
 .venv/
 venv/
