@@ -3,7 +3,6 @@
 @tailwind utilities;
 
 @layer base {
-  /* ── Light mode tokens ─────────────────────────────────────────── */
   :root {
     --background:          0 0% 100%;
     --foreground:          222 47% 11%;
@@ -30,36 +29,6 @@
     --zoiko-purple:  #8b5cf6;
     --zoiko-teal:    #06b6d4;
     --zoiko-emerald: #10b981;
-    --zoiko-amber:   #f59e0b;
-  }
-
-  /* ── Dark mode tokens ──────────────────────────────────────────── */
-  .dark {
-    --background:          222 47% 7%;      /* #0b1020 — main page bg      */
-    --foreground:          210 40% 92%;     /* near-white text              */
-    --card:                222 47% 10%;     /* #0d1424 — card surfaces      */
-    --card-foreground:     210 40% 92%;
-    --primary:             215 100% 55%;
-    --primary-foreground:  0 0% 100%;
-    --secondary:           217 33% 17%;     /* subtle dark surface          */
-    --secondary-foreground:210 40% 85%;
-    --muted:               217 33% 17%;
-    --muted-foreground:    215 16% 56%;
-    --accent:              217 33% 20%;
-    --accent-foreground:   210 40% 92%;
-    --destructive:         0 65% 48%;
-    --destructive-foreground: 0 0% 100%;
-    --border:              215 28% 20%;     /* subtle dark border           */
-    --input:               215 28% 20%;
-    --ring:                215 100% 55%;
-
-    /* Zoiko brand — lighter in dark mode so they're visible */
-    --zoiko-navy:    #e2e8f0;   /* becomes light text on dark bg  */
-    --zoiko-blue:    #60a5fa;
-    --zoiko-purple:  #a78bfa;
-    --zoiko-teal:    #22d3ee;
-    --zoiko-emerald: #34d399;
-    --zoiko-amber:   #fbbf24;
   }
 }
 
@@ -72,29 +41,23 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* ── Scrollbars ─────────────────────────────────────────────────── */
+  /* Custom scrollbar */
   ::-webkit-scrollbar       { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #475569; border-radius: 9999px; }
-  ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
-  .dark ::-webkit-scrollbar-thumb       { background: #334155; }
-  .dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
-
+  /* Thin scrollbar for sidebar */
   .scrollbar-thin::-webkit-scrollbar { width: 3px; }
 }
 
 @layer utilities {
-  /* ── Glassmorphism ──────────────────────────────────────────────── */
+  /* Glassmorphism */
   .glass {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.12);
-  }
-  .dark .glass {
-    background: rgba(15, 23, 42, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .glass-dark {
@@ -104,7 +67,7 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
-  /* ── Gradient text ─────────────────────────────────────────────── */
+  /* Gradient text */
   .text-gradient-blue {
     background: linear-gradient(135deg, #3b82f6, #06b6d4);
     -webkit-background-clip: text;
@@ -119,12 +82,14 @@
     background-clip: text;
   }
 
-  /* ── Glow effects ──────────────────────────────────────────────── */
+  /* Glow effects */
   .glow-blue  { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
   .glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.3); }
 
-  /* ── Animated gradient border ─────────────────────────────────── */
-  .border-gradient { position: relative; }
+  /* Animated gradient border */
+  .border-gradient {
+    position: relative;
+  }
   .border-gradient::before {
     content: "";
     position: absolute;
@@ -138,21 +103,21 @@
     pointer-events: none;
   }
 
-  /* ── Card hover lift ───────────────────────────────────────────── */
-  .card-lift { transition: transform 0.15s ease, box-shadow 0.15s ease; }
+  /* Card hover lift */
+  .card-lift {
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
   .card-lift:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.15);
-  }
-  .dark .card-lift:hover {
-    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1);
   }
 
-  /* ── Status pulse ──────────────────────────────────────────────── */
+  /* Status indicator pulse */
   .status-online::before {
     content: "";
     display: inline-block;
-    width: 8px; height: 8px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: #10b981;
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
@@ -160,60 +125,34 @@
     margin-right: 6px;
     vertical-align: middle;
   }
+
   @keyframes status-pulse {
-    0%   { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0.4); }
-    70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);   }
-    100% { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0);   }
+    0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+    70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
   }
 
-  /* ── Fade-in ───────────────────────────────────────────────────── */
-  .fade-in { animation: fadeIn 0.3s ease-out; }
+  /* Fade-in animation */
+  .fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0);   }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
-  /* ── Slide-in left ─────────────────────────────────────────────── */
-  .slide-in-left { animation: slideInLeft 0.25s ease-out; }
+  /* Slide-in from left */
+  .slide-in-left {
+    animation: slideInLeft 0.25s ease-out;
+  }
   @keyframes slideInLeft {
     from { opacity: 0; transform: translateX(-16px); }
-    to   { opacity: 1; transform: translateX(0);     }
+    to   { opacity: 1; transform: translateX(0); }
   }
 
-  /* ── Tabular numbers ───────────────────────────────────────────── */
+  /* Number counter spin */
   .counter-value {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum";
   }
-
-  /* ── Dark-mode explicit overrides for inline-style components ──── */
-  /* These fix components that use inline style={{color/background}} */
-  .dark .force-dark-bg  { background-color: hsl(222 47% 10%) !important; }
-  .dark .force-dark-text { color: hsl(210 40% 92%) !important; }
-  .dark .force-dark-border { border-color: hsl(215 28% 20%) !important; }
-
-  /* Dark-mode compatibility for older screens that still use fixed light utility classes. */
-  .dark .bg-white { background-color: hsl(var(--card)) !important; }
-  .dark .bg-slate-50 { background-color: hsl(var(--secondary)) !important; }
-  .dark .bg-slate-100 { background-color: hsl(var(--muted)) !important; }
-  .dark .border-slate-100,
-  .dark .border-slate-200,
-  .dark .border-slate-300 { border-color: hsl(var(--border)) !important; }
-  .dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
-  .dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-color: hsl(var(--border)) !important; }
-  .dark .text-slate-900,
-  .dark .text-slate-800,
-  .dark .text-slate-700 { color: hsl(var(--foreground)) !important; }
-  .dark .text-slate-600 { color: hsl(var(--secondary-foreground)) !important; }
-  .dark .text-slate-500,
-  .dark .text-slate-400 { color: hsl(var(--muted-foreground)) !important; }
-  .dark input,
-  .dark textarea,
-  .dark select {
-    color: hsl(var(--foreground));
-    background-color: hsl(var(--card));
-    border-color: hsl(var(--input));
-  }
-  .dark input::placeholder,
-  .dark textarea::placeholder { color: hsl(var(--muted-foreground)); }
 }

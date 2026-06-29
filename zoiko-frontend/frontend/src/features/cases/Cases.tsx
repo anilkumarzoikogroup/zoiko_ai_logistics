@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { zoikoApi } from "@/api/zoiko";
-import { formatCurrency, cn } from "@/utils/cn";
-import { Search, Plus, Filter, ChevronRight, ArrowUpDown, FileText, X } from "lucide-react";
+import { formatCurrency, formatDate, cn } from "@/utils/cn";
+import { Search, Plus, Filter, ChevronRight, ArrowUpDown, FileText } from "lucide-react";
 import type { CaseState } from "@/types";
 
 const STATE_TABS: (CaseState | "ALL")[] = [
@@ -51,21 +51,10 @@ function ConfidenceBadge({ value }: { value: number | null }) {
 
 export default function Cases() {
   const nav = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
-  const [dateFilter, setDateFilter] = useState(() => searchParams.get("date") ?? "");
+  const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<CaseState | "ALL">("ALL");
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
-
-  // Sync search/date when URL params change (e.g. from global search / calendar)
-  useEffect(() => {
-    const q    = searchParams.get("q")    ?? "";
-    const date = searchParams.get("date") ?? "";
-    if (q    !== search)     setSearch(q);
-    if (date !== dateFilter) setDateFilter(date);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
 
   const { data: paged, isLoading } = useQuery({
     queryKey: ["cases", page, filter !== "ALL" ? filter : undefined],
@@ -82,8 +71,7 @@ export default function Cases() {
   const pages   = paged?.pages ?? 1;
 
   const filtered = cases
-    .filter(c => !search || c.id.includes(search) || (c.carrier ?? "").toLowerCase().includes(search.toLowerCase()) || (c.shipment_ref ?? "").toLowerCase().includes(search.toLowerCase()))
-    .filter(c => !dateFilter || (c.opened_at ?? "").startsWith(dateFilter));
+    .filter(c => !search || c.id.includes(search) || (c.carrier ?? "").toLowerCase().includes(search.toLowerCase()) || (c.shipment_ref ?? "").toLowerCase().includes(search.toLowerCase()));
 
   const byState = cases.reduce<Record<string, number>>((acc, c) => {
     acc[c.state] = (acc[c.state] ?? 0) + 1;
@@ -136,7 +124,7 @@ export default function Cases() {
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
 
         {/* Search + filter bar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 flex-wrap">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
           <div className="relative flex-1 max-w-xs">
             <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -146,14 +134,6 @@ export default function Cases() {
               onChange={e => setSearch(e.target.value)}
             />
           </div>
-          {dateFilter && (
-            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs text-blue-700 font-medium">
-              <span>📅 {dateFilter}</span>
-              <button onClick={() => setDateFilter("")} className="ml-1 text-blue-400 hover:text-blue-700 transition-colors">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          )}
           <button className="flex items-center gap-1.5 px-3 py-2 border border-slate-200 rounded-lg text-sm text-slate-600 hover:bg-slate-50 transition-colors">
             <Filter className="h-3.5 w-3.5" /> Filter
           </button>

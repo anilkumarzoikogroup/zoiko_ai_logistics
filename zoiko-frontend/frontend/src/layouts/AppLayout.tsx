@@ -5,22 +5,17 @@ import { queryClient } from "@/lib/queryClient";
 import axios from "axios";
 import { cn } from "@/utils/cn";
 import {
-  LayoutDashboard, FileText, FolderOpen,
+  LayoutDashboard, FileText, FolderOpen, FileWarning,
   FileClock, Truck, ShieldCheck, BookOpen,
   Key, Archive, ClipboardList,
   BarChart3, TrendingUp,
-  Users, Settings, Building2,
-  ChevronLeft, ChevronRight, LogOut,
-  Zap, CheckSquare, FlaskConical, Sun, Moon,
+  Users, Settings, Building2, Bell, Search,
+  ChevronLeft, ChevronRight, LogOut, Calendar, ChevronDown,
+  Download, Zap, CheckSquare, FlaskConical, Plug,
+  Activity, Lock, Clock, ShieldOff, RotateCcw, HardDrive, Trash2,
+  Wallet, Scale, AlertTriangle, Plus, Star, Receipt,
 } from "lucide-react";
 import { useState } from "react";
-import { useTheme } from "@/hooks/useTheme";
-import ZoikoLogo from "@/components/ZoikoLogo";
-import GlobalSearch from "@/components/GlobalSearch";
-import DateFilter, { getStoredDateFilter, DateRange } from "@/components/DateFilter";
-import ActionsMenu from "@/components/ActionsMenu";
-import NotificationBell from "@/components/NotificationBell";
-import { DateFilterContext } from "@/context/DateFilterContext";
 
 const ROLE_COLORS: Record<string, string> = {
   analyst: "from-blue-500 to-blue-700",
@@ -35,24 +30,35 @@ const NAV: NavGroup[] = [
   {
     group: "OPERATIONS",
     items: [
-      { label: "Dashboard",         icon: LayoutDashboard, to: "/"                 },
-      { label: "Invoices & Cases",  icon: FolderOpen,      to: "/cases"            },
-      { label: "Submit Invoice",    icon: FileText,        to: "/cases/new"        },
-      { label: "Audit Conditions",  icon: CheckSquare,     to: "/audit-conditions" },
-      { label: "Contracts & Rates", icon: FileClock,       to: "/rate-control"     },
-      { label: "Carriers",          icon: Truck,           to: "/payment-control"  },
+      { label: "Dashboard",        icon: LayoutDashboard, to: "/"                  },
+      { label: "Invoices & Cases", icon: FolderOpen,      to: "/cases"             },
+      { label: "Submit Invoice",   icon: FileText,        to: "/cases/new"         },
+      { label: "Carrier Claims",   icon: FileWarning,     to: "/claims"            },
+      { label: "Submit Claim",     icon: FileWarning,     to: "/claims/new"        },
+      { label: "Shipment Exceptions", icon: AlertTriangle, to: "/exceptions"       },
+      { label: "Report Exception", icon: Plus,            to: "/exceptions/new"    },
+      { label: "Scorecards",        icon: Star,           to: "/scorecards"        },
+      { label: "Compute Scorecard", icon: Star,           to: "/scorecards/new"    },
+      { label: "Accessorial Disputes", icon: Receipt,     to: "/accessorial"       },
+      { label: "Submit Dispute",    icon: Plus,           to: "/accessorial/new"   },
+      { label: "Audit Conditions", icon: CheckSquare,     to: "/audit-conditions"  },
+      { label: "Contracts & Rates",icon: FileClock,       to: "/rate-control"      },
+      { label: "Carriers",         icon: Truck,           to: "/carriers"          },
+      { label: "Connectors",       icon: Plug,            to: "/connectors"        },
     ],
   },
   {
     group: "GOVERNANCE",
     items: [
-      { label: "Analyst Review",   icon: BookOpen,     to: "/analyst", roles: ["analyst","admin"]  },
-      { label: "Manager Approval", icon: ShieldCheck,  to: "/manager", roles: ["manager","admin"]  },
-      { label: "Execute Recovery", icon: Zap,          to: "/execute", roles: ["manager","admin"]  },
-      { label: "Gov. Tokens",      icon: Key,          to: "/execute", roles: ["manager","admin"]  },
-      { label: "Audit & ACR",      icon: Archive,      to: "/crypto"                               },
-      { label: "ACR Verifier",     icon: ShieldCheck,  to: "/verifier"                             },
-      { label: "Audit Trail",      icon: ClipboardList,to: "/alerts"                               },
+      { label: "Analyst Review",   icon: BookOpen,     to: "/analyst", roles: ["analyst","admin"]         },
+      { label: "Manager Approval", icon: ShieldCheck,  to: "/manager", roles: ["manager","admin"]         },
+      { label: "Execute Recovery", icon: Zap,          to: "/execute", roles: ["manager","admin"]         },
+      { label: "Gov. Tokens",      icon: Key,          to: "/execute", roles: ["manager","admin"]         },
+      { label: "Recovery Pipeline",icon: Wallet,       to: "/recovery"                                    },
+      { label: "Reconciliation",   icon: Scale,        to: "/reconciliation", roles: ["manager","admin"]  },
+      { label: "Audit & ACR",      icon: Archive,      to: "/crypto"                                      },
+      { label: "ACR Verifier",     icon: ShieldCheck,  to: "/verifier"                                    },
+      { label: "Audit Trail",      icon: ClipboardList,to: "/alerts"                                      },
     ],
   },
   {
@@ -63,11 +69,25 @@ const NAV: NavGroup[] = [
     ],
   },
   {
+    group: "DATA GOVERNANCE",
+    roles: ["admin"],
+    items: [
+      { label: "Gov. Dashboard",   icon: Activity,    to: "/governance/data"         },
+      { label: "Legal Holds",      icon: Lock,        to: "/governance/holds"        },
+      { label: "Retention",        icon: Clock,       to: "/governance/retention"    },
+      { label: "Crypto-Shred",     icon: ShieldOff,   to: "/governance/crypto-shred" },
+      { label: "Restore Jobs",     icon: RotateCcw,   to: "/governance/restore"      },
+      { label: "Archive Jobs",     icon: HardDrive,   to: "/governance/archive"      },
+      { label: "Purge Jobs",       icon: Trash2,      to: "/governance/purge"        },
+    ],
+  },
+  {
     group: "ADMIN",
     roles: ["admin"],
     items: [
-      { label: "Tenants",       icon: Building2,    to: "/tenants"  },
-      { label: "Users & Roles", icon: Users,        to: "/users"    },
+      { label: "Tenants",         icon: Building2,    to: "/tenants"             },
+      { label: "Signup Requests", icon: Users,        to: "/workspace-requests", badge: "NEW" },
+      { label: "Users & Roles",   icon: Users,        to: "/users"               },
       { label: "DB Stats",      icon: Building2,    to: "/database" },
       { label: "Settings",      icon: Settings,     to: "/settings" },
       { label: "Stub Viewer",   icon: FlaskConical, to: "/stubs", badge: "DEV" },
@@ -75,13 +95,9 @@ const NAV: NavGroup[] = [
   },
 ];
 
-function NavItem({
-  to, label, icon: Icon, collapsed, badge, theme,
-}: {
-  to: string; label: string; icon: React.ElementType;
-  collapsed: boolean; badge?: string; theme: "light" | "dark";
+function NavItem({ to, label, icon: Icon, collapsed, badge }: {
+  to: string; label: string; icon: React.ElementType; collapsed: boolean; badge?: string; roles?: string[];
 }) {
-  const isDark = theme === "dark";
   return (
     <NavLink
       to={to}
@@ -92,15 +108,13 @@ function NavItem({
         collapsed ? "justify-center px-2" : "",
         isActive
           ? "bg-blue-600 text-white font-semibold shadow-sm shadow-blue-500/40"
-          : isDark
-            ? "text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
-            : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+          : "text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
       )}
     >
       <Icon className="h-4 w-4 flex-shrink-0" />
       {!collapsed && <span className="truncate flex-1">{label}</span>}
       {!collapsed && badge && (
-        <span className="ml-auto text-[9px] font-bold bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full">
+        <span className="ml-auto text-[9px] font-bold bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded-full">
           {badge}
         </span>
       )}
@@ -112,23 +126,12 @@ export default function AppLayout() {
   const nav      = useNavigate();
   const location = useLocation();
   const dispatch = useAppDispatch();
-  const fullName = useAppSelector(s => s.auth.user)  || "";
-  const email    = useAppSelector(s => s.auth.sub)   || "";
-  const role     = useAppSelector(s => s.auth.role)  || "analyst";
+  const user     = useAppSelector(s => s.auth.user)  || "User";
+  const role     = useAppSelector(s => s.auth.role)  || "analyst"; // default to least-privilege
+  const [collapsed, setCollapsed] = useState(false);
 
-  // Display the full_name when it looks like a real name (has a space or
-  // isn't purely a role label). Fall back to the email username part.
-  const roleLabels = new Set(["freight analyst","analyst","manager","admin","platform admin","senior analyst"]);
-  const displayName = (fullName && !roleLabels.has(fullName.toLowerCase()))
-    ? fullName
-    : email.split("@")[0] || fullName || "User";
-  const user = displayName; // keep 'user' for backward compat in template
-  const [collapsed, setCollapsed]   = useState(false);
-  const [dateFilter, setDateFilter] = useState<DateRange>(getStoredDateFilter);
-  const { theme, toggleTheme } = useTheme();
-  const isDark = theme === "dark";
-
-  const allItems  = NAV.flatMap(g => g.items);
+  // Derive page title from current path (use all items regardless of role for title lookup)
+  const allItems = NAV.flatMap(g => g.items);
   const activeItem = allItems.find(item =>
     item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to)
   );
@@ -142,73 +145,84 @@ export default function AppLayout() {
     nav("/login");
   }
 
-  // Build initials from display name; fall back to first char of email
-  const initials = user.split(" ").filter(Boolean).map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()
-    || email.slice(0, 1).toUpperCase()
-    || "U";
-
-  // ── Theme-aware class sets ─────────────────────────────────────────────────
-  const sidebar = isDark
-    ? "bg-[#0d1424] border-slate-700/40"
-    : "bg-white border-slate-200";
-
-  const topbar = isDark
-    ? "bg-[#0d1424] border-slate-700/50 shadow-none"
-    : "bg-white border-slate-200 shadow-sm";
-
-  const mainBg = isDark ? "bg-[#0b1020]" : "bg-slate-50";
-
-  const groupLabel = isDark ? "text-slate-500" : "text-slate-400";
-
-  const divider = isDark ? "border-slate-700/40" : "border-slate-200";
-
-  const collapseBtn = isDark
-    ? "text-slate-500 hover:bg-slate-700/40 hover:text-slate-300"
-    : "text-slate-500 hover:bg-slate-100 hover:text-slate-700";
-
-  const accentBar = "from-blue-600 via-blue-500 to-cyan-500";
+  const initials = (user || "U").split(" ").map((w: string) => w[0] || "").join("").slice(0, 2).toUpperCase() || "U";
 
   return (
-    <div className={cn("flex h-screen overflow-hidden transition-colors duration-200", isDark ? "bg-[#0b1020]" : "bg-slate-100")}>
+    <div className="flex h-screen bg-slate-100 overflow-hidden">
 
-      {/* ── Sidebar ──────────────────────────────────────────────────────── */}
+      {/* ── Sidebar ─────────────────────────────────────────────────────── */}
       <aside className={cn(
-        "flex flex-col border-r transition-all duration-200 flex-shrink-0 relative",
-        sidebar,
+        "flex flex-col border-r border-slate-700/40 transition-all duration-200 flex-shrink-0 relative",
+        "bg-[#0d1424]",
         collapsed ? "w-[60px]" : "w-[220px]"
       )}>
-        {/* Top accent strip */}
-        <div className={cn("absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r", accentBar)} />
+        {/* Subtle top gradient accent */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 via-blue-500 to-cyan-500 rounded-tl-none rounded-tr-none" />
 
-        {/* Logo block */}
+        {/* Logo */}
         <div className={cn(
-          "flex items-center border-b py-4 flex-shrink-0",
-          divider,
-          collapsed ? "justify-center px-2" : "px-4"
+          "flex items-center justify-center px-4 py-4 border-b border-slate-700/40 flex-shrink-0",
+          collapsed ? "px-2" : "px-3"
         )}>
-          <ZoikoLogo
-            theme={theme}
-            size={collapsed ? 36 : 38}
-            showText={!collapsed}
-            collapsed={collapsed}
-          />
+          {collapsed ? (
+            /* Icon-only when collapsed */
+            <img
+              src="/logo-icon.svg"
+              alt="Z"
+              className="h-8 w-8 object-contain"
+              onError={e => {
+                const t = e.currentTarget;
+                t.style.display = "none";
+                const fb = t.nextElementSibling as HTMLElement | null;
+                if (fb) fb.style.display = "flex";
+              }}
+            />
+          ) : (
+            /* Full logo when expanded */
+            <img
+              src="/logo-dark.jpg"
+              alt="ZoikoAI"
+              className="h-10 w-auto object-contain"
+              onError={e => {
+                const t = e.currentTarget;
+                t.style.display = "none";
+                const fb = t.nextElementSibling as HTMLElement | null;
+                if (fb) fb.style.display = "flex";
+              }}
+            />
+          )}
+          {/* Fallback text logo */}
+          <div className="hidden items-center gap-2">
+            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+              Z
+            </div>
+            {!collapsed && (
+              <div>
+                <p className="font-bold text-white text-sm leading-tight">ZOIKO</p>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <p className="text-[9px] text-slate-500 uppercase tracking-widest">Live</p>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Navigation */}
+        {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 space-y-4 px-2 scrollbar-thin">
           {NAV.filter(g => !g.roles || g.roles.includes(role)).map(({ group, items }) => {
-            const visible = items.filter(i => !i.roles || i.roles.includes(role));
-            if (!visible.length) return null;
+            const visibleItems = items.filter(i => !i.roles || i.roles.includes(role));
+            if (visibleItems.length === 0) return null;
             return (
               <div key={group}>
                 {!collapsed && (
-                  <p className={cn("px-3 mb-1.5 text-[9px] font-bold tracking-widest uppercase", groupLabel)}>
+                  <p className="px-3 mb-1.5 text-[9px] font-bold tracking-widest text-slate-600 uppercase">
                     {group}
                   </p>
                 )}
-                {collapsed && <div className={cn("h-px mx-2 mb-2 mt-1", isDark ? "bg-slate-700/40" : "bg-slate-200")} />}
+                {collapsed && <div className="h-px bg-slate-700/40 mx-2 mb-2 mt-1" />}
                 <div className="space-y-0.5">
-                  {visible.map(item => (
+                  {visibleItems.map(item => (
                     <NavItem
                       key={item.label + item.to}
                       to={item.to}
@@ -216,7 +230,6 @@ export default function AppLayout() {
                       icon={item.icon}
                       collapsed={collapsed}
                       badge={item.badge}
-                      theme={theme}
                     />
                   ))}
                 </div>
@@ -225,12 +238,33 @@ export default function AppLayout() {
           })}
         </nav>
 
-        {/* Sidebar footer — collapse toggle only */}
-        <div className={cn("border-t px-2 py-3 flex-shrink-0", divider)}>
+        {/* Footer: user + collapse */}
+        <div className="border-t border-slate-700/40 px-2 py-3 space-y-1 flex-shrink-0">
+          {!collapsed && (
+            <div className="flex items-center gap-2 px-3 py-2 mb-1 rounded-lg hover:bg-slate-700/40 transition-colors">
+              <div className={cn(
+                "h-7 w-7 rounded-full bg-gradient-to-br flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0",
+                ROLE_COLORS[role] || "from-slate-500 to-slate-700"
+              )}>
+                {initials}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-white truncate">{user}</p>
+                <p className="text-[10px] text-slate-500 capitalize">{role}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                title="Sign out"
+                className="text-slate-600 hover:text-red-400 transition-colors ml-1"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <button
             onClick={() => setCollapsed(c => !c)}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn("flex items-center gap-2 w-full px-3 py-2 rounded-lg transition-colors text-[12px]", collapseBtn)}
+            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-slate-500 hover:bg-slate-700/40 hover:text-slate-300 transition-colors text-[12px]"
           >
             {collapsed
               ? <ChevronRight className="h-4 w-4 mx-auto" />
@@ -240,61 +274,54 @@ export default function AppLayout() {
         </div>
       </aside>
 
-      {/* ── Main area ────────────────────────────────────────────────────── */}
+      {/* ── Main ────────────────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden">
 
         {/* Top bar */}
-        <header className={cn(
-          "h-[56px] flex items-center gap-4 px-5 flex-shrink-0 border-b transition-colors duration-200",
-          topbar
-        )}>
-          {/* Page title */}
-          <div className={cn("font-semibold text-sm hidden sm:block", isDark ? "text-slate-300" : "text-slate-700")}>
+        <header className="h-[56px] bg-white border-b border-slate-200 flex items-center gap-4 px-5 flex-shrink-0 shadow-sm">
+
+          {/* Page title (mobile) */}
+          <div className="font-semibold text-slate-700 text-sm hidden sm:block">
             {pageTitle}
           </div>
 
-          {/* ── Live Search ────────────────────────────────────────────── */}
           <div className="flex-1 flex items-center gap-3">
-            <GlobalSearch isDark={isDark} />
+            <div className="relative">
+              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search invoices, cases, carriers…"
+                className="pl-9 pr-10 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-600 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30 w-64 transition-all focus:w-80"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-mono bg-slate-100 px-1 rounded">⌘K</span>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* ── Date filter ────────────────────────────────────────── */}
-            <div className="hidden md:block">
-              <DateFilter
-                isDark={isDark}
-                value={dateFilter}
-                onChange={setDateFilter}
-              />
-            </div>
-
-            {/* ── Actions menu ─────────────────────────────────────── */}
-            <div className="hidden md:block">
-              <ActionsMenu isDark={isDark} role={role} />
-            </div>
-
-            {/* ── Theme toggle ───────────────────────────────────────── */}
-            <button
-              onClick={toggleTheme}
-              title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-              className={cn(
-                "relative p-2 rounded-lg border transition-all duration-200 group",
-                isDark
-                  ? "border-slate-700 hover:bg-slate-700/60 text-amber-400"
-                  : "border-slate-200 hover:bg-slate-100 text-slate-500"
-              )}
-            >
-              {isDark
-                ? <Sun  className="h-4 w-4 transition-transform group-hover:rotate-12" />
-                : <Moon className="h-4 w-4 transition-transform group-hover:-rotate-12" />
-              }
+            {/* Date range */}
+            <button className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+              <Calendar className="h-3.5 w-3.5 text-slate-400" />
+              <span>Jul 2025</span>
             </button>
 
-            {/* ── Notifications (real-time) ──────────────────────── */}
-            <NotificationBell isDark={isDark} role={role} />
+            {/* Actions */}
+            <button className="hidden md:flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+              Actions <ChevronDown className="h-3 w-3 text-slate-400" />
+            </button>
 
-            {/* User pill + Sign Out */}
-            <div className={cn("flex items-center gap-2 pl-2 border-l", divider)}>
+            {/* Export */}
+            <button className="hidden md:flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-600 hover:bg-slate-50 transition-colors">
+              <Download className="h-3.5 w-3.5" /> Export
+            </button>
+
+            {/* Notifications */}
+            <button className="relative p-2 rounded-lg hover:bg-slate-50 transition-colors">
+              <Bell className="h-4 w-4 text-slate-500" />
+              <span className="absolute top-1 right-1 h-3.5 w-3.5 bg-red-500 rounded-full text-[8px] text-white flex items-center justify-center font-bold">3</span>
+            </button>
+
+            {/* User pill */}
+            <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
               <div className={cn(
                 "h-7 w-7 rounded-full bg-gradient-to-br flex items-center justify-center text-white text-[11px] font-bold",
                 ROLE_COLORS[role] || "from-slate-500 to-slate-700"
@@ -302,49 +329,23 @@ export default function AppLayout() {
                 {initials}
               </div>
               <div className="hidden lg:block">
-                <p className={cn("text-xs font-semibold leading-tight truncate max-w-[140px]", isDark ? "text-slate-200" : "text-slate-700")}>
-                  {user}
-                </p>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  <span style={{
-                    fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
-                    background: role === "admin" ? "#1e3a8a" : role === "manager" ? "#4c1d95" : "#064e3b",
-                    color: "#fff", textTransform: "uppercase", letterSpacing: "0.06em", flexShrink: 0,
-                  }}>
-                    {role}
-                  </span>
-                  {email && (
-                    <span className={cn("text-[9px] truncate max-w-[100px]", isDark ? "text-slate-500" : "text-slate-400")}>
-                      {email}
-                    </span>
-                  )}
-                </div>
+                <p className="text-xs font-semibold text-slate-700 leading-tight">{user}</p>
+                <span style={{
+                  fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 99,
+                  background: role==="admin" ? "#1e3a8a" : role==="manager" ? "#4c1d95" : "#064e3b",
+                  color: "#fff", textTransform: "uppercase", letterSpacing: "0.06em",
+                }}>
+                  {role}
+                </span>
               </div>
-
-              {/* Sign Out — top right, clearly visible */}
-              <button
-                onClick={handleLogout}
-                title="Sign out"
-                className={cn(
-                  "ml-1 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-all duration-150",
-                  isDark
-                    ? "border-red-900/60 text-red-400 hover:bg-red-900/30 hover:border-red-700"
-                    : "border-red-200 text-red-500 hover:bg-red-50 hover:border-red-300"
-                )}
-              >
-                <LogOut className="h-3 w-3" />
-                <span className="hidden xl:inline">Sign out</span>
-              </button>
             </div>
           </div>
         </header>
 
         {/* Page content */}
-        <main className={cn("flex-1 overflow-y-auto transition-colors duration-200", mainBg)}>
+        <main className="flex-1 overflow-y-auto bg-slate-50">
           <div className="px-6 py-5 max-w-[1600px] mx-auto">
-            <DateFilterContext.Provider value={dateFilter}>
-              <Outlet />
-            </DateFilterContext.Provider>
+            <Outlet />
           </div>
         </main>
       </div>

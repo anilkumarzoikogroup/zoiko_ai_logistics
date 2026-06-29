@@ -6,26 +6,13 @@ import { zoikoApi } from "@/api/zoiko";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { UploadCloud, FileText, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin, CheckCircle, ZoomIn, Building2, Calendar, Truck, Package, Hash, Mail, Layers, DollarSign, Files, AlertCircle } from "lucide-react";
+import { UploadCloud, FileText, X, Pencil, ArrowRight, Info, Lightbulb, ChevronDown, ChevronUp, Eye, Maximize2, Globe, MapPin, CheckCircle, ZoomIn, Building2, Calendar, Truck, Package, Hash, Mail, Layers, DollarSign } from "lucide-react";
 import { cn } from "@/utils/cn";
 import { USE_MOCK, api } from "@/api/client";
 import axios from "axios";
 
-type Mode = "choose" | "upload" | "manual" | "batch";
+type Mode = "choose" | "upload" | "manual";
 type ParseState = "idle" | "parsing" | "done" | "error";
-
-type BatchItemParseState  = "queued" | "parsing" | "parsed" | "error";
-type BatchItemSubmitState = "idle" | "submitting" | "done" | "error" | "duplicate";
-
-interface BatchItem {
-  id: string;
-  file: File;
-  parseState: BatchItemParseState;
-  submitState: BatchItemSubmitState;
-  parsed?: ParseResult;
-  form?: Partial<FormState>;
-  caseId?: string;
-}
 
 const CARRIERS = [
   "BlueDart", "DTDC", "Delhivery", "Ekart", "FedEx India", "FedEx",
@@ -125,19 +112,6 @@ function splitRoute(route: string): { from_city: string; to_city: string } {
   return { from_city: parts[0]?.trim() || "", to_city: parts[1]?.trim() || "" };
 }
 
-function fileTypeLabel(f: File): { label: string; bgColor: string; textColor: string } {
-  const name = f.name.toLowerCase();
-  if (f.type === "application/pdf" || name.endsWith(".pdf"))
-    return { label: "PDF", bgColor: "bg-red-50", textColor: "text-red-500" };
-  if (f.type.startsWith("image/"))
-    return { label: "IMG", bgColor: "bg-blue-50", textColor: "text-blue-500" };
-  if (f.type === "text/csv" || name.endsWith(".csv"))
-    return { label: "CSV", bgColor: "bg-green-50", textColor: "text-green-600" };
-  if (f.type === "application/json" || name.endsWith(".json"))
-    return { label: "JSON", bgColor: "bg-purple-50", textColor: "text-purple-600" };
-  return { label: "FILE", bgColor: "bg-slate-100", textColor: "text-slate-500" };
-}
-
 export default function NewCase() {
   const nav   = useNavigate();
   const qc    = useQueryClient();
@@ -153,10 +127,7 @@ export default function NewCase() {
   const [previewUrl, setPreviewUrl]         = useState<string | null>(null);
   const [previewOpen, setPreviewOpen]       = useState(true);
   const [previewModal, setPreviewModal]     = useState(false);  // professional preview popup
-  const [batchItems, setBatchItems]         = useState<BatchItem[]>([]);
-  const [batchDragOver, setBatchDragOver]   = useState(false);
-  const inputRef      = useRef<HTMLInputElement>(null);
-  const batchInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Guard against double-submission: locked after first mutate() call, released on error
   const submitting = useRef(false);
 
@@ -280,89 +251,6 @@ export default function NewCase() {
     }
   }, []);
 
-  const processBatchFiles = useCallback(async (files: FileList) => {
-    const fileArray = Array.from(files).slice(0, 20);
-    if (fileArray.length === 0) return;
-
-    const items: BatchItem[] = fileArray.map((f, i) => ({
-      id: `batch-${i}-${f.name}`,
-      file: f,
-      parseState: "queued",
-      submitState: "idle",
-    }));
-    setBatchItems(items);
-    setMode("batch");
-
-    for (let i = 0; i < items.length; i++) {
-      setBatchItems(prev => prev.map((item, idx) =>
-        idx === i ? { ...item, parseState: "parsing" } : item
-      ));
-      try {
-        const parsed = await realParseInvoice(items[i].file);
-        const from_city = parsed.origin || splitRoute(parsed.route).from_city;
-        const to_city   = parsed.destination || splitRoute(parsed.route).to_city;
-        const form: Partial<FormState> = {
-          invoice_number:    parsed.invoice_number    || "",
-          invoice_date:      parsed.invoice_date       || "",
-          transport_mode:    parsed.transport_mode     || "",
-          equipment_type:    parsed.equipment_type     || "",
-          shipper_reference: parsed.shipper_reference  || "",
-          carrier:           parsed.carrier            || "",
-          from_city:         from_city                 || "",
-          to_city:           to_city                   || "",
-          amount:            parsed.amount > 0 ? String(parsed.amount) : "",
-          currency:          parsed.currency           || "INR",
-          charge_lines:      parsed.charge_lines       || [],
-        };
-        setBatchItems(prev => prev.map((item, idx) =>
-          idx === i ? { ...item, parseState: "parsed", parsed, form } : item
-        ));
-      } catch {
-        setBatchItems(prev => prev.map((item, idx) =>
-          idx === i ? { ...item, parseState: "error" } : item
-        ));
-      }
-    }
-  }, []);
-
-  const submitBatchItem = useCallback(async (id: string, itemForm: Partial<FormState>) => {
-    setBatchItems(prev => prev.map(i => i.id === id ? { ...i, submitState: "submitting" } : i));
-    try {
-      const result = await zoikoApi.createCase({
-        invoice_number:    itemForm.invoice_number    || "",
-        invoice_date:      itemForm.invoice_date       || "",
-        transport_mode:    itemForm.transport_mode     || "",
-        equipment_type:    itemForm.equipment_type     || "",
-        shipper_reference: itemForm.shipper_reference  || "",
-        charge_lines:      itemForm.charge_lines       || [],
-        carrier:           itemForm.carrier            || "",
-        route:             `${itemForm.from_city} → ${itemForm.to_city}`,
-        amount:            Number(itemForm.amount),
-        currency:          itemForm.currency           || "INR",
-      });
-      qc.invalidateQueries({ queryKey: ["cases"] });
-      setBatchItems(prev => prev.map(i => i.id === id ? {
-        ...i,
-        submitState: result.duplicate ? "duplicate" : "done",
-        caseId: result.id,
-      } : i));
-    } catch {
-      setBatchItems(prev => prev.map(i => i.id === id ? { ...i, submitState: "error" } : i));
-    }
-  }, [qc]);
-
-  const submitAllBatch = useCallback(async () => {
-    const ready = batchItems.filter(item =>
-      item.parseState === "parsed" &&
-      item.submitState === "idle" &&
-      item.form?.carrier &&
-      Number(item.form?.amount) > 0
-    );
-    for (const item of ready) {
-      await submitBatchItem(item.id, item.form!);
-    }
-  }, [batchItems, submitBatchItem]);
-
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setDragOver(false);
@@ -373,16 +261,6 @@ export default function NewCase() {
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (f) processFile(f);
-  }
-
-  function handleBatchDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setBatchDragOver(false);
-    if (e.dataTransfer.files.length > 0) processBatchFiles(e.dataTransfer.files);
-  }
-
-  function handleBatchFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    if (e.target.files && e.target.files.length > 0) processBatchFiles(e.target.files);
   }
 
   function clearFile() {
@@ -507,8 +385,8 @@ export default function NewCase() {
             <span className={cn(
               "inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full",
               routeType === "international"
-                ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"
-                : "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"
+                ? "bg-blue-100 text-blue-700"
+                : "bg-green-100 text-green-700"
             )}>
               {routeType === "international"
                 ? <><Globe className="h-3 w-3" /> International</>
@@ -594,9 +472,9 @@ export default function NewCase() {
                   <span className={cn(
                     "text-[9px] font-bold px-1.5 py-0.5 rounded",
                     cl.type === "FUEL"        ? "bg-orange-100 text-orange-700" :
-                    cl.type === "ACCESSORIAL" ? "bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400" :
-                    cl.type === "TAX"         ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"       :
-                    cl.type === "BASE"        ? "bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400"   :
+                    cl.type === "ACCESSORIAL" ? "bg-purple-100 text-purple-700" :
+                    cl.type === "TAX"         ? "bg-blue-100 text-blue-700"     :
+                    cl.type === "BASE"        ? "bg-green-100 text-green-700"   :
                     cl.type === "DISCOUNT"    ? "bg-red-100 text-red-700"       :
                                                "bg-slate-100 text-slate-600"
                   )}>{cl.type}</span>
@@ -632,9 +510,9 @@ export default function NewCase() {
       )}
 
       {/* Info */}
-      <div className="rounded-lg bg-blue-50 dark:bg-blue-950/40 border border-blue-100 dark:border-blue-800/50 px-4 py-3 flex gap-2.5">
-        <Info className="h-4 w-4 text-blue-500 dark:text-blue-400 flex-shrink-0 mt-0.5" />
-        <p className="text-xs text-blue-700 dark:text-blue-300 leading-relaxed">
+      <div className="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 flex gap-2.5">
+        <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-blue-700 leading-relaxed">
           Zoiko validates this invoice against your contract rates, detects the overcharge, scores it with AI confidence, and opens a dispute case automatically.
         </p>
       </div>
@@ -721,39 +599,28 @@ export default function NewCase() {
         {/* Modal Body — two columns */}
         <div className="flex flex-1 min-h-0 overflow-hidden">
 
-          {/* LEFT — PDF / Image / CSV / JSON preview */}
+          {/* LEFT — PDF / Image preview */}
           <div className="flex-1 bg-slate-100 relative overflow-hidden" style={{ minWidth: 0 }}>
-            {file?.type === "application/pdf" || file?.name.toLowerCase().endsWith(".pdf") ? (
+            {file?.type === "application/pdf" ? (
               <iframe
-                src={previewUrl ?? ""}
+                src={previewUrl}
                 title="Invoice PDF"
                 className="w-full h-full border-none"
                 style={{ minHeight: "500px" }}
               />
-            ) : file?.type.startsWith("image/") ? (
+            ) : (
               <div className="flex items-center justify-center h-full p-6 bg-slate-100">
                 <img
-                  src={previewUrl ?? ""}
+                  src={previewUrl}
                   alt="Invoice preview"
                   className="max-h-full max-w-full object-contain rounded-xl shadow-lg ring-1 ring-black/10"
                 />
               </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full p-8 gap-4">
-                <div className={cn("h-16 w-16 rounded-2xl flex items-center justify-center", fileTypeLabel(file!).bgColor)}>
-                  <FileText className={cn("h-8 w-8", fileTypeLabel(file!).textColor)} />
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-semibold text-slate-700">{file?.name}</p>
-                  <p className="text-xs text-slate-400 mt-1">{fileTypeLabel(file!).label} — no visual preview</p>
-                  <p className="text-xs text-slate-400 mt-0.5">Extracted data shown on the right</p>
-                </div>
-              </div>
             )}
-            {/* File type badge */}
+            {/* PDF type badge */}
             <div className="absolute top-3 left-3">
               <span className="text-[10px] font-bold bg-zoiko-blue text-white px-2 py-1 rounded-md uppercase tracking-wide shadow">
-                {file ? fileTypeLabel(file).label : "FILE"}
+                {file?.type === "application/pdf" ? "PDF" : "Image"}
               </span>
             </div>
           </div>
@@ -951,7 +818,7 @@ export default function NewCase() {
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-zoiko-navy">Submit Invoice for Audit</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Upload a carrier invoice (PDF, CSV, JSON or image) or enter details manually. Batch upload up to 20 invoices at once.
+          Upload a carrier invoice (PDF/image) or enter the details manually.
         </p>
       </div>
 
@@ -969,7 +836,7 @@ export default function NewCase() {
               </div>
               <div>
                 <p className="font-semibold text-sm">Upload Invoice</p>
-                <p className="text-xs text-muted-foreground mt-1">PDF, CSV, JSON or Image</p>
+                <p className="text-xs text-muted-foreground mt-1">PDF, PNG or JPG</p>
               </div>
             </button>
 
@@ -988,27 +855,12 @@ export default function NewCase() {
             </button>
           </div>
 
-          {/* Batch upload card — full width */}
-          <button
-            onClick={() => setMode("batch")}
-            className="group w-full rounded-xl border-2 border-dashed border-border hover:border-zoiko-blue hover:bg-blue-50/30 transition-all px-5 py-4 flex items-center gap-4 cursor-pointer text-left"
-          >
-            <div className="h-10 w-10 rounded-full bg-zoiko-blue/10 flex items-center justify-center group-hover:bg-zoiko-blue/20 transition-colors flex-shrink-0">
-              <Files className="h-5 w-5 text-zoiko-blue" />
-            </div>
-            <div className="flex-1">
-              <p className="font-semibold text-sm">Batch Upload</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Upload up to 20 invoices at once — PDF, CSV, JSON or Image</p>
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-zoiko-blue transition-colors flex-shrink-0" />
-          </button>
-
           {/* Demo tip */}
-          <div className="rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/50 px-4 py-3 flex gap-2.5">
-            <Lightbulb className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-            <div className="text-xs text-amber-800 dark:text-amber-300 space-y-1">
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 flex gap-2.5">
+            <Lightbulb className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-800 space-y-1">
               <p className="font-semibold">Demo tip</p>
-              <p>Name your PDF <code className="bg-amber-100 dark:bg-amber-900/50 px-1 rounded">bluedart_invoice.pdf</code> for automatic field extraction. Otherwise enter details manually.</p>
+              <p>Name your PDF <code className="bg-amber-100 px-1 rounded">bluedart_invoice.pdf</code> for automatic field extraction. Otherwise enter details manually.</p>
             </div>
           </div>
         </div>
@@ -1031,11 +883,11 @@ export default function NewCase() {
               <UploadCloud className="h-10 w-10 text-muted-foreground" />
               <div className="text-center">
                 <p className="text-sm font-medium">Drop invoice here, or click to browse</p>
-                <p className="text-xs text-muted-foreground mt-1">PDF, Image, CSV or JSON — max 10 MB</p>
+                <p className="text-xs text-muted-foreground mt-1">PDF or image (PNG, JPG) — max 10 MB</p>
               </div>
-              <input ref={inputRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.json" className="hidden" onChange={handleFileChange} />
+              <input ref={inputRef} type="file" accept=".pdf,.png,.jpg,.jpeg" className="hidden" onChange={handleFileChange} />
             </div>
-            <div className="rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-100 dark:border-amber-800/40 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            <div className="rounded-md bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-700">
               <strong>Auto-parse:</strong> Name your file <code>bluedart_invoice.pdf</code> to get fields filled automatically.
             </div>
             <button onClick={() => setMode("choose")} className="text-xs text-muted-foreground hover:text-foreground w-full text-center">
@@ -1125,195 +977,6 @@ export default function NewCase() {
           </CardHeader>
           <CardContent>{formFields}</CardContent>
         </Card>
-      )}
-
-      {/* ── Batch Upload ──────────────────────────────────────────────────── */}
-      {mode === "batch" && (
-        <div className="space-y-3">
-          {/* Header */}
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-semibold">Batch Upload</h2>
-              {batchItems.length > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  {batchItems.length} file{batchItems.length !== 1 ? "s" : ""} — up to 20 invoices
-                </p>
-              )}
-            </div>
-            <button
-              onClick={() => { setBatchItems([]); setMode("choose"); if (batchInputRef.current) batchInputRef.current.value = ""; }}
-              className="text-xs text-muted-foreground hover:text-foreground"
-            >
-              ← Back
-            </button>
-          </div>
-
-          {/* Summary badges */}
-          {batchItems.length > 0 && (() => {
-            const nParsing   = batchItems.filter(i => i.parseState === "parsing" || i.parseState === "queued").length;
-            const nReady     = batchItems.filter(i => i.parseState === "parsed" && i.submitState === "idle").length;
-            const nSubmitted = batchItems.filter(i => i.submitState === "done" || i.submitState === "duplicate").length;
-            const nError     = batchItems.filter(i => i.parseState === "error" || i.submitState === "error").length;
-            return (
-              <div className="flex flex-wrap gap-2">
-                {nParsing   > 0 && <span className="text-[11px] font-medium bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">{nParsing} processing</span>}
-                {nReady     > 0 && <span className="text-[11px] font-medium bg-green-50 text-green-700 px-2.5 py-1 rounded-full">{nReady} ready</span>}
-                {nSubmitted > 0 && <span className="text-[11px] font-medium bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full">{nSubmitted} submitted</span>}
-                {nError     > 0 && <span className="text-[11px] font-medium bg-red-50 text-red-700 px-2.5 py-1 rounded-full">{nError} errors</span>}
-              </div>
-            );
-          })()}
-
-          {/* Empty state — drop zone */}
-          {batchItems.length === 0 && (
-            <Card>
-              <CardContent className="pt-6 space-y-3">
-                <div
-                  onClick={() => batchInputRef.current?.click()}
-                  onDrop={handleBatchDrop}
-                  onDragOver={e => { e.preventDefault(); setBatchDragOver(true); }}
-                  onDragLeave={() => setBatchDragOver(false)}
-                  className={cn(
-                    "flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed px-6 py-12 cursor-pointer transition-colors",
-                    batchDragOver ? "border-zoiko-blue bg-blue-50/40" : "border-border hover:border-zoiko-blue hover:bg-secondary/40"
-                  )}
-                >
-                  <Files className="h-10 w-10 text-muted-foreground" />
-                  <div className="text-center">
-                    <p className="text-sm font-medium">Drop up to 20 invoices here, or click to browse</p>
-                    <p className="text-xs text-muted-foreground mt-1">PDF, Image, CSV or JSON — max 10 MB each</p>
-                  </div>
-                  <input
-                    ref={batchInputRef}
-                    type="file"
-                    accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.csv,.json"
-                    multiple
-                    className="hidden"
-                    onChange={handleBatchFileChange}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* File queue */}
-          {batchItems.length > 0 && (
-            <>
-              <div className="space-y-2 max-h-[440px] overflow-y-auto pr-0.5">
-                {batchItems.map((item) => {
-                  const ft = fileTypeLabel(item.file);
-                  const canSubmitItem =
-                    item.parseState === "parsed" &&
-                    item.submitState === "idle" &&
-                    !!item.form?.carrier &&
-                    Number(item.form?.amount) > 0;
-                  return (
-                    <div
-                      key={item.id}
-                      className="flex items-center gap-3 rounded-xl border px-4 py-3 bg-white shadow-sm"
-                    >
-                      {/* File type badge */}
-                      <div className={cn("flex-shrink-0 h-9 w-9 rounded-lg flex items-center justify-center text-[9px] font-bold", ft.bgColor, ft.textColor)}>
-                        {ft.label}
-                      </div>
-
-                      {/* Name + status */}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate leading-tight">{item.file.name}</p>
-                        <div className="flex flex-wrap items-center gap-x-2 mt-0.5">
-                          <span className="text-[11px] text-muted-foreground">{(item.file.size / 1024).toFixed(1)} KB</span>
-
-                          {item.parseState === "queued" && (
-                            <span className="text-[11px] text-muted-foreground">Queued…</span>
-                          )}
-                          {item.parseState === "parsing" && (
-                            <span className="flex items-center gap-1 text-[11px] text-blue-600">
-                              <div className="h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                              Parsing…
-                            </span>
-                          )}
-                          {item.parseState === "parsed" && item.form?.carrier && (
-                            <span className="text-[11px] text-green-600 font-medium">
-                              {item.form.carrier} · {item.form.currency} {Number(item.form.amount || 0).toLocaleString("en-IN")}
-                            </span>
-                          )}
-                          {item.parseState === "parsed" && !item.form?.carrier && (
-                            <span className="text-[11px] text-amber-600">Parsed — fill carrier manually</span>
-                          )}
-                          {item.parseState === "error" && (
-                            <span className="text-[11px] text-red-500">Could not parse</span>
-                          )}
-
-                          {item.submitState === "submitting" && (
-                            <span className="flex items-center gap-1 text-[11px] text-blue-600">
-                              <div className="h-3 w-3 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                              Submitting…
-                            </span>
-                          )}
-                          {item.submitState === "done" && (
-                            <button
-                              onClick={() => nav(`/cases/${item.caseId}`)}
-                              className="flex items-center gap-1 text-[11px] text-green-600 font-medium hover:underline"
-                            >
-                              <CheckCircle className="h-3 w-3" />
-                              Case opened — View
-                            </button>
-                          )}
-                          {item.submitState === "duplicate" && (
-                            <span className="text-[11px] text-amber-600 font-medium">Duplicate — existing case</span>
-                          )}
-                          {item.submitState === "error" && (
-                            <span className="text-[11px] text-red-500 font-medium">Submit failed — retry</span>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Action */}
-                      {canSubmitItem && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="flex-shrink-0 h-8 text-xs px-3"
-                          onClick={() => submitBatchItem(item.id, item.form!)}
-                        >
-                          Submit
-                        </Button>
-                      )}
-                      {(item.submitState === "done" || item.submitState === "duplicate") && (
-                        <CheckCircle className="h-4 w-4 text-green-500 flex-shrink-0" />
-                      )}
-                      {(item.parseState === "error" || item.submitState === "error") && (
-                        <AlertCircle className="h-4 w-4 text-red-400 flex-shrink-0" />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Bottom actions */}
-              <div className="flex items-center justify-between gap-3 pt-1">
-                <button
-                  onClick={() => { setBatchItems([]); if (batchInputRef.current) batchInputRef.current.value = ""; }}
-                  className="text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Clear all
-                </button>
-                {(() => {
-                  const readyCount = batchItems.filter(i =>
-                    i.parseState === "parsed" && i.submitState === "idle" &&
-                    i.form?.carrier && Number(i.form?.amount) > 0
-                  ).length;
-                  return readyCount > 0 ? (
-                    <Button onClick={submitAllBatch} className="gap-2">
-                      <ArrowRight className="h-4 w-4" />
-                      Submit {readyCount} Invoice{readyCount !== 1 ? "s" : ""}
-                    </Button>
-                  ) : null;
-                })()}
-              </div>
-            </>
-          )}
-        </div>
       )}
     </div>
     </>

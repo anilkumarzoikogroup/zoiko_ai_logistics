@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { zoikoApi } from "@/api/zoiko";
 import { formatCurrency, cn } from "@/utils/cn";
 import { Search, Plus, ChevronRight, FileWarning, Zap, User, TrendingUp } from "lucide-react";
@@ -72,15 +72,8 @@ function isAutoCreated(shipmentRef: string | null | undefined): boolean {
 
 export default function Claims() {
   const nav = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<ClaimState | "ALL">("ALL");
-
-  useEffect(() => {
-    const q = searchParams.get("q") ?? "";
-    if (q !== search) setSearch(q);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams]);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
 
