@@ -39,7 +39,32 @@ jobs:
         run: npm run build
         env:
           VITE_USE_MOCK: "false"
-          VITE_API_BASE: https://zoiko-ai-logistics.onrender.com
+
+          # ── SC-001 (freight invoice overcharge) ───────────────────────────
+          VITE_API_BASE:    "https://zoiko-api.onrender.com"
+          VITE_API3_BASE:   "https://zoiko-governance.onrender.com"
+          VITE_API4_BASE:   "https://zoiko-execution.onrender.com"
+
+          # ── SC-002 (carrier claim) ─────────────────────────────────────────
+          VITE_API_CLAIM_BASE:    "https://zoiko-sc002-gateway.onrender.com"
+          VITE_API_CLAIM3_BASE:   "https://zoiko-sc002-governance.onrender.com"
+          VITE_API_CLAIM4_BASE:   "https://zoiko-sc002-execution.onrender.com"
+
+          # ── SC-003 (shipment exceptions / SLA breach) ──────────────────────
+          VITE_API_EXC_BASE:  "https://zoiko-sc003-gateway.onrender.com"
+          VITE_API_EXC4_BASE: "https://zoiko-sc003-execution.onrender.com"
+
+          # ── SC-004 (supplier scorecard) ────────────────────────────────────
+          VITE_API_SCORE_BASE:  "https://zoiko-sc004-gateway.onrender.com"
+          VITE_API_SCORE4_BASE: "https://zoiko-sc004-execution.onrender.com"
+
+          # ── SC-005 (accessorial charge dispute) ────────────────────────────
+          VITE_API_ACC_BASE:  "https://zoiko-sc005-gateway.onrender.com"
+          VITE_API_ACC4_BASE: "https://zoiko-sc005-execution.onrender.com"
+
+          # ── Auth / tenant (non-secret dev values embedded at build time) ───
+          VITE_DEV_JWT:    ${{ secrets.VITE_DEV_JWT }}
+          VITE_DEV_TENANT: ${{ secrets.VITE_DEV_TENANT }}
 
       - name: Install Vercel CLI
         run: npm install --global vercel@latest
