@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "@/store";
-import { zoikoApi } from "@/api/zoiko";
+import { zoikoApi, scorecardApi, accessorialApi } from "@/api/zoiko";
 import { formatCurrency, cn } from "@/utils/cn";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -14,20 +14,31 @@ import {
   IndianRupee, BarChart3, Users, Truck, FileWarning,
   LayoutGrid, Building2, Package, ShoppingCart, Boxes, ChevronDown,
 } from "lucide-react";
-import type { Case, Claim, GovernanceToken } from "@/types";
+import type { Case, Claim, GovernanceToken, ShipmentException, ScorecardPeriod, AccessorialDispute } from "@/types";
 
-// A row from either backend, tagged so the merged dashboard can tell them apart —
-// SC-001 (invoices, port 8000) and SC-002 (claims, port 8010) are independent
-// backends sharing the same `cases` table shape, so the fields line up exactly.
-type SliceTag = "Invoices" | "Claims";
-type ActivityRow = (Case | Claim) & { slice: SliceTag };
+// All five live slices normalised to a common shape so the dashboard can merge
+// and sort them without knowing which backend they came from.
+type SliceTag = "Invoices" | "Claims" | "Shipments" | "Suppliers" | "Accessorials";
+interface ActivityRow {
+  id:          string;
+  slice:       SliceTag;
+  state:       string;
+  carrier:     string;
+  amount:      number;
+  diff:        number;
+  confidence?: number;
+  opened_at:   string;
+}
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 const CARRIER_COLORS = ["#3b82f6","#8b5cf6","#f59e0b","#10b981","#ef4444","#06b6d4"];
 
 const SLICE_BADGE: Record<SliceTag, { bg: string; text: string }> = {
-  Invoices: { bg: "#dbeafe", text: "#2563eb" },
-  Claims:   { bg: "#ede9fe", text: "#7c3aed" },
+  Invoices:     { bg: "#dbeafe", text: "#2563eb" },
+  Claims:       { bg: "#ede9fe", text: "#7c3aed" },
+  Shipments:    { bg: "#d1fae5", text: "#059669" },
+  Suppliers:    { bg: "#fef3c7", text: "#d97706" },
+  Accessorials: { bg: "#fee2e2", text: "#dc2626" },
 };
 
 // Tab row above the dashboard — "All"/"Invoices"/"Claims" filter real data;
@@ -43,7 +54,7 @@ const TABS: { key: TabKey; icon: React.ElementType }[] = [
   { key: "Procurement",  icon: ShoppingCart },
   { key: "Inventory",    icon: Boxes },
 ];
-const LIVE_TABS: TabKey[] = ["All", "Invoices", "Claims"];
+const LIVE_TABS: TabKey[] = ["All", "Invoices", "Claims", "Shipments", "Suppliers", "Accessorials"];
 
 // ── Customer-friendly state labels ────────────────────────────────────────────
 const STATE_LABEL: Record<string, string> = {
@@ -204,25 +215,56 @@ export default function Home() {
   const user = useAppSelector(s => s.auth.user) || localStorage.getItem("zoiko_user") || "User";
   const role = useAppSelector(s => s.auth.role) || localStorage.getItem("zoiko_role") || "analyst";
 
-  const { data: cases = [],  isLoading: casesLoading }  = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases(),   refetchInterval: 5000 });
-  const { data: claimsPaged, isLoading: claimsLoading } = useQuery({ queryKey: ["claims-dashboard"], queryFn: () => zoikoApi.listClaimsPaged({ page_size: 100 }), refetchInterval: 5000 });
-  const { data: tokens = [] }            = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens(), refetchInterval: 10000 });
-  const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats,            refetchInterval: 10000 });
+  const { data: cases = [],      isLoading: casesLoading }  = useQuery({ queryKey: ["cases"],      queryFn: () => zoikoApi.listCases(),                              refetchInterval: 5000  });
+  const { data: claimsPaged,    isLoading: claimsLoading } = useQuery({ queryKey: ["claims-dash"], queryFn: () => zoikoApi.listClaimsPaged({ page_size: 100 }),        refetchInterval: 5000  });
+  const { data: excPaged }                                  = useQuery({ queryKey: ["exc-dash"],   queryFn: () => zoikoApi.listExceptionsPaged({ page_size: 100 }),    refetchInterval: 10000 });
+  const { data: scorecards = [] }                           = useQuery({ queryKey: ["score-dash"], queryFn: () => scorecardApi.listScorecards(),                       refetchInterval: 15000 });
+  const { data: accPaged }                                  = useQuery({ queryKey: ["acc-dash"],   queryFn: () => accessorialApi.list({ page_size: 100 }),             refetchInterval: 10000 });
+  const { data: tokens = [] }                               = useQuery({ queryKey: ["tokens"],     queryFn: () => zoikoApi.listTokens(),                               refetchInterval: 10000 });
+  const { data: stats }                                     = useQuery({ queryKey: ["stats"],      queryFn: zoikoApi.getStats,                                         refetchInterval: 10000 });
   const [activeTab, setActiveTab] = useState<TabKey>("All");
   const [showSubmitMenu, setShowSubmitMenu] = useState(false);
 
-  // ── Derived metrics ──────────────────────────────────────────────────────────
-  const isLoading        = casesLoading || claimsLoading;
-  const invoiceRows: ActivityRow[] = (cases as Case[]).map(c => ({ ...c, slice: "Invoices" as const }));
-  const claimRows:   ActivityRow[] = (claimsPaged?.claims ?? []).map(c => ({ ...c, slice: "Claims" as const }));
-  const allActivityUnfiltered: ActivityRow[] = [...invoiceRows, ...claimRows]
-    .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
-  // The whole dashboard below reacts to the selected tab — "All" shows everything,
-  // "Invoices"/"Claims" filter to that slice, the rest have no backend yet.
+  // ── Normalise each slice into ActivityRow ─────────────────────────────────
+  const isLoading = casesLoading || claimsLoading;
+
+  const invoiceRows: ActivityRow[] = (cases as Case[]).map(c => ({
+    id: c.id, slice: "Invoices" as const, state: c.state,
+    carrier: c.carrier ?? "—", amount: c.amount ?? 0, diff: c.diff ?? 0,
+    confidence: c.confidence, opened_at: c.opened_at,
+  }));
+  const claimRows: ActivityRow[] = ((claimsPaged as any)?.claims ?? []).map((c: any) => ({
+    id: c.id, slice: "Claims" as const, state: c.state,
+    carrier: c.carrier ?? "—", amount: c.amount ?? 0, diff: c.diff ?? 0,
+    confidence: c.confidence, opened_at: c.opened_at,
+  }));
+  const exceptionRows: ActivityRow[] = ((excPaged as any)?.exceptions ?? []).map((e: ShipmentException) => ({
+    id: e.id, slice: "Shipments" as const, state: e.state,
+    carrier: e.carrier ?? "—", amount: e.sla_penalty_amount ?? 0, diff: e.sla_penalty_amount ?? 0,
+    confidence: e.confidence, opened_at: e.opened_at,
+  }));
+  const scorecardRows: ActivityRow[] = (scorecards as ScorecardPeriod[])
+    .filter(s => s.breach_detected)
+    .map(s => ({
+      id: s.id, slice: "Suppliers" as const,
+      state: s.case_state ?? "FINDING_GENERATED",
+      carrier: s.carrier_id ?? "—", amount: s.composite_score ?? 0, diff: s.breach_amount ?? 0,
+      confidence: 0.9640, opened_at: s.created_at,
+    }));
+  const accRows: ActivityRow[] = ((accPaged as any)?.disputes ?? []).map((d: AccessorialDispute) => ({
+    id: d.id, slice: "Accessorials" as const,
+    state: d.case_state ?? "FINDING_GENERATED",
+    carrier: d.carrier_id ?? "—", amount: d.dispute_total ?? 0, diff: d.dispute_total ?? 0,
+    confidence: d.confidence ?? undefined, opened_at: d.opened_at ?? new Date().toISOString(),
+  }));
+
+  const allActivityUnfiltered: ActivityRow[] = [
+    ...invoiceRows, ...claimRows, ...exceptionRows, ...scorecardRows, ...accRows,
+  ].sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
+
   const allActivity: ActivityRow[] =
     activeTab === "All" ? allActivityUnfiltered :
-    activeTab === "Invoices" || activeTab === "Claims" ? allActivityUnfiltered.filter(c => c.slice === activeTab) :
-    [];
+    allActivityUnfiltered.filter(c => c.slice === activeTab);
   const allTokens       = tokens as GovernanceToken[];
   const carriers        = carrierBreakdown(allActivity);
   const trend           = monthlyRecovery(allActivity);
@@ -391,7 +433,7 @@ export default function Home() {
         <KpiCard
           label="Cases Submitted"
           value={totalSubmitted.toLocaleString("en-IN")}
-          sub={`${openCases.length} in progress · ${invoiceRows.length} invoices, ${claimRows.length} claims`}
+          sub={`${openCases.length} in progress · ${invoiceRows.length} inv, ${claimRows.length} claims, ${exceptionRows.length} exc, ${accRows.length} acc`}
           icon={FileText}
           accent="#3b82f6"
           onClick={() => nav("/cases")}
@@ -584,7 +626,13 @@ export default function Home() {
               {recentActivity.map((c, i) => (
                 <tr
                   key={c.id}
-                  onClick={() => nav(c.slice === "Claims" ? `/claims/${c.id}` : `/cases/${c.id}`)}
+                  onClick={() => {
+                    if      (c.slice === "Claims")       nav(`/claims/${c.id}`);
+                    else if (c.slice === "Shipments")    nav(`/exceptions/${c.id}`);
+                    else if (c.slice === "Suppliers")    nav(`/scorecards/${c.id}`);
+                    else if (c.slice === "Accessorials") nav(`/accessorial/${c.id}`);
+                    else                                 nav(`/cases/${c.id}`);
+                  }}
                   style={{ cursor: "pointer", borderBottom: i < recentActivity.length - 1 ? "1px solid #f8fafc" : "none", transition: "background 0.1s" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
