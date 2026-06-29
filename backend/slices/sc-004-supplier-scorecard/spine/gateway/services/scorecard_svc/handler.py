@@ -320,13 +320,14 @@ class ScorecardHandler:
         try:
             cur = conn.cursor()
 
-            # Open case — cases has scorecard_period_id not carrier_id
+            # Open case — linkage is scorecard_periods.case_id -> cases.id (set by the
+            # caller after this returns), not a column on cases itself (migration 0009).
             cur.execute("""
                 INSERT INTO cases
-                    (id, tenant_id, case_type, state, scorecard_period_id, opened_at)
-                VALUES (%s, %s::uuid, 'SCORECARD_BREACH', 'FINDING_GENERATED', %s::uuid, %s)
+                    (id, tenant_id, case_type, state, opened_at)
+                VALUES (%s, %s::uuid, 'SCORECARD_BREACH', 'FINDING_GENERATED', %s)
                 ON CONFLICT DO NOTHING
-            """, (str(case_id), tenant_id, str(period_id), now))
+            """, (str(case_id), tenant_id, now))
 
             cur.execute("""
                 INSERT INTO case_events
