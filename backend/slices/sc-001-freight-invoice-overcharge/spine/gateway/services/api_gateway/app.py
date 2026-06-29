@@ -348,13 +348,12 @@ def _auth_cookie_response(data: dict, token: str, ttl: int, status_code: int = 2
     """Return auth data as JSON and set the JWT in an HttpOnly cookie.
     Token is never exposed in the response body — XSS cannot read it."""
     resp = _JSONResponse(status_code=status_code, content=data)
-    dev_mode = os.getenv("ZOIKO_DEV_MODE", "").lower() in ("1", "true", "yes")
     resp.set_cookie(
         key="zoiko_jwt",
         value=token,
-        httponly=True,                          # JS cannot read this cookie
-        secure=not dev_mode,                    # HTTPS-only in production; HTTP allowed in dev
-        samesite="lax" if dev_mode else "none",  # frontend and backend are on different domains in prod
+        httponly=True,        # JS cannot read this cookie
+        secure=True,          # required by SameSite=None; localhost is a secure-context exception
+        samesite="none",      # frontend and backend are always on different domains (Vercel + Render)
         max_age=ttl,
         path="/",
     )
