@@ -269,7 +269,9 @@ export default function Home() {
   const carriers        = carrierBreakdown(allActivity);
   const trend           = monthlyRecovery(allActivity);
 
-  const totalSubmitted  = activeTab === "All" ? (stats?.total_cases ?? invoiceRows.length) + claimRows.length : allActivity.length;
+  const totalSubmitted  = activeTab === "All"
+    ? (stats?.total_cases ?? invoiceRows.length) + claimRows.length + exceptionRows.length + scorecardRows.length + accRows.length
+    : allActivity.length;
   const totalOvercharge = allActivity.reduce((s, c) => s + (c.diff ?? 0), 0);
   const totalRecovered  = allActivity.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state))
                                    .reduce((s, c) => s + (c.diff ?? 0), 0);
@@ -307,6 +309,19 @@ export default function Home() {
   ];
 
   const firstName = user.split(" ")[0];
+
+  // Per-tab config — drives KPI label and scorecard heading copy.
+  const TAB_CONFIG: Record<TabKey, { entityLabel: string; metricLabel: string; counterpartyLabel: string; navAll: string }> = {
+    All:          { entityLabel: "Cases Submitted",    metricLabel: "Recovery Rate",    counterpartyLabel: "Counterparty Scorecard", navAll: "/cases"       },
+    Invoices:     { entityLabel: "Invoices Submitted", metricLabel: "Recovery Rate",    counterpartyLabel: "Carrier Scorecard",       navAll: "/cases"       },
+    Claims:       { entityLabel: "Claims Submitted",   metricLabel: "Recovery Rate",    counterpartyLabel: "Carrier Scorecard",       navAll: "/claims"      },
+    Shipments:    { entityLabel: "SLA Exceptions",     metricLabel: "Penalty Recovery", counterpartyLabel: "Carrier Scorecard",       navAll: "/exceptions"  },
+    Suppliers:    { entityLabel: "Score Breaches",     metricLabel: "Breach Rate",      counterpartyLabel: "Supplier Scorecard",      navAll: "/scorecards"  },
+    Accessorials: { entityLabel: "Disputes Filed",     metricLabel: "Recovery Rate",    counterpartyLabel: "Carrier Scorecard",       navAll: "/accessorial" },
+    Procurement:  { entityLabel: "Cases Submitted",    metricLabel: "Recovery Rate",    counterpartyLabel: "Counterparty Scorecard",  navAll: "/"            },
+    Inventory:    { entityLabel: "Cases Submitted",    metricLabel: "Recovery Rate",    counterpartyLabel: "Counterparty Scorecard",  navAll: "/"            },
+  };
+  const tabCfg = TAB_CONFIG[activeTab];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -360,6 +375,23 @@ export default function Home() {
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <FileWarning style={{ width: 14, height: 14, color: "#7c3aed" }} /> Submit Claim
+                </button>
+                <div style={{ height: 1, background: "#f1f5f9", margin: "2px 0" }} />
+                <button
+                  onClick={() => { setShowSubmitMenu(false); nav("/exceptions/new"); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Truck style={{ width: 14, height: 14, color: "#059669" }} /> Report Exception
+                </button>
+                <button
+                  onClick={() => { setShowSubmitMenu(false); nav("/accessorial/new"); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Package style={{ width: 14, height: 14, color: "#dc2626" }} /> Submit Dispute
                 </button>
               </div>
             </>
@@ -431,12 +463,14 @@ export default function Home() {
       {/* ── 4 KPI cards ───────────────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
         <KpiCard
-          label="Cases Submitted"
+          label={tabCfg.entityLabel}
           value={totalSubmitted.toLocaleString("en-IN")}
-          sub={`${openCases.length} in progress · ${invoiceRows.length} inv, ${claimRows.length} claims, ${exceptionRows.length} exc, ${accRows.length} acc`}
+          sub={activeTab === "All"
+            ? `${openCases.length} open · ${invoiceRows.length} inv · ${claimRows.length} claims · ${exceptionRows.length} exc · ${accRows.length} acc`
+            : `${openCases.length} open · ${allActivity.length} total`}
           icon={FileText}
           accent="#3b82f6"
-          onClick={() => nav("/cases")}
+          onClick={() => nav(tabCfg.navAll)}
         />
         <KpiCard
           label="Overcharges Detected"
@@ -455,7 +489,7 @@ export default function Home() {
           accent="#10b981"
         />
         <KpiCard
-          label="Recovery Rate"
+          label={tabCfg.metricLabel}
           value={totalOvercharge > 0 ? `${successRate}%` : "—"}
           sub={totalOvercharge > 0 ? (successRate >= 70 ? "Above target" : "In progress") : "No data yet"}
           subUp={successRate >= 70}
@@ -473,9 +507,9 @@ export default function Home() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <Truck style={{ width: 14, height: 14, color: "#64748b" }} />
-              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Counterparty Scorecard</p>
+              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>{tabCfg.counterpartyLabel}</p>
             </div>
-            <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
+            <button onClick={() => nav(tabCfg.navAll)} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
               All <ChevronRight style={{ width: 12, height: 12 }} />
             </button>
           </div>
@@ -582,7 +616,7 @@ export default function Home() {
       <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #f1f5f9" }}>
           <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Recent Activity</p>
-          <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
+          <button onClick={() => nav(tabCfg.navAll)} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             View all <ArrowRight style={{ width: 12, height: 12 }} />
           </button>
         </div>
@@ -615,7 +649,7 @@ export default function Home() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>
-                {["Case ID", "Slice", "Counterparty", "Amount", "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
+                {["Case ID", "Slice", activeTab === "Suppliers" ? "Carrier ID" : "Counterparty", activeTab === "Suppliers" ? "Score" : "Amount", activeTab === "Suppliers" ? "Breach Δ" : "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
                   <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #f1f5f9" }}>
                     {h}
                   </th>
