@@ -32,6 +32,19 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── OPA — fail-closed policy server ────────────────────────────────────────
+  opa:
+    build:
+      context: .
+      dockerfile: opa/Dockerfile
+    ports:
+      - "8181:8181"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8181/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # ── DB Migrations ───────────────────────────────────────────────────────────
   migrate:
     build:
@@ -44,12 +57,12 @@ services:
       postgres:
         condition: service_healthy
 
-  # ── Seed Users ──────────────────────────────────────────────────────────────
+  # ── Seed Admin User ─────────────────────────────────────────────────────────
   seed:
     build:
       context: .
       dockerfile: Dockerfile.backend
-    command: python backend/core/scripts/seed_users.py
+    command: python backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/scripts/seed_users.py
     environment:
       DB_URL:                postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
       ZOIKO_COMPANY_NAME:    ${ZOIKO_COMPANY_NAME:-Zoiko}
@@ -60,7 +73,8 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # ── Gateway — API Gateway (port 8000) ───────────────────────────────────────
+  # ── SC-001: Freight Invoice Overcharge ─────────────────────────────────────
+  # Gateway — port 8000
   phase2:
     build:
       context: .
@@ -73,6 +87,7 @@ services:
       - "8000:8000"
     environment:
       DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
       ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
       ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
       ZOIKO_FF_SC_001_ENABLED: "*"
@@ -82,12 +97,16 @@ services:
       ZOIKO_ADMIN_PASSWORD: ${ZOIKO_ADMIN_PASSWORD:-changeme123}
       ZOIKO_ADMIN_NAME:    ${ZOIKO_ADMIN_NAME:-Platform Admin}
       JWT_TTL_SECONDS:     ${JWT_TTL_SECONDS:-86400}
+      TOKEN_TTL_MINUTES:   "1440"
       REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
       PYTHONIOENCODING:    utf-8
     depends_on:
       seed:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      opa:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
@@ -95,7 +114,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Governance — Evidence / Reasoning / Governance (port 8002) ─────────────
+  # Governance — port 8002
   phase3:
     build:
       context: .
@@ -108,17 +127,20 @@ services:
       - "8002:8002"
     environment:
       DB_URL:           postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:   "true"
       ZOIKO_DEV_SECRET: ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
       ZOIKO_ISSUER:     ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      TOKEN_TTL_MINUTES: "1440"
       REDIS_URL:        redis://redis:6379/0
+      OPA_URL:          http://opa:8181
       GROQ_API_KEY:     ${GROQ_API_KEY:-}
-      GROQ_MODEL:       ${GROQ_MODEL:-llama-3.1-70b-versatile}
+      GROQ_MODEL:       ${GROQ_MODEL:-llama-3.1-8b-instant}
       PYTHONIOENCODING: utf-8
     depends_on:
       phase2:
         condition: service_healthy
 
-  # ── Execution — Execution Gateway (port 8001) ───────────────────────────────
+  # Execution — port 8001
   phase4:
     build:
       context: .
@@ -131,16 +153,273 @@ services:
       - "8001:8001"
     environment:
       DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
       ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
       ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
       ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      TOKEN_TTL_MINUTES:   "1440"
       REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
       SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
       FX_STRICT:           ${FX_STRICT:-false}
       CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}
       PYTHONIOENCODING:    utf-8
     depends_on:
       phase2:
+        condition: service_healthy
+
+  # ── SC-002: Carrier Claim ──────────────────────────────────────────────────
+  # Gateway — port 8010
+  sc002-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8010
+    working_dir: /app/backend/slices/sc-002-carrier-claim/spine/gateway
+    ports:
+      - "8010:8010"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      JWT_TTL_SECONDS:     ${JWT_TTL_SECONDS:-86400}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      GROQ_API_KEY:        ${GROQ_API_KEY:-}
+      GROQ_MODEL:          ${GROQ_MODEL:-llama-3.1-8b-instant}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # Execution — port 8011
+  sc002-execution:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8011
+    working_dir: /app/backend/slices/sc-002-carrier-claim/spine/execution
+    ports:
+      - "8011:8011"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
+      FX_STRICT:           ${FX_STRICT:-false}
+      CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # Governance — port 8012
+  sc002-governance:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8012
+    working_dir: /app/backend/slices/sc-002-carrier-claim/spine/governance
+    ports:
+      - "8012:8012"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      TOKEN_TTL_MINUTES:   "1440"
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      GROQ_API_KEY:        ${GROQ_API_KEY:-}
+      GROQ_MODEL:          ${GROQ_MODEL:-llama-3.1-8b-instant}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # ── SC-003: Shipment Exception / SLA Breach ───────────────────────────────
+  # Gateway — port 8020
+  sc003-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8020
+    working_dir: /app/backend/slices/sc-003-shipment-exception/spine/gateway
+    ports:
+      - "8020:8020"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      JWT_TTL_SECONDS:     ${JWT_TTL_SECONDS:-86400}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      GROQ_API_KEY:        ${GROQ_API_KEY:-}
+      GROQ_MODEL:          ${GROQ_MODEL:-llama-3.1-8b-instant}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # Execution — port 8021
+  sc003-execution:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8021
+    working_dir: /app/backend/slices/sc-003-shipment-exception/spine/execution
+    ports:
+      - "8021:8021"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
+      FX_STRICT:           ${FX_STRICT:-false}
+      CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # ── SC-004: Supplier Scorecard Breach ─────────────────────────────────────
+  # Gateway — port 8030
+  sc004-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8030
+    working_dir: /app/backend/slices/sc-004-supplier-scorecard/spine/gateway
+    ports:
+      - "8030:8030"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      JWT_TTL_SECONDS:     ${JWT_TTL_SECONDS:-86400}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      GROQ_API_KEY:        ${GROQ_API_KEY:-}
+      GROQ_MODEL:          ${GROQ_MODEL:-llama-3.1-8b-instant}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # Execution — port 8031
+  sc004-execution:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8031
+    working_dir: /app/backend/slices/sc-004-supplier-scorecard/spine/execution
+    ports:
+      - "8031:8031"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
+      FX_STRICT:           ${FX_STRICT:-false}
+      CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # ── SC-005: Accessorial Charge Dispute ────────────────────────────────────
+  # Gateway — port 8040
+  sc005-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8040
+    working_dir: /app/backend/slices/sc-005-accessorial-dispute/spine/gateway
+    ports:
+      - "8040:8040"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      JWT_TTL_SECONDS:     ${JWT_TTL_SECONDS:-86400}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      GROQ_API_KEY:        ${GROQ_API_KEY:-}
+      GROQ_MODEL:          ${GROQ_MODEL:-llama-3.1-8b-instant}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
+        condition: service_healthy
+
+  # Execution — port 8041
+  sc005-execution:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: python -m uvicorn services.api_gateway.app:app --workers 2 --host 0.0.0.0 --port 8041
+    working_dir: /app/backend/slices/sc-005-accessorial-dispute/spine/execution
+    ports:
+      - "8041:8041"
+    environment:
+      DB_URL:              postgresql://postgres:${POSTGRES_PASSWORD:-1234}@postgres/zoiko
+      ZOIKO_DEV_MODE:      "true"
+      ZOIKO_DEV_SECRET:    ${ZOIKO_DEV_SECRET:-zoiko-dev-secret-for-testing-only}
+      ZOIKO_ISSUER:        ${ZOIKO_ISSUER:-https://auth.zoikotech.com}
+      TOKEN_TTL_MINUTES:   "1440"
+      ZOIKO_CORS_ORIGINS:  ${ZOIKO_CORS_ORIGINS:-http://localhost:5173}
+      REDIS_URL:           redis://redis:6379/0
+      OPA_URL:             http://opa:8181
+      SANCTIONS_STRICT:    ${SANCTIONS_STRICT:-false}
+      FX_STRICT:           ${FX_STRICT:-false}
+      CONNECTOR_STRICT:    ${CONNECTOR_STRICT:-false}
+      PYTHONIOENCODING:    utf-8
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      opa:
         condition: service_healthy
 
   # ── Frontend (port 5173) ────────────────────────────────────────────────────
@@ -153,9 +432,21 @@ services:
       - "5173:5173"
     environment:
       VITE_USE_MOCK:  "false"
-      VITE_API_BASE:  http://phase2:8000
-      VITE_API3_BASE: http://phase3:8002
-      VITE_API4_BASE: http://phase4:8001
+      VITE_API_BASE:  /api
+      # Proxy target overrides — Vite dev server proxies to these container names.
+      # Defaults in vite.config.ts fall back to localhost for non-Docker use.
+      BACKEND_GATEWAY_URL:     http://phase2:8000
+      BACKEND_EXEC_URL:        http://phase4:8001
+      BACKEND_GOV_URL:         http://phase3:8002
+      BACKEND_SC002_GW_URL:    http://sc002-gateway:8010
+      BACKEND_SC002_EXEC_URL:  http://sc002-execution:8011
+      BACKEND_SC002_GOV_URL:   http://sc002-governance:8012
+      BACKEND_SC003_GW_URL:    http://sc003-gateway:8020
+      BACKEND_SC003_EXEC_URL:  http://sc003-execution:8021
+      BACKEND_SC004_GW_URL:    http://sc004-gateway:8030
+      BACKEND_SC004_EXEC_URL:  http://sc004-execution:8031
+      BACKEND_SC005_GW_URL:    http://sc005-gateway:8040
+      BACKEND_SC005_EXEC_URL:  http://sc005-execution:8041
     depends_on:
       phase2:
         condition: service_healthy

@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Start backend/gateway (8000), backend/governance (8002) and backend/execution (8001) in one container
 
 echo "[start.sh] Starting Gateway on port 8000..."
