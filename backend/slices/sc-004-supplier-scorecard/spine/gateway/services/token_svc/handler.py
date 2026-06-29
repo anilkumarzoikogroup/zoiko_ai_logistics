@@ -1,7 +1,7 @@
 """
-SC-003 Token Service — mints a signed governance token after an APPROVED SLA credit decision.
+SC-004 Token Service — mints a signed governance token after an APPROVED scorecard flag decision.
 
-Scope: EXECUTE_SLA_CREDIT
+Scope: EXECUTE_NOTIFY_FLAG
 token_binding = SHA-256(tenant_id_utf8 || decision_id_utf8)
 token_hash    = SHA-256(b"zoiko.token.v1:" + JCS(token_payload))
 expires_at    = issued_at + TOKEN_TTL_MINUTES (default 15)
@@ -35,7 +35,7 @@ class TokenHandler:
         tenant_id:   str,
         decision_id: str,
         case_id:     str,
-        scope:       str = "EXECUTE_SLA_CREDIT",
+        scope:       str = "EXECUTE_NOTIFY_FLAG",
         actor_sub:   str = "system",
     ) -> TokenResult:
         tenant_id   = str(tenant_id)
