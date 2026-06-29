@@ -63,6 +63,6 @@ jobs:
         run: |
           sleep 30
           curl -f --retry 5 --retry-delay 10 --retry-connrefused \
-            https://zoiko-ai-logistics-yrxe.vercel.app/ \
+            https://zoiko-ai.vercel.app/ \
             -o /dev/null -w "HTTP %{http_code}\n"
         continue-on-error: true   # alert but don't fail the workflow
