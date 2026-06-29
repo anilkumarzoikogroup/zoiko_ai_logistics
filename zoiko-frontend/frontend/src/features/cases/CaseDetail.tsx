@@ -8,7 +8,7 @@ import {
   ArrowRight, ArrowLeft, CheckCircle2, Clock,
   FileText, Shield, Hash, Brain, Lock, AlertTriangle,
   ChevronRight, Zap, Users, RefreshCw, GitBranch,
-  ShieldCheck, Download, AlertCircle, Wand2, Wallet,
+  ShieldCheck, Download, AlertCircle, Wand2,
 } from "lucide-react";
 import { useToast } from "@/hooks/useToast";
 import type { CaseState } from "@/types";
@@ -41,20 +41,20 @@ const NEXT_ACTION: Partial<Record<CaseState, {
   label: string; route: string; icon: React.ElementType;
   color: string; bgColor: string; explain: string;
 }>> = {
-  NEW:               { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "AI analysis done. Review and propose recovery in the Analyst queue." },
-  EVIDENCE_PENDING:  { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "Evidence is being collected. Once done, propose recovery." },
-  FINDING_GENERATED: { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700",    bgColor: "bg-blue-50 border-blue-200",   explain: "Overcharge detected. Open Analyst Review to propose recovery." },
-  APPROVAL_PENDING:  { label: "Manager Approval", route: "/manager",  icon: CheckCircle2,color: "text-amber-700",   bgColor: "bg-amber-50 border-amber-200", explain: "Recovery proposed. A manager must approve to issue the governance token." },
-  EXECUTION_READY:   { label: "Execute Recovery", route: "/execute",  icon: Zap,         color: "text-emerald-700", bgColor: "bg-emerald-50 border-emerald-200", explain: "Token ACTIVE — 15-min window. Run 8-gate execution to issue the credit memo." },
+  NEW:               { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700 dark:text-blue-400",    bgColor: "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50",   explain: "AI analysis done. Review and propose recovery in the Analyst queue." },
+  EVIDENCE_PENDING:  { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700 dark:text-blue-400",    bgColor: "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50",   explain: "Evidence is being collected. Once done, propose recovery." },
+  FINDING_GENERATED: { label: "Analyst Review",   route: "/analyst",  icon: Brain,       color: "text-blue-700 dark:text-blue-400",    bgColor: "bg-blue-50 dark:bg-blue-950/40 border-blue-200 dark:border-blue-800/50",   explain: "96% confidence overcharge detected. Open Analyst Review to propose recovery." },
+  APPROVAL_PENDING:  { label: "Manager Approval", route: "/manager",  icon: CheckCircle2,color: "text-amber-700 dark:text-amber-400",   bgColor: "bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/50", explain: "Recovery proposed. A manager must approve to issue the governance token." },
+  EXECUTION_READY:   { label: "Execute Recovery", route: "/execute",  icon: Zap,         color: "text-emerald-700 dark:text-emerald-400", bgColor: "bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/50", explain: "Token ACTIVE — 15-min window. Run 8-gate execution to issue the credit memo." },
 };
 
 const STATE_STYLE: Record<string, { label: string; cls: string; dot: string }> = {
-  NEW:               { label: "New",              cls: "bg-slate-100 text-slate-600",     dot: "bg-slate-400"  },
-  EVIDENCE_PENDING:  { label: "Evidence Pending", cls: "bg-slate-100 text-slate-600",     dot: "bg-slate-400"  },
-  FINDING_GENERATED: { label: "AI Analyzed",      cls: "bg-purple-100 text-purple-700",   dot: "bg-purple-500" },
-  APPROVAL_PENDING:  { label: "Pending Approval", cls: "bg-amber-100 text-amber-700",     dot: "bg-amber-500"  },
-  EXECUTION_READY:   { label: "Execution Ready",  cls: "bg-blue-100 text-blue-700",       dot: "bg-blue-500"   },
-  DISPATCHED:        { label: "Dispatched",       cls: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500"},
+  NEW:               { label: "New",              cls: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400",       dot: "bg-slate-400"  },
+  EVIDENCE_PENDING:  { label: "Evidence Pending", cls: "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400",       dot: "bg-slate-400"  },
+  FINDING_GENERATED: { label: "AI Analyzed",      cls: "bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400", dot: "bg-purple-500" },
+  APPROVAL_PENDING:  { label: "Pending Approval", cls: "bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400",     dot: "bg-amber-500"  },
+  EXECUTION_READY:   { label: "Execution Ready",  cls: "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400",         dot: "bg-blue-500"   },
+  DISPATCHED:        { label: "Dispatched",       cls: "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400", dot: "bg-emerald-500"},
   OUTCOME_RECORDED:  { label: "Outcome Recorded", cls: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500"},
   CLOSED:            { label: "Closed",           cls: "bg-slate-100 text-slate-500",     dot: "bg-slate-400"  },
   ABORTED:           { label: "Aborted",          cls: "bg-red-100 text-red-700",         dot: "bg-red-500"    },
@@ -76,28 +76,29 @@ function SectionCard({ title, icon: Icon, status, children }: {
 }) {
   return (
     <div className={cn(
-      "bg-white rounded-xl border p-4 shadow-sm transition-opacity",
-      status === "pending" ? "opacity-50 border-slate-200" : "border-slate-200",
+      "bg-white dark:bg-card rounded-xl border p-4 shadow-sm transition-opacity",
+      status === "pending" ? "opacity-50 border-slate-200 dark:border-border" : "border-slate-200 dark:border-border",
     )}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <div className={cn(
             "h-7 w-7 rounded-lg flex items-center justify-center",
-            status === "done"   ? "bg-emerald-100" :
-            status === "active" ? "bg-blue-100"    : "bg-slate-100"
+            status === "done"   ? "bg-emerald-100 dark:bg-emerald-900/40" :
+            status === "active" ? "bg-blue-100 dark:bg-blue-900/40"       : "bg-slate-100 dark:bg-slate-800"
           )}>
             <Icon className={cn(
               "h-3.5 w-3.5",
-              status === "done"   ? "text-emerald-600" :
-              status === "active" ? "text-blue-600"    : "text-slate-400"
+              status === "done"   ? "text-emerald-600 dark:text-emerald-400" :
+              status === "active" ? "text-blue-600 dark:text-blue-400"       : "text-slate-400 dark:text-slate-500"
             )} />
           </div>
-          <p className="text-sm font-bold text-slate-700">{title}</p>
+          <p className="text-sm font-bold text-slate-700 dark:text-slate-200">{title}</p>
         </div>
         <span className={cn(
           "text-[10px] font-bold px-2 py-0.5 rounded-full",
-          status === "done"   ? "bg-emerald-100 text-emerald-700" :
-          status === "active" ? "bg-blue-100 text-blue-700"       : "bg-slate-100 text-slate-400"
+          status === "done"   ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400" :
+          status === "active" ? "bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400"             :
+                                "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
         )}>
           {status === "done" ? "DONE" : status === "active" ? "ACTIVE" : "PENDING"}
         </span>
@@ -117,7 +118,8 @@ export default function CaseDetail() {
   const [letterLoading, setLetterLoading]   = useState(false);
   const [sendEmail,     setSendEmail]       = useState("");
   const [showSendForm,  setShowSendForm]    = useState(false);
-  const [sendingLetter, setSendingLetter]   = useState(false);
+  const [sendLoading,   setSendLoading]     = useState(false);
+  const [sendResult,    setSendResult]      = useState<{message: string; sandbox?: boolean} | null>(null);
 
   const cq       = useQuery({ queryKey: ["case",           id], queryFn: () => zoikoApi.getCase(id),              retry: 1 });
   const eventsQ  = useQuery({ queryKey: ["case-events",    id], queryFn: () => zoikoApi.getCaseEvents(id),        retry: 1 });
@@ -127,7 +129,6 @@ export default function CaseDetail() {
   const tokenQ   = useQuery({ queryKey: ["token-for-case", id], queryFn: () => zoikoApi.getTokenForCase(id),      retry: false });
   const varQ     = useQuery({ queryKey: ["variances",       id], queryFn: () => zoikoApi.listVariances(id),       retry: false });
   const acrQ     = useQuery({ queryKey: ["acr",             id], queryFn: () => zoikoApi.getAcr(id),              retry: false });
-  const recoveryQ = useQuery({ queryKey: ["recovery-proof", id], queryFn: () => zoikoApi.getLatestRecoveryProof(id), retry: false });
 
   const sealMut = useMutation({
     mutationFn: () => zoikoApi.sealBundle(id),
@@ -146,9 +147,9 @@ export default function CaseDetail() {
     zoikoApi.downloadAcr(id).then(blob => {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = `acr_${id.slice(0, 8)}.json`;
+      a.href = url; a.download = `acr_${id.slice(0, 8)}.zip`;
       a.click(); URL.revokeObjectURL(url);
-    }).catch(() => toast.error("Download failed", "ACR not yet issued for this case"));
+    }).catch(() => toast.error("Download failed", "ACR zip not available — run Phase 4 demo first"));
   }
 
   async function handleGenerateLetter() {
@@ -167,19 +168,23 @@ export default function CaseDetail() {
 
   async function handleSendLetter() {
     if (!sendEmail.trim()) { toast.error("Email required", "Enter the carrier's email address"); return; }
-    setSendingLetter(true);
+    setSendLoading(true); setSendResult(null);
     try {
-      await api.post(`/cases/${id}/dispute-letter/send`, {
+      const theCase = cq.data;
+      const { data } = await api.post(`/cases/${id}/dispute-letter/send`, {
         recipient_email: sendEmail.trim(),
-        dispute_letter:  disputeLetter,
+        letter_text:     disputeLetter,
+        carrier:         theCase?.carrier ?? "",
+        overcharge:      theCase?.diff ?? 0,
+        currency:        theCase?.currency ?? "INR",
       });
-      toast.success("Email sent", `Dispute letter sent to ${sendEmail.trim()}`);
-      setShowSendForm(false);
-    } catch (e: any) {
-      const msg = e?.response?.data?.detail;
-      toast.error("Send failed", typeof msg === "string" ? msg : "Could not send the email. Please try again.");
+      setSendResult(data);
+      toast.success(data.sandbox ? "Sandbox — validated" : "Email sent!", data.message);
+    } catch (err: unknown) {
+      const e = err as {response?:{data?:{detail?:string}}};
+      toast.error("Send failed", e?.response?.data?.detail ?? "Check SENDGRID_API_KEY in .env");
     } finally {
-      setSendingLetter(false);
+      setSendLoading(false);
     }
   }
 
@@ -203,8 +208,8 @@ export default function CaseDetail() {
         <div className="h-12 w-12 rounded-full bg-red-50 flex items-center justify-center">
           <AlertTriangle className="h-6 w-6 text-red-400" />
         </div>
-        <p className="font-semibold text-slate-700">Case not found</p>
-        <p className="text-sm text-slate-400">The case ID <code className="bg-slate-100 px-1 rounded">{id}</code> was not found.</p>
+        <p className="font-semibold text-slate-700 dark:text-slate-200">Case not found</p>
+        <p className="text-sm text-slate-400 dark:text-slate-500">The case ID <code className="bg-slate-100 dark:bg-slate-800 px-1 rounded">{id}</code> was not found.</p>
         <button
           onClick={() => nav("/cases")}
           className="flex items-center gap-1.5 text-blue-600 text-sm font-semibold hover:underline"
@@ -219,17 +224,6 @@ export default function CaseDetail() {
   const completedStages = STATE_STAGE[cs.state] ?? 4;
   const next = NEXT_ACTION[cs.state];
 
-  const nextExplain = (() => {
-    if (cs.state === "FINDING_GENERATED" && findQ.data) {
-      const score = findQ.data.ai_confidence ?? findQ.data.confidence;
-      const pct = score != null ? `${(score * 100).toFixed(0)}%` : null;
-      return pct
-        ? `${pct} confidence overcharge detected. Open Analyst Review to propose recovery.`
-        : next?.explain;
-    }
-    return next?.explain;
-  })();
-
   const stageStatus = (n: number): "done" | "active" | "pending" =>
     n < completedStages ? "done" : n === completedStages ? "active" : "pending";
 
@@ -240,24 +234,24 @@ export default function CaseDetail() {
       <div>
         <button
           onClick={() => nav("/cases")}
-          className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-600 mb-2 transition-colors"
+          className="flex items-center gap-1 text-xs text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 mb-2 transition-colors"
         >
           <ArrowLeft className="h-3 w-3" /> All Cases
         </button>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold text-slate-800">
-              {cs.carrier} <span className="text-slate-400 font-normal">·</span> {cs.shipment_ref}
+            <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100">
+              {cs.carrier} <span className="text-slate-400 dark:text-slate-500 font-normal">·</span> {cs.shipment_ref}
             </h1>
             <div className="flex items-center gap-3 mt-1.5 flex-wrap">
-              <code className="text-[10px] font-mono text-slate-400 bg-slate-100 px-2 py-0.5 rounded">{cs.id}</code>
+              <code className="text-[10px] font-mono text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded">{cs.id}</code>
               <StateBadge state={cs.state} />
-              <span className="text-[11px] text-slate-400">Opened {formatDate(cs.opened_at)}</span>
+              <span className="text-[11px] text-slate-400 dark:text-slate-500">Opened {formatDate(cs.opened_at)}</span>
             </div>
           </div>
           <button
             onClick={() => cq.refetch()}
-            className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+            className="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
             title="Refresh"
           >
             <RefreshCw className="h-4 w-4" />
@@ -268,24 +262,13 @@ export default function CaseDetail() {
       {/* ── KPI row ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {[
-          { label: "Invoice Amount",  value: formatCurrency(cs.amount, cs.currency),                                                      top: "border-l-blue-500",   val: "text-slate-800" },
+          { label: "Invoice Amount",  value: formatCurrency(cs.amount, cs.currency),                                                      top: "border-l-blue-500",   val: "text-slate-800 dark:text-slate-100" },
           { label: "Overcharge",      value: cs.diff > 0 ? formatCurrency(cs.diff, cs.currency) : "—",                                    top: "border-l-red-500",    val: "text-red-600"   },
           { label: "Contract Rate",   value: valQ.data ? formatCurrency(valQ.data.contract_amount, cs.currency) : formatCurrency(cs.amount - cs.diff, cs.currency), top: "border-l-amber-500", val: "text-amber-600" },
-          {
-            label: findQ.data?.ai_confidence != null ? "AI Confidence" : "Rule Score",
-            value: findQ.data?.ai_confidence != null
-              ? `${(findQ.data.ai_confidence * 100).toFixed(0)}%`
-              : cs.confidence
-                ? `${(cs.confidence * 100).toFixed(0)}%`
-                : "—",
-            top: "border-l-emerald-500",
-            val: (findQ.data?.ai_confidence ?? cs.confidence ?? 0) >= 0.9
-              ? "text-emerald-600 font-bold"
-              : "text-amber-600",
-          },
+          { label: "AI Confidence",   value: cs.confidence ? `${(cs.confidence * 100).toFixed(0)}%` : (findQ.data ? `${(findQ.data.confidence * 100).toFixed(0)}%` : "—"), top: "border-l-emerald-500", val: (cs.confidence ?? 0) >= 0.9 ? "text-emerald-600 font-bold" : "text-amber-600" },
         ].map(k => (
-          <div key={k.label} className={cn("bg-white rounded-xl border border-slate-200 border-l-4 px-4 py-3.5 shadow-sm", k.top)}>
-            <p className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">{k.label}</p>
+          <div key={k.label} className={cn("bg-white dark:bg-card rounded-xl border border-slate-200 dark:border-border border-l-4 px-4 py-3.5 shadow-sm dark:shadow-none", k.top)}>
+            <p className="text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wide font-semibold">{k.label}</p>
             <p className={cn("text-xl font-bold mt-1.5 leading-tight", k.val)}>{k.value}</p>
           </div>
         ))}
@@ -300,7 +283,7 @@ export default function CaseDetail() {
             </div>
             <div>
               <p className={cn("font-bold text-sm", next.color)}>Action required: {next.label}</p>
-              <p className={cn("text-xs mt-0.5 leading-relaxed", next.color.replace("700","600"))}>{nextExplain}</p>
+              <p className={cn("text-xs mt-0.5 leading-relaxed", next.color.replace("700","600"))}>{next.explain}</p>
             </div>
           </div>
           <button
@@ -620,47 +603,6 @@ export default function CaseDetail() {
         </div>
       )}
 
-      {/* ── Recovery Status (Phase 6) ───────────────────────────────── */}
-      {recoveryQ.data && (
-        <div className="bg-white rounded-xl border border-blue-200 p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <div className="h-7 w-7 rounded-lg bg-blue-100 flex items-center justify-center">
-                <Wallet className="h-3.5 w-3.5 text-blue-600" />
-              </div>
-              <p className="text-sm font-bold text-slate-700">Recovery Status</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", recoveryQ.data.ledger_status === "LEDGER_CLOSED" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700")}>
-                {recoveryQ.data.ledger_status}
-              </span>
-              <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded-full", recoveryQ.data.acr_ready ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500")}>
-                {recoveryQ.data.acr_ready ? "ACR READY" : "ACR NOT READY"}
-              </span>
-            </div>
-          </div>
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-              <p className="text-[9px] text-slate-400 uppercase font-semibold">Expected</p>
-              <p className="text-sm font-bold text-slate-700">{formatCurrency(recoveryQ.data.total_expected, recoveryQ.data.currency)}</p>
-            </div>
-            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-              <p className="text-[9px] text-slate-400 uppercase font-semibold">Recovered</p>
-              <p className="text-sm font-bold text-emerald-700">{formatCurrency(recoveryQ.data.total_recovered, recoveryQ.data.currency)}</p>
-            </div>
-            <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2">
-              <p className="text-[9px] text-slate-400 uppercase font-semibold">Unrecovered</p>
-              <p className="text-sm font-bold text-amber-700">{formatCurrency(recoveryQ.data.total_unrecovered, recoveryQ.data.currency)}</p>
-            </div>
-          </div>
-          <div className="mt-2">
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-              {recoveryQ.data.recovery_status}
-            </span>
-          </div>
-        </div>
-      )}
-
       {/* ── ACR (Phase 4) ────────────────────────────────────────────── */}
       {acrQ.data && (
         <div className="bg-white rounded-xl border border-emerald-200 p-4 shadow-sm">
@@ -767,17 +709,19 @@ export default function CaseDetail() {
                     />
                     <button
                       onClick={handleSendLetter}
-                      disabled={!sendEmail.trim() || sendingLetter}
-                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap flex items-center gap-1.5"
+                      disabled={!sendEmail.trim() || sendLoading}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors whitespace-nowrap"
                     >
-                      {sendingLetter
-                        ? <><div className="h-3.5 w-3.5 rounded-full border-2 border-white/40 border-t-white animate-spin" />Sending…</>
-                        : "Send Email"
-                      }
+                      {sendLoading ? "Sending…" : "Send Email"}
                     </button>
                   </div>
+                  {sendResult && (
+                    <p className={`text-[11px] font-medium ${sendResult.sandbox ? "text-amber-600" : "text-emerald-600"}`}>
+                      {sendResult.sandbox ? "Sandbox mode — validated only." : "Email sent successfully."} {sendResult.message}
+                    </p>
+                  )}
                   <p className="text-[10px] text-slate-500">
-                    💡 Sends the dispute letter directly to the carrier from Zoiko's email service.
+                    Sends via SendGrid. Ensure SENDGRID_API_KEY is set in your .env file.
                   </p>
                 </div>
               )}
@@ -785,45 +729,6 @@ export default function CaseDetail() {
           )}
         </div>
       )}
-
-      {/* ── SC-002 Carrier Claim Link ─────────────────────────────────────── */}
-      {(() => {
-        const autoEvt = (eventsQ.data ?? []).find(
-          (e: any) => e.reason === "SC002_CLAIM_AUTO_CREATED"
-        );
-        if (!autoEvt) return null;
-        const payload = typeof autoEvt.payload === "string"
-          ? JSON.parse(autoEvt.payload)
-          : (autoEvt.payload ?? {});
-        const sc002Id = payload.sc002_case_id;
-        if (!sc002Id) return null;
-        return (
-          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 shadow-sm flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                <Zap className="h-4 w-4 text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-sm font-bold text-emerald-800">Carrier Claim Auto-Created</p>
-                <p className="text-[11px] text-emerald-600 mt-0.5">
-                  SC-002 claim opened automatically after 8-gate execution
-                  {payload.carrier_id ? ` · ${payload.carrier_id}` : ""}
-                  {payload.amount ? ` · ${payload.currency ?? ""} ${Number(payload.amount).toFixed(2)}` : ""}
-                </p>
-                <p className="text-[10px] font-mono text-emerald-500 mt-0.5">
-                  ref: {payload.claim_reference ?? sc002Id.slice(0, 8).toUpperCase()}
-                </p>
-              </div>
-            </div>
-            <button
-              onClick={() => nav(`/claims/${sc002Id}`)}
-              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-colors"
-            >
-              View Claim <ArrowRight className="h-3 w-3" />
-            </button>
-          </div>
-        );
-      })()}
 
       {/* ── Timeline ────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
@@ -843,60 +748,28 @@ export default function CaseDetail() {
           <ol className="relative border-l-2 border-slate-200 ml-3 space-y-0">
             {(eventsQ.data ?? []).map((e, i) => (
               <li key={e.id} className="pl-5 pb-5 last:pb-0 relative">
-                {(() => {
-                  const isAutoLink = (e as any).reason === "SC002_CLAIM_AUTO_CREATED";
-                  const payload = isAutoLink
-                    ? (typeof (e as any).payload === "string"
-                        ? JSON.parse((e as any).payload)
-                        : ((e as any).payload ?? {}))
-                    : null;
-                  return (
+                <div className={cn(
+                  "absolute -left-[9px] top-0.5 h-4 w-4 rounded-full border-2 border-white flex items-center justify-center",
+                  i === 0 ? "bg-blue-600" : "bg-emerald-500"
+                )}>
+                  {i === 0
+                    ? <span className="h-1 w-1 rounded-full bg-white" />
+                    : <CheckCircle2 className="h-2.5 w-2.5 text-white" />
+                  }
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] text-slate-400">{formatDate(e.created_at)}</span>
+                  {e.from_state && (
                     <>
-                      <div className={cn(
-                        "absolute -left-[9px] top-0.5 h-4 w-4 rounded-full border-2 border-white flex items-center justify-center",
-                        isAutoLink ? "bg-emerald-600" : i === 0 ? "bg-blue-600" : "bg-emerald-500"
-                      )}>
-                        {isAutoLink
-                          ? <Zap className="h-2.5 w-2.5 text-white" />
-                          : i === 0
-                            ? <span className="h-1 w-1 rounded-full bg-white" />
-                            : <CheckCircle2 className="h-2.5 w-2.5 text-white" />
-                        }
-                      </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[10px] text-slate-400">{formatDate(e.created_at)}</span>
-                        {e.from_state && (
-                          <>
-                            <StateBadge state={e.from_state} />
-                            <ChevronRight className="h-3 w-3 text-slate-300" />
-                          </>
-                        )}
-                        {e.to_state && <StateBadge state={e.to_state} />}
-                        {isAutoLink && (
-                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                            SC-002 claim auto-created
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        by <span className="font-semibold text-slate-600">{e.actor}</span>
-                        {isAutoLink && payload?.sc002_case_id ? (
-                          <>
-                            {" · "}
-                            <button
-                              onClick={() => nav(`/claims/${payload.sc002_case_id}`)}
-                              className="text-emerald-600 underline font-semibold hover:text-emerald-800"
-                            >
-                              Open SC-002 claim →
-                            </button>
-                          </>
-                        ) : (
-                          <> · {(e.reason ?? "").replace(/_/g, " ")}</>
-                        )}
-                      </p>
+                      <StateBadge state={e.from_state} />
+                      <ChevronRight className="h-3 w-3 text-slate-300" />
                     </>
-                  );
-                })()}
+                  )}
+                  <StateBadge state={e.to_state} />
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">
+                  by <span className="font-semibold text-slate-600">{e.actor}</span> · {e.reason.replace(/_/g, " ")}
+                </p>
               </li>
             ))}
           </ol>

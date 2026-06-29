@@ -3,6 +3,7 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── Light mode tokens ─────────────────────────────────────────── */
   :root {
     --background:          0 0% 100%;
     --foreground:          222 47% 11%;
@@ -29,99 +30,38 @@
     --zoiko-purple:  #8b5cf6;
     --zoiko-teal:    #06b6d4;
     --zoiko-emerald: #10b981;
+    --zoiko-amber:   #f59e0b;
+  }
 
-    /* Dark-mode semantic tokens — used by inline-styled components (e.g. Home.tsx).
-       These resolve via CSS custom properties so inline style={{ color: "var(--dm-text-1)" }}
-       automatically adapts when .dark is toggled on <html>. */
-    --dm-surface:         #ffffff;
-    --dm-surface-subtle:  #f8fafc;
-    --dm-surface-muted:   #f1f5f9;
-    --dm-text-1:          #1e293b;
-    --dm-text-2:          #334155;
-    --dm-text-3:          #475569;
-    --dm-text-4:          #64748b;
-    --dm-text-5:          #94a3b8;
-    --dm-text-6:          #cbd5e1;
-    --dm-border:          #e2e8f0;
-    --dm-shadow:          0 1px 4px rgba(0,0,0,0.04);
-    --dm-shadow-md:       0 4px 16px rgba(0,0,0,0.08);
+  /* ── Dark mode tokens ──────────────────────────────────────────── */
+  .dark {
+    --background:          222 47% 7%;      /* #0b1020 — main page bg      */
+    --foreground:          210 40% 92%;     /* near-white text              */
+    --card:                222 47% 10%;     /* #0d1424 — card surfaces      */
+    --card-foreground:     210 40% 92%;
+    --primary:             215 100% 55%;
+    --primary-foreground:  0 0% 100%;
+    --secondary:           217 33% 17%;     /* subtle dark surface          */
+    --secondary-foreground:210 40% 85%;
+    --muted:               217 33% 17%;
+    --muted-foreground:    215 16% 56%;
+    --accent:              217 33% 20%;
+    --accent-foreground:   210 40% 92%;
+    --destructive:         0 65% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border:              215 28% 20%;     /* subtle dark border           */
+    --input:               215 28% 20%;
+    --ring:                215 100% 55%;
+
+    /* Zoiko brand — lighter in dark mode so they're visible */
+    --zoiko-navy:    #e2e8f0;   /* becomes light text on dark bg  */
+    --zoiko-blue:    #60a5fa;
+    --zoiko-purple:  #a78bfa;
+    --zoiko-teal:    #22d3ee;
+    --zoiko-emerald: #34d399;
+    --zoiko-amber:   #fbbf24;
   }
 }
-
-/* ── Dark mode CSS variable overrides ───────────────────────────────────── */
-.dark {
-  color-scheme: dark;
-  --background:          222 47% 7%;
-  --foreground:          210 40% 95%;
-  --card:                222 47% 10%;
-  --card-foreground:     210 40% 95%;
-  --primary:             215 100% 60%;
-  --primary-foreground:  0 0% 100%;
-  --secondary:           217 33% 15%;
-  --secondary-foreground:210 40% 95%;
-  --muted:               217 33% 15%;
-  --muted-foreground:    215 20% 55%;
-  --accent:              217 33% 15%;
-  --accent-foreground:   210 40% 95%;
-  --destructive:         0 63% 31%;
-  --destructive-foreground: 210 40% 95%;
-  --border:              217 33% 18%;
-  --input:               217 33% 18%;
-  --ring:                215 100% 60%;
-
-  /* Dark-mode semantic tokens */
-  --dm-surface:         #0f172a;
-  --dm-surface-subtle:  #1e293b;
-  --dm-surface-muted:   #1e293b;
-  --dm-text-1:          #f1f5f9;
-  --dm-text-2:          #e2e8f0;
-  --dm-text-3:          #cbd5e1;
-  --dm-text-4:          #94a3b8;
-  --dm-text-5:          #64748b;
-  --dm-text-6:          #475569;
-  --dm-border:          #1e293b;
-  --dm-shadow:          0 1px 4px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04);
-  --dm-shadow-md:       0 4px 20px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05);
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   DARK MODE — TAILWIND UTILITY OVERRIDES
-   Uses :where() so specificity stays at (0,1,0). This means any explicit
-   dark:* Tailwind variant (specificity 0,2,0) in AppLayout always wins —
-   only elements WITHOUT explicit dark: variants (Cases, Claims, etc.) are
-   affected. Placed outside @layer for correct cascade ordering.
-   ══════════════════════════════════════════════════════════════════════════ */
-
-/* — Backgrounds — */
-.dark :where(.bg-white)            { background-color: #0f172a; }
-.dark :where(.bg-slate-50)         { background-color: #1e293b; }
-.dark :where(.bg-slate-100)        { background-color: #1e293b; }
-.dark :where(.bg-slate-200)        { background-color: #334155; }
-.dark :where(.hover\:bg-white):hover      { background-color: #1e293b; }
-.dark :where(.hover\:bg-slate-50):hover   { background-color: #253347; }
-.dark :where(.hover\:bg-slate-100):hover  { background-color: #1e293b; }
-
-/* — Text —
-   Only darken text that is too dark for dark backgrounds. slate-400 (#94a3b8)
-   and lighter are already readable on dark bg — do not override them. */
-.dark :where(.text-slate-900) { color: #f1f5f9; }
-.dark :where(.text-slate-800) { color: #e2e8f0; }
-.dark :where(.text-slate-700) { color: #cbd5e1; }
-.dark :where(.text-slate-600) { color: #94a3b8; }
-
-/* — Borders — */
-.dark :where(.border-slate-300) { border-color: #334155; }
-.dark :where(.border-slate-200) { border-color: #1e293b; }
-.dark :where(.border-slate-100) { border-color: #0f172a; }
-
-/* — Dividers — */
-.dark :where(.divide-slate-50)  > :not([hidden]) ~ :not([hidden]) { border-color: #0f172a; }
-.dark :where(.divide-slate-100) > :not([hidden]) ~ :not([hidden]) { border-color: #1e293b; }
-.dark :where(.divide-y)         > :not([hidden]) ~ :not([hidden]) { border-color: #1e293b; }
-
-/* — Scrollbar — */
-.dark ::-webkit-scrollbar-thumb       { background: #334155; }
-.dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
 
 @layer base {
   * { @apply border-border; }
@@ -132,23 +72,29 @@
     -moz-osx-font-smoothing: grayscale;
   }
 
-  /* Custom scrollbar */
+  /* ── Scrollbars ─────────────────────────────────────────────────── */
   ::-webkit-scrollbar       { width: 5px; height: 5px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
-  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  ::-webkit-scrollbar-thumb { background: #475569; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #64748b; }
 
-  /* Thin scrollbar for sidebar */
+  .dark ::-webkit-scrollbar-thumb       { background: #334155; }
+  .dark ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
   .scrollbar-thin::-webkit-scrollbar { width: 3px; }
 }
 
 @layer utilities {
-  /* Glassmorphism */
+  /* ── Glassmorphism ──────────────────────────────────────────────── */
   .glass {
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     background: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .dark .glass {
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .glass-dark {
@@ -158,7 +104,7 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
   }
 
-  /* Gradient text */
+  /* ── Gradient text ─────────────────────────────────────────────── */
   .text-gradient-blue {
     background: linear-gradient(135deg, #3b82f6, #06b6d4);
     -webkit-background-clip: text;
@@ -173,14 +119,12 @@
     background-clip: text;
   }
 
-  /* Glow effects */
+  /* ── Glow effects ──────────────────────────────────────────────── */
   .glow-blue  { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
   .glow-green { box-shadow: 0 0 20px rgba(16, 185, 129, 0.3); }
 
-  /* Animated gradient border */
-  .border-gradient {
-    position: relative;
-  }
+  /* ── Animated gradient border ─────────────────────────────────── */
+  .border-gradient { position: relative; }
   .border-gradient::before {
     content: "";
     position: absolute;
@@ -194,21 +138,21 @@
     pointer-events: none;
   }
 
-  /* Card hover lift */
-  .card-lift {
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-  }
+  /* ── Card hover lift ───────────────────────────────────────────── */
+  .card-lift { transition: transform 0.15s ease, box-shadow 0.15s ease; }
   .card-lift:hover {
     transform: translateY(-2px);
-    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.15);
+  }
+  .dark .card-lift:hover {
+    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.5);
   }
 
-  /* Status indicator pulse */
+  /* ── Status pulse ──────────────────────────────────────────────── */
   .status-online::before {
     content: "";
     display: inline-block;
-    width: 8px;
-    height: 8px;
+    width: 8px; height: 8px;
     border-radius: 50%;
     background: #10b981;
     box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
@@ -216,34 +160,60 @@
     margin-right: 6px;
     vertical-align: middle;
   }
-
   @keyframes status-pulse {
-    0%   { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
-    70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    0%   { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0.4); }
+    70%  { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);   }
+    100% { box-shadow: 0 0 0 0   rgba(16, 185, 129, 0);   }
   }
 
-  /* Fade-in animation */
-  .fade-in {
-    animation: fadeIn 0.3s ease-out;
-  }
+  /* ── Fade-in ───────────────────────────────────────────────────── */
+  .fade-in { animation: fadeIn 0.3s ease-out; }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(8px); }
-    to   { opacity: 1; transform: translateY(0); }
+    to   { opacity: 1; transform: translateY(0);   }
   }
 
-  /* Slide-in from left */
-  .slide-in-left {
-    animation: slideInLeft 0.25s ease-out;
-  }
+  /* ── Slide-in left ─────────────────────────────────────────────── */
+  .slide-in-left { animation: slideInLeft 0.25s ease-out; }
   @keyframes slideInLeft {
     from { opacity: 0; transform: translateX(-16px); }
-    to   { opacity: 1; transform: translateX(0); }
+    to   { opacity: 1; transform: translateX(0);     }
   }
 
-  /* Number counter spin */
+  /* ── Tabular numbers ───────────────────────────────────────────── */
   .counter-value {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum";
   }
+
+  /* ── Dark-mode explicit overrides for inline-style components ──── */
+  /* These fix components that use inline style={{color/background}} */
+  .dark .force-dark-bg  { background-color: hsl(222 47% 10%) !important; }
+  .dark .force-dark-text { color: hsl(210 40% 92%) !important; }
+  .dark .force-dark-border { border-color: hsl(215 28% 20%) !important; }
+
+  /* Dark-mode compatibility for older screens that still use fixed light utility classes. */
+  .dark .bg-white { background-color: hsl(var(--card)) !important; }
+  .dark .bg-slate-50 { background-color: hsl(var(--secondary)) !important; }
+  .dark .bg-slate-100 { background-color: hsl(var(--muted)) !important; }
+  .dark .border-slate-100,
+  .dark .border-slate-200,
+  .dark .border-slate-300 { border-color: hsl(var(--border)) !important; }
+  .dark .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+  .dark .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-color: hsl(var(--border)) !important; }
+  .dark .text-slate-900,
+  .dark .text-slate-800,
+  .dark .text-slate-700 { color: hsl(var(--foreground)) !important; }
+  .dark .text-slate-600 { color: hsl(var(--secondary-foreground)) !important; }
+  .dark .text-slate-500,
+  .dark .text-slate-400 { color: hsl(var(--muted-foreground)) !important; }
+  .dark input,
+  .dark textarea,
+  .dark select {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--card));
+    border-color: hsl(var(--input));
+  }
+  .dark input::placeholder,
+  .dark textarea::placeholder { color: hsl(var(--muted-foreground)); }
 }
