@@ -79,7 +79,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -122,7 +122,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -173,7 +173,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-002-carrier-claim/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-002-carrier-claim/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -209,7 +209,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-002-carrier-claim/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-002-carrier-claim/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -251,7 +251,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-002-carrier-claim/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-002-carrier-claim/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -292,7 +292,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-003-shipment-exception/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-003-shipment-exception/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -326,7 +326,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-003-shipment-exception/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-003-shipment-exception/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -371,7 +371,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-004-supplier-scorecard/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-004-supplier-scorecard/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -405,7 +405,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-004-supplier-scorecard/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-004-supplier-scorecard/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -450,7 +450,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-005-accessorial-dispute/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-005-accessorial-dispute/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
@@ -484,7 +484,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/slices/sc-005-accessorial-dispute/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "cd /app/backend/slices/sc-005-accessorial-dispute/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2"
     plan: free
     healthCheckPath: /health
     autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
