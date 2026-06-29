@@ -16,7 +16,7 @@ Seeds:
   SC-005  3 accessorial charge disputes (multi-line)
 """
 
-import uuid, sys, time, json
+import uuid, sys, time
 import requests
 from datetime import datetime, timedelta, timezone
 
@@ -475,7 +475,7 @@ if __name__ == "__main__":
     analyst, real_tenant = get_token("anil@zoiko.com",  "Anil@123")
     manager, _           = get_token("venky@zoiko.com", "Venky@123")
     # Patch module-level TENANT_ID so hdr() picks up the real tenant on every call
-    import builtins, sys as _sys
+    import sys as _sys
     _mod = _sys.modules[__name__]
     _mod.TENANT_ID = real_tenant
     print(f"  ✓ Tokens ready  (tenant: {real_tenant})")
