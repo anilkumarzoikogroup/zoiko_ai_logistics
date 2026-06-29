@@ -2,7 +2,10 @@ name: Deploy Backend → Render
 
 # Only fires after "Zoiko CI" completes successfully on main.
 # Render's autoDeploy is OFF for every service — this workflow is the
-# single deploy trigger for all four (api, execution, governance, opa).
+# single deploy trigger for all thirteen (SC-001's api/execution/governance/opa,
+# plus SC-002's claim-gateway/claim-execution/claim-governance, SC-003's
+# exception-gateway/exception-execution, SC-004's scorecard-gateway/
+# scorecard-execution, and SC-005's dispute-gateway/dispute-execution).
 on:
   workflow_run:
     workflows: ["Zoiko CI"]
@@ -35,6 +38,42 @@ jobs:
       - name: Trigger zoiko-opa deploy
         run: |
           curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_OPA }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-claim-gateway deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_CLAIM_GATEWAY }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-claim-execution deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_CLAIM_EXECUTION }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-claim-governance deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_CLAIM_GOVERNANCE }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-exception-gateway deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_EXCEPTION_GATEWAY }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-exception-execution deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_EXCEPTION_EXECUTION }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-scorecard-gateway deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_SCORECARD_GATEWAY }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-scorecard-execution deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_SCORECARD_EXECUTION }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-dispute-gateway deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_DISPUTE_GATEWAY }}" --fail --silent --show-error
+
+      - name: Trigger zoiko-dispute-execution deploy
+        run: |
+          curl -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL_DISPUTE_EXECUTION }}" --fail --silent --show-error
 
       # Render free plan cold starts can take 2–3 min — poll each service until healthy
       - name: Wait for zoiko-api to come up
@@ -86,5 +125,122 @@ jobs:
             sleep 15
           done
           echo "zoiko-opa smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-claim-gateway to come up
+        run: |
+          echo "Waiting for zoiko-claim-gateway..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-claim-gateway.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-claim-gateway is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-claim-gateway smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-claim-execution to come up
+        run: |
+          echo "Waiting for zoiko-claim-execution..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-claim-execution.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-claim-execution is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-claim-execution smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-claim-governance to come up
+        run: |
+          echo "Waiting for zoiko-claim-governance..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-claim-governance.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-claim-governance is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-claim-governance smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-exception-gateway to come up
+        run: |
+          echo "Waiting for zoiko-exception-gateway..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-exception-gateway.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-exception-gateway is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-exception-gateway smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-exception-execution to come up
+        run: |
+          echo "Waiting for zoiko-exception-execution..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-exception-execution.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-exception-execution is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-exception-execution smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-scorecard-gateway to come up
+        run: |
+          echo "Waiting for zoiko-scorecard-gateway..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-scorecard-gateway.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-scorecard-gateway is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-scorecard-gateway smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-scorecard-execution to come up
+        run: |
+          echo "Waiting for zoiko-scorecard-execution..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-scorecard-execution.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-scorecard-execution is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-scorecard-execution smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-dispute-gateway to come up
+        run: |
+          echo "Waiting for zoiko-dispute-gateway..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-dispute-gateway.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-dispute-gateway is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-dispute-gateway smoke test timed out after 5 minutes."
+          exit 1
+        continue-on-error: true
+
+      - name: Wait for zoiko-dispute-execution to come up
+        run: |
+          echo "Waiting for zoiko-dispute-execution..."
+          for i in $(seq 1 20); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-dispute-execution.onrender.com/health)
+            echo "Attempt $i — HTTP $STATUS"
+            if [ "$STATUS" = "200" ]; then echo "zoiko-dispute-execution is healthy."; exit 0; fi
+            sleep 15
+          done
+          echo "zoiko-dispute-execution smoke test timed out after 5 minutes."
           exit 1
         continue-on-error: true

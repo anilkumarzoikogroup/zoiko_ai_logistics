@@ -40,6 +40,17 @@ jobs:
         env:
           VITE_USE_MOCK: "false"
           VITE_API_BASE: https://zoiko-ai-logistics.onrender.com
+          VITE_API3_BASE: https://zoiko-governance.onrender.com
+          VITE_API4_BASE: https://zoiko-execution.onrender.com
+          VITE_API_CLAIM_BASE: https://zoiko-claim-gateway.onrender.com
+          VITE_API_CLAIM3_BASE: https://zoiko-claim-governance.onrender.com
+          VITE_API_CLAIM4_BASE: https://zoiko-claim-execution.onrender.com
+          VITE_API_EXC_BASE: https://zoiko-exception-gateway.onrender.com
+          VITE_API_EXC4_BASE: https://zoiko-exception-execution.onrender.com
+          VITE_API_SCORE_BASE: https://zoiko-scorecard-gateway.onrender.com
+          VITE_API_SCORE4_BASE: https://zoiko-scorecard-execution.onrender.com
+          VITE_API_ACC_BASE: https://zoiko-dispute-gateway.onrender.com
+          VITE_API_ACC4_BASE: https://zoiko-dispute-execution.onrender.com
 
       - name: Install Vercel CLI
         run: npm install --global vercel@latest

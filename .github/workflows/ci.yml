@@ -243,6 +243,81 @@ jobs:
         working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/execution
 
 # ─────────────────────────────────────────────────────────────────────────────
+# GATE 5d-f  SC-002 (carrier claim) — self-contained spine, own core_lib/platform_lib.
+# needs: gateway (not platform) so SC-001's `alembic upgrade head` has already
+# run against the shared Neon DB before these jobs start — running alembic
+# again in parallel causes advisory lock conflicts (see execution job above).
+# ─────────────────────────────────────────────────────────────────────────────
+  sc002-gateway:
+    name: SC-002 Gateway Integration
+    runs-on: ubuntu-latest
+    needs: gateway
+    env:
+      DB_URL: ${{ secrets.NEON_DB_URL }}
+      ZOIKO_DEV_MODE: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+      - run: pip install -e backend/slices/sc-002-carrier-claim/spine/core_lib/packages/zoiko-common -e backend/slices/sc-002-carrier-claim/spine/platform_lib/packages/zoiko-kms
+
+      - name: Run SC-002 Gateway tests
+        run: python -m pytest -v --tb=short -q
+        working-directory: backend/slices/sc-002-carrier-claim/spine/gateway
+
+  sc002-execution:
+    name: SC-002 Execution Tests
+    runs-on: ubuntu-latest
+    needs: gateway
+    env:
+      DB_URL: ${{ secrets.NEON_DB_URL }}
+      ZOIKO_DEV_MODE: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+      - run: pip install -e backend/slices/sc-002-carrier-claim/spine/core_lib/packages/zoiko-common -e backend/slices/sc-002-carrier-claim/spine/platform_lib/packages/zoiko-kms
+
+      - name: Run SC-002 Execution tests
+        run: python -m pytest -v --tb=short -q
+        working-directory: backend/slices/sc-002-carrier-claim/spine/execution
+
+  sc002-governance:
+    name: SC-002 Governance Integration
+    runs-on: ubuntu-latest
+    needs: gateway
+    env:
+      DB_URL: ${{ secrets.NEON_DB_URL }}
+      ZOIKO_DEV_MODE: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+      - run: pip install -e backend/slices/sc-002-carrier-claim/spine/core_lib/packages/zoiko-common -e backend/slices/sc-002-carrier-claim/spine/platform_lib/packages/zoiko-kms
+
+      - name: Run SC-002 Governance tests
+        run: python -m pytest -v --tb=short -q
+        working-directory: backend/slices/sc-002-carrier-claim/spine/governance
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GATE 6  Frontend — TypeScript build + type check
 # Runs after lint (parallel with phase gates)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,6 +363,55 @@ jobs:
 
       - name: Build frontend image
         run: docker build -f zoiko-frontend/frontend/Dockerfile -t zoiko-frontend:ci zoiko-frontend/frontend
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 8  Slice boot smoke test — SC-003/004/005 have no pytest suites, so this
+# is their only CI coverage: boot each service in the real backend image and
+# hit /health. Also covers SC-002 governance (pytest-covered above, but cheap
+# to double-check it actually boots in the production image).
+# ─────────────────────────────────────────────────────────────────────────────
+  slices-boot-smoke:
+    name: Slice Boot Smoke Test
+    runs-on: ubuntu-latest
+    needs: docker-build
+    env:
+      DB_URL: ${{ secrets.NEON_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -f Dockerfile -t zoiko-backend:ci .
+
+      - name: Boot each slice service and check /health
+        run: |
+          set -e
+          declare -a SERVICES=(
+            "sc002-governance:backend/slices/sc-002-carrier-claim/spine/governance:8012"
+            "sc003-gateway:backend/slices/sc-003-shipment-exception/spine/gateway:8020"
+            "sc003-execution:backend/slices/sc-003-shipment-exception/spine/execution:8021"
+            "sc004-gateway:backend/slices/sc-004-supplier-scorecard/spine/gateway:8030"
+            "sc004-execution:backend/slices/sc-004-supplier-scorecard/spine/execution:8031"
+            "sc005-gateway:backend/slices/sc-005-accessorial-dispute/spine/gateway:8040"
+            "sc005-execution:backend/slices/sc-005-accessorial-dispute/spine/execution:8041"
+          )
+          for entry in "${SERVICES[@]}"; do
+            IFS=":" read -r name dir port <<< "$entry"
+            echo "── Booting $name on port $port ──"
+            cid=$(docker run -d -e DB_URL="$DB_URL" -e ZOIKO_DEV_MODE=true -e PYTHONIOENCODING=utf-8 \
+              -p "$port:$port" zoiko-backend:ci \
+              sh -c "cd $dir && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $port")
+            sleep 8
+            if curl -f -s "http://localhost:$port/health" -o /dev/null; then
+              echo "$name healthy"
+            else
+              echo "$name FAILED health check"
+              docker logs "$cid"
+              docker stop "$cid" >/dev/null
+              exit 1
+            fi
+            docker stop "$cid" >/dev/null
+
+          done
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY  Tenant isolation fuzzer — main branch only
