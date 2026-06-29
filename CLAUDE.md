@@ -147,28 +147,58 @@ zoiko-logistics/
 │   │   ├── gateway/services/api_gateway/app.py   ← FastAPI port 8010
 │   │   ├── execution/services/api_gateway/app.py ← FastAPI port 8011
 │   │   └── governance/services/api_gateway/app.py← FastAPI port 8012
-│   └── sc-003-shipment-exception/spine/          ← gateway:8020  execution:8021
-│       ├── gateway/                              ← ingestion → canonical → case → evidence → reasoning → governance → token
-│       │   ├── paths.py                          ← sys.path bootstrap; falls back to SC-002 core_lib/platform_lib
-│       │   ├── shared/ (db, signer, redis_idem)
-│       │   └── services/ (ingestion_svc, canonical_truth, case_orchestration, evidence_svc,
-│       │                   reasoning_svc, governance_svc, token_svc, api_gateway)
-│       └── execution/                            ← 8-gate → reconciliation (Commitment Match) → ACR
+│   ├── sc-003-shipment-exception/spine/          ← gateway:8020  execution:8021
+│   │   ├── gateway/                              ← full 12-domain spine
+│   │   │   ├── paths.py                          ← sys.path bootstrap; falls back to SC-002 core_lib/platform_lib
+│   │   │   ├── shared/ (db, signer, redis_idem)
+│   │   │   └── services/ (ingestion_svc, validation_svc, canonical_truth, case_orchestration,
+│   │   │                   evidence_svc, reasoning_svc, governance_svc, token_svc, api_gateway)
+│   │   └── execution/                            ← 8-gate → reconciliation → ACR + transparency_log_svc
+│   │       ├── paths.py
+│   │       ├── shared/ (db, signer, redis_token)
+│   │       └── services/ (execution_gateway, reconciliation_svc, audit_acr_svc,
+│   │                       transparency_log_svc, api_gateway)
+│   │
+│   ├── sc-004-supplier-scorecard/spine/          ← gateway:8030  execution:8031
+│   │   ├── gateway/                              ← full 12-domain spine (all services split)
+│   │   │   ├── paths.py
+│   │   │   ├── shared/ (db, signer)
+│   │   │   └── services/ (ingestion_svc, validation_svc, canonical_truth, case_orchestration,
+│   │   │                   evidence_svc, reasoning_svc, governance_svc, token_svc,
+│   │   │                   scorecard_svc, api_gateway)
+│   │   └── execution/                            ← 8-gate → reconciliation (SCORE_OUTCOME) → ACR + transparency_log_svc
+│   │       ├── paths.py
+│   │       ├── shared/ (db, signer, redis_token)
+│   │       └── services/ (execution_gateway, reconciliation_svc, audit_acr_svc,
+│   │                       transparency_log_svc, api_gateway)
+│   │
+│   └── sc-005-accessorial-dispute/spine/         ← gateway:8040  execution:8041
+│       ├── gateway/                              ← full 12-domain spine
+│       │   ├── paths.py
+│       │   ├── shared/ (db, signer)
+│       │   └── services/ (ingestion_svc, validation_svc, canonical_truth, case_orchestration,
+│       │                   evidence_svc, reasoning_svc, governance_svc, token_svc, api_gateway)
+│       └── execution/                            ← 8-gate → reconciliation (PARTIAL_ACCEPTANCE) → ACR + transparency_log_svc
 │           ├── paths.py
 │           ├── shared/ (db, signer, redis_token)
-│           └── services/ (execution_gateway, reconciliation_svc, audit_acr_svc, api_gateway)
+│           └── services/ (execution_gateway, reconciliation_svc, audit_acr_svc,
+│                           transparency_log_svc, api_gateway)
 │
 └── zoiko-frontend/frontend/
-    ├── src/api/client.ts            ← Axios instances · api/api4 (SC-001) · apiClaim*/apiClaim4 (SC-002) · apiException/apiException4 (SC-003)
+    ├── src/api/client.ts            ← Axios instances — one per slice proxy prefix
     ├── src/api/zoiko.ts             ← API service layer (USE_MOCK gate on every method)
-    ├── src/features/recovery/RecoveryDashboard.tsx     ← Phase 6 recovery pipeline UI
-    ├── src/features/reconciliation/ReconciliationPage.tsx ← envelope reconciliation + variances
-    ├── src/features/exceptions/     ← SC-003 pages: Exceptions.tsx, NewException.tsx, ExceptionDetail.tsx
-    ├── src/features/compliance/     ← C07 pages: LegalHolds, DataRetention, CryptoShred,
-    │                                   ArchiveJobs, RestoreJobs, PurgeJobs, DataGovernance (admin-only)
-    ├── vite.config.ts               ← Dev proxy: /api→:8000, /api4→:8001, /claimapi→:8010, /excapi→:8020, /excapi4→:8021, /scoreapi→:8030, /scoreapi4→:8031
+    ├── src/features/cases/          ← SC-001 freight invoice cases
+    ├── src/features/claims/         ← SC-002 carrier claims
+    ├── src/features/exceptions/     ← SC-003 shipment exceptions
+    ├── src/features/scorecard/      ← SC-004 supplier scorecard
+    ├── src/features/disputes/       ← SC-005 accessorial disputes
+    ├── src/features/governance/     ← Analyst review + Manager approval (shared)
+    ├── src/features/acr/            ← Crypto audit / ACR viewer
+    ├── src/features/recovery/       ← Phase 6 recovery pipeline UI
+    ├── src/features/compliance/     ← C07 pages (admin-only)
+    ├── vite.config.ts               ← Dev proxy: all 12 backend ports (SC-001..005)
     ├── Dockerfile                   ← Multi-stage: dev + build + nginx prod
-    └── .env.local                   ← VITE_USE_MOCK=false · VITE_API_BASE=/api
+    └── .env.local                   ← Written by setup.bat — all proxy vars
 ```
 
 ---
@@ -178,17 +208,26 @@ zoiko-logistics/
 ```
 VITE_USE_MOCK=false
 VITE_API_BASE=/api
-VITE_DEV_JWT=<HS256 JWT signed with zoiko-dev-secret-for-testing-only>
+VITE_API3_BASE=/api3
+VITE_API4_BASE=/api4
 VITE_DEV_TENANT=11111111-1111-1111-1111-111111111111
 
-# SC-002 (carrier claims) — separate gateway/execution ports
+# SC-002 (carrier claims)
 VITE_API_CLAIM_BASE=/claimapi
 VITE_API_CLAIM3_BASE=/claimapi3
 VITE_API_CLAIM4_BASE=/claimapi4
 
-# SC-003 (shipment exceptions) — separate gateway/execution ports
+# SC-003 (shipment exceptions)
 VITE_API_EXC_BASE=/excapi
 VITE_API_EXC4_BASE=/excapi4
+
+# SC-004 (supplier scorecard)
+VITE_API_SCORE_BASE=/scoreapi
+VITE_API_SCORE4_BASE=/scoreapi4
+
+# SC-005 (accessorial disputes)
+VITE_API_ACC_BASE=/accapi
+VITE_API_ACC4_BASE=/accapi4
 ```
 
 - `VITE_USE_MOCK=false` — all API calls hit the real backend (never use mock fixtures)
@@ -210,6 +249,8 @@ VITE_API_EXC4_BASE=/excapi4
 | `/excapi` | 8020 | SC-003 gateway |
 | `/scoreapi4` | 8031 | SC-004 execution |
 | `/scoreapi` | 8030 | SC-004 gateway |
+| `/accapi4` | 8041 | SC-005 execution |
+| `/accapi` | 8040 | SC-005 gateway |
 
 **To switch back to mock mode** (no backend needed):
 ```
