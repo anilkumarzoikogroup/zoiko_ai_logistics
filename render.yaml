@@ -29,7 +29,7 @@ services:
 
       # ── CORS — allow your live Vercel frontend and local dev ─────────────
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
 
       # ── AI (Groq) ─────────────────────────────────────────────────────────
       - key: GROQ_API_KEY
@@ -94,7 +94,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: SANCTIONS_STRICT
@@ -190,7 +190,7 @@ services:
       - key: ZOIKO_FF_SC_002_ENABLED
         value: "*"
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: ZOIKO_RATE_LIMIT_ENABLED
         value: "true"
       - key: RATE_LIMIT_INGESTION
@@ -224,7 +224,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: SANCTIONS_STRICT
@@ -307,7 +307,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: ZOIKO_RATE_LIMIT_ENABLED
         value: "true"
       - key: RATE_LIMIT_INGESTION
@@ -341,7 +341,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: SANCTIONS_STRICT
@@ -386,7 +386,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: ZOIKO_RATE_LIMIT_ENABLED
         value: "true"
       - key: RATE_LIMIT_INGESTION
@@ -420,7 +420,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: SANCTIONS_STRICT
@@ -465,7 +465,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: ZOIKO_RATE_LIMIT_ENABLED
         value: "true"
       - key: RATE_LIMIT_INGESTION
@@ -499,7 +499,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-dev.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: SANCTIONS_STRICT
