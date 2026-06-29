@@ -246,7 +246,6 @@ class RecoveryInstrumentHandler:
     ) -> None:
         """Email managers when carrier confirms payment — best effort."""
         try:
-            import sys, os
             from shared.db import q, q1
             settings = q1(
                 "SELECT recovery_executed_email FROM tenant_notification_settings WHERE tenant_id=%s::uuid",

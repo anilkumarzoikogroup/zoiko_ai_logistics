@@ -1,11 +1,13 @@
 """
-SC-003 Token Service — issues 15-minute governance tokens for SLA credit execution.
+SC-003 Token Service — mints a signed governance token after an APPROVED SLA credit decision.
 
-Token binds: case_id + tenant_id + proposed_action + amount.
-Token TTL: 15 minutes (configurable via TOKEN_TTL_MINUTES env var).
+Scope: EXECUTE_SLA_CREDIT
+token_binding = SHA-256(tenant_id_utf8 || decision_id_utf8)
+token_hash    = SHA-256(b"zoiko.token.v1:" + JCS(token_payload))
+expires_at    = issued_at + TOKEN_TTL_MINUTES (default 15)
 """
 import hashlib
-import json
+import json as _json
 import os
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -14,8 +16,10 @@ import paths  # noqa: F401
 import psycopg2
 import psycopg2.extras
 import shared.db  # noqa: F401
-from zoiko_common.crypto.jcs import canonicalize
+
 from shared.signer import sign
+from zoiko_common.crypto.jcs import canonicalize
+from services.token_svc.models import TokenResult
 
 TOKEN_TTL_MINUTES = int(os.getenv("TOKEN_TTL_MINUTES", "15"))
 
@@ -26,82 +30,106 @@ class TokenHandler:
         self.broker      = kafka_broker
         self.tenant_slug = tenant_slug
 
-    def issue_token(
+    def mint(
         self,
-        tenant_id: str,
-        case_id: str,
+        tenant_id:   str,
         decision_id: str,
-        amount: float,
-        currency: str,
-        actor_sub: str,
-    ) -> dict:
-        """Issue a governance token. Returns token_id and expires_at."""
-        now        = datetime.now(timezone.utc)
-        expires_at = now + timedelta(minutes=TOKEN_TTL_MINUTES)
-        token_id   = uuid.uuid4()
-        case_uuid  = uuid.UUID(case_id)
-
-        token_dict = {
-            "action":      "ISSUE_SLA_CREDIT",
-            "amount":      str(amount),
-            "case_id":     case_id,
-            "currency":    currency,
-            "decision_id": decision_id,
-            "expires_at":  expires_at.isoformat(),
-            "tenant_id":   tenant_id,
-            "token_id":    str(token_id),
-        }
-        token_bytes = canonicalize(token_dict)
-        token_hash  = hashlib.sha256(b"zoiko.token.v1:" + token_bytes).digest()
-        t_sig, t_kid = sign(self.tenant_slug, token_hash)
-
-        # tenant_binding = SHA-256(tenant_id_utf8 || decision_id_utf8)
-        tenant_binding = hashlib.sha256(
-            tenant_id.encode("utf-8") + (decision_id or "").encode("utf-8")
-        ).digest()
+        case_id:     str,
+        scope:       str = "EXECUTE_SLA_CREDIT",
+        actor_sub:   str = "system",
+    ) -> TokenResult:
+        tenant_id   = str(tenant_id)
+        decision_id = str(decision_id)
+        case_id     = str(case_id)
+        now         = datetime.now(timezone.utc)
+        expires_at  = now + timedelta(minutes=TOKEN_TTL_MINUTES)
 
         psycopg2.extras.register_uuid()
         conn = psycopg2.connect(self.db_url)
         try:
-            cur = conn.cursor()
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                "SELECT outcome, approval_chain_hash, policy_version "
+                "FROM governance_decisions WHERE id=%s AND tenant_id=%s",
+                (uuid.UUID(decision_id), tenant_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Governance decision {decision_id} not found for tenant {tenant_id}")
+            if row["outcome"] != "EXECUTION_READY":
+                raise ValueError(
+                    f"Cannot mint token: decision outcome is {row['outcome']}, must be EXECUTION_READY"
+                )
+
+            approval_chain_hash_bytes = row["approval_chain_hash"] or b""
+            policy_version            = row["policy_version"] or "v1.0.0"
+            approval_chain_hash_hex   = (
+                approval_chain_hash_bytes.hex()
+                if isinstance(approval_chain_hash_bytes, (bytes, bytearray))
+                else str(approval_chain_hash_bytes)
+            )
+
+            tenant_binding = hashlib.sha256(
+                tenant_id.encode("utf-8") + decision_id.encode("utf-8")
+            ).digest()
+
+            token_payload = {
+                "approval_chain_hash": approval_chain_hash_hex,
+                "case_id":             case_id,
+                "decision_id":         decision_id,
+                "expires_at":          expires_at.isoformat(),
+                "policy_version":      policy_version,
+                "scope":               scope,
+                "tenant_id":           tenant_id,
+            }
+            token_bytes = canonicalize(token_payload)
+            token_hash  = hashlib.sha256(b"zoiko.token.v1:" + token_bytes).digest()
+            token_sig, token_kid = sign(self.tenant_slug, token_hash)
+
+            token_id = uuid.uuid4()
             cur.execute("""
                 INSERT INTO governance_tokens
                     (id, tenant_id, decision_id, scope, tenant_binding, status,
-                     expires_at, token_hash, signature, kid, issued_at)
-                VALUES (%s, %s, %s, %s, %s, 'ACTIVE', %s, %s, %s, %s, %s)
+                     expires_at, token_hash, signature, kid, issued_at,
+                     approval_chain_hash, policy_version)
+                VALUES (%s, %s, %s, %s, %s, 'ACTIVE', %s, %s, %s, %s, %s, %s, %s)
             """, (
-                token_id, tenant_id,
-                uuid.UUID(decision_id) if decision_id else None,
-                "ISSUE_SLA_CREDIT", tenant_binding,
-                expires_at, token_hash, t_sig, t_kid, now,
+                token_id, tenant_id, uuid.UUID(decision_id), scope,
+                tenant_binding, expires_at,
+                token_hash, token_sig, token_kid, now,
+                approval_chain_hash_bytes if approval_chain_hash_bytes else None,
+                policy_version,
             ))
 
-            # Advance case to EXECUTION_READY
-            cur.execute(
-                "UPDATE cases SET state='EXECUTION_READY' WHERE id=%s AND tenant_id=%s",
-                (case_uuid, tenant_id),
-            )
+            outbox_payload = {
+                "token_id":    str(token_id),
+                "decision_id": decision_id,
+                "case_id":     case_id,
+                "scope":       scope,
+                "expires_at":  expires_at.isoformat(),
+            }
             cur.execute("""
-                INSERT INTO case_events
-                    (id, tenant_id, case_id, event_type, from_state, to_state, actor_sub, payload, occurred_at)
-                VALUES (%s, %s, %s, 'TOKEN_ISSUED', 'APPROVAL_PENDING', 'EXECUTION_READY', %s, %s::jsonb, %s)
+                INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s)
             """, (
-                uuid.uuid4(), tenant_id, case_uuid, actor_sub,
-                json.dumps({"token_id": str(token_id), "expires_at": expires_at.isoformat()}),
-                now,
+                uuid.uuid4(), tenant_id, "token.issued",
+                str(token_id), _json.dumps(outbox_payload), now,
             ))
-
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
         finally:
             conn.close()
 
-        return {
-            "token_id":   str(token_id),
-            "expires_at": expires_at.isoformat(),
-            "action":     "ISSUE_SLA_CREDIT",
-            "amount":     amount,
-            "currency":   currency,
-        }
+        return TokenResult(
+            token_id            = token_id,
+            tenant_id           = tenant_id,
+            decision_id         = decision_id,
+            case_id             = case_id,
+            scope               = scope,
+            status              = "ACTIVE",
+            token_hash          = token_hash.hex(),
+            tenant_binding      = tenant_binding.hex(),
+            expires_at          = expires_at,
+            issued_at           = now,
+            approval_chain_hash = approval_chain_hash_hex,
+            policy_version      = policy_version,
+        )

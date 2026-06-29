@@ -462,7 +462,7 @@ def submit_claim_async_worker(
         slug = slug_row["slug"] if slug_row else "default"
 
         if body.lines:
-            body.claimed_amount = sum(l.claimed_amount for l in body.lines)
+            body.claimed_amount = sum(line.claimed_amount for line in body.lines)
 
         claim_in = ClaimInput(
             carrier_id=body.carrier, claim_reference=claim_ref,

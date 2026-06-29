@@ -4,7 +4,9 @@ Port: 8020
 
 Routes:
   GET  /health
-  POST /shipment-exceptions/submit          — full pipeline: ingest→canonical→case→finding
+  POST /shipment-exceptions/submit          — blocking full pipeline (returns case inline)
+  POST /shipment-exceptions/submit-async    — non-blocking, returns job_id immediately
+  GET  /shipment-exceptions/submit-status/{job_id} — poll until status=done|error
   GET  /shipment-exceptions                 — paginated list
   GET  /shipment-exceptions/{id}            — single exception
   GET  /shipment-exceptions/{id}/finding    — AI confidence + rule trace
@@ -27,7 +29,6 @@ load_dotenv()
 import uuid
 from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from services.api_gateway.auth import get_claims
 from services.api_gateway.models import (
@@ -42,7 +43,7 @@ from services.ingestion_svc.handler    import IngestionHandler
 from services.canonical_truth.handler  import CanonicalHandler
 from services.case_orchestration.handler import CaseHandler
 from services.governance_svc.handler   import GovernanceHandler
-from shared.db import q, q1, DB_URL
+from shared.db import DB_URL
 
 DB_URL          = os.getenv("DB_URL", DB_URL)
 TENANT_SLUG     = os.getenv("TENANT_SLUG", "default")
@@ -62,6 +63,89 @@ def _make_broker():
 
 _BROKER = _make_broker()
 
+# ── Async submit job store (in-memory + DB fallback) ─────────────────────────
+_SUBMIT_JOBS: dict = {}
+
+
+def _ensure_jobs_table() -> None:
+    try:
+        import psycopg2 as _pg
+        conn = _pg.connect(DB_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sc003_submit_jobs (
+                job_id    TEXT PRIMARY KEY,
+                status    TEXT NOT NULL DEFAULT 'pending',
+                case_data JSONB,
+                error     TEXT,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+        cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+def _persist_job(job_id: str, status: str, case_data, error) -> None:
+    try:
+        import psycopg2 as _pg, json as _json
+        conn = _pg.connect(DB_URL)
+        conn.autocommit = True
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO sc003_submit_jobs (job_id, status, case_data, error)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (job_id) DO UPDATE
+              SET status    = EXCLUDED.status,
+                  case_data = EXCLUDED.case_data,
+                  error     = EXCLUDED.error
+        """, (job_id, status, _json.dumps(case_data) if case_data else None, error))
+        cur.close(); conn.close()
+    except Exception:
+        pass
+
+
+def _load_job(job_id: str):
+    try:
+        import psycopg2 as _pg, psycopg2.extras as _pge
+        conn = _pg.connect(DB_URL)
+        cur = conn.cursor(cursor_factory=_pge.RealDictCursor)
+        cur.execute("SELECT status, case_data, error FROM sc003_submit_jobs WHERE job_id=%s", (job_id,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if row:
+            return {"status": row["status"], "case": row["case_data"], "error": row["error"]}
+    except Exception:
+        pass
+    return None
+
+
+def _async_worker(job_id: str, db_url: str, broker, body, tenant_id: str, actor_sub: str, idempotency_key: str, request_scope: dict) -> None:
+    try:
+        result = submit_exception(
+            db_url                        = db_url,
+            broker                        = broker,
+            ingestion_cls                 = IngestionHandler,
+            canonical_cls                 = CanonicalHandler,
+            case_cls                      = CaseHandler,
+            run_evidence_and_reasoning_fn = run_evidence_and_reasoning_exception,
+            capture_rest_push_metadata_fn = lambda *a, **kw: None,
+            request                       = None,
+            body                          = body,
+            idempotency_key               = idempotency_key,
+            tenant_id                     = tenant_id,
+            actor_sub                     = actor_sub,
+        )
+        _SUBMIT_JOBS[job_id] = {"status": "done", "case": result, "error": None}
+        _persist_job(job_id, "done", result, None)
+    except Exception as exc:
+        _SUBMIT_JOBS[job_id] = {"status": "error", "case": None, "error": str(exc)}
+        _persist_job(job_id, "error", None, str(exc))
+
+
+_ensure_jobs_table()
+
 _v1 = APIRouter()
 
 app = FastAPI(
@@ -80,7 +164,6 @@ app.add_middleware(
 
 def _row(r: dict) -> dict:
     """Serialize a DB row — convert UUID and datetime to str."""
-    import datetime
     out = {}
     for k, v in r.items():
         if hasattr(v, "isoformat"):
@@ -134,6 +217,42 @@ def post_submit(
         tenant_id                 = tenant_id,
         actor_sub                 = actor_sub,
     )
+
+
+# ── Async submit (non-blocking — frontend polls for result) ──────────────────
+
+@_v1.post("/shipment-exceptions/submit-async", status_code=202)
+def post_submit_async(
+    request: Request,
+    body: ShipmentExceptionSubmitRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    claims=Depends(get_claims),
+):
+    """Non-blocking submit: returns job_id immediately, runs pipeline in background.
+    Poll GET /shipment-exceptions/submit-status/{job_id} every 2s until status='done'.
+    """
+    import threading as _th, uuid as _u
+    job_id = str(_u.uuid4())
+    _SUBMIT_JOBS[job_id] = {"status": "pending", "case": None, "error": None}
+    _persist_job(job_id, "pending", None, None)
+    _th.Thread(
+        target=_async_worker,
+        args=(job_id, DB_URL, _BROKER, body, str(claims.tenant_id), claims.sub, idempotency_key, {}),
+        daemon=True,
+        name=f"sc003-submit-{job_id[:8]}",
+    ).start()
+    return {"job_id": job_id, "status": "pending"}
+
+
+@_v1.get("/shipment-exceptions/submit-status/{job_id}")
+def get_submit_status(job_id: str, claims=Depends(get_claims)):
+    """Poll after submit-async until status='done' or 'error'."""
+    job = _SUBMIT_JOBS.get(job_id) or _load_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    if job_id not in _SUBMIT_JOBS:
+        _SUBMIT_JOBS[job_id] = job
+    return job
 
 
 # ── List / Get ────────────────────────────────────────────────────────────────

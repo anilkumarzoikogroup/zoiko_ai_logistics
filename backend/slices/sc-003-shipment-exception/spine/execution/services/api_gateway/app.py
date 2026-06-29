@@ -22,7 +22,7 @@ import paths  # noqa: F401 — must be first
 
 load_dotenv()
 
-from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException, Request
+from fastapi import FastAPI, APIRouter, Depends, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.api_gateway.auth import get_claims

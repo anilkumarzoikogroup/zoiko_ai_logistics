@@ -58,15 +58,8 @@ END;
 $$;
 
 
--- -----------------------------------------------------------------------------
--- BLOCK 3: Add scorecard_id linkage column to governance_tasks
--- (governance_tasks is shared across slices — this column lets SC-004 tasks
---  trace back to the originating scorecard_period row)
--- -----------------------------------------------------------------------------
-
-ALTER TABLE governance_tasks ADD COLUMN IF NOT EXISTS scorecard_id UUID REFERENCES scorecard_periods(id) ON DELETE SET NULL;
-CREATE INDEX IF NOT EXISTS ix_governance_tasks_scorecard_id ON governance_tasks (scorecard_id) WHERE scorecard_id IS NOT NULL;
-
+-- scorecard_id column on governance_tasks is added by migration 0010
+-- (governance_tasks is created in 0010, so ALTER must happen after CREATE)
 
 -- =============================================================================
 -- END OF MIGRATION 0009

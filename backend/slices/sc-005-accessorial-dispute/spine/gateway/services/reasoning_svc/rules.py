@@ -12,7 +12,7 @@ def compute_confidence(charge_lines: list) -> tuple:
     cap_exceeded_rule fires if any line has billed > contracted_cap.
     tariff_clause_match_rule fires always (tariff reference present).
     """
-    disputed = [l for l in charge_lines if float(l.get("billed_amount", 0)) > float(l.get("contracted_cap", 0))]
+    disputed = [line for line in charge_lines if float(line.get("billed_amount", 0)) > float(line.get("contracted_cap", 0))]
     cap_exceeded = len(disputed) > 0
 
     rule_trace = {}

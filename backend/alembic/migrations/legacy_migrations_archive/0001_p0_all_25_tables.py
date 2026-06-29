@@ -13,8 +13,6 @@ Outbox partial index on shipped_at IS NULL for efficient relay polling.
 from __future__ import annotations
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 revision = "0001"
 down_revision = None

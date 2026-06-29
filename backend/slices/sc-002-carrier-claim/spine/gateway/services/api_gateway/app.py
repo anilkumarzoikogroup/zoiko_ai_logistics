@@ -2603,22 +2603,12 @@ def _email_approval_needed(
         if settings and settings.get("approval_needed_email") is False:
             return
 
-        case_row = q1(
-            """SELECT c.id, ca.name AS carrier_name, cl.claim_type
-               FROM cases c
-               LEFT JOIN carriers ca ON ca.id = c.carrier_id
-               LEFT JOIN claims cl ON cl.id = c.claim_id
-               WHERE c.id=%s::uuid AND c.tenant_id=%s::uuid LIMIT 1""",
-            (case_id, tenant_id),
-        )
-        carrier   = (case_row or {}).get("carrier_name") or "Unknown Carrier"
         recipients = q(
             "SELECT email, full_name, role FROM users WHERE tenant_id=%s::uuid AND role IN ('admin','manager') AND is_active=true",
             (tenant_id,),
         )
         from shared.email_sender import send_governance_notification, _log_notification
         app_url = os.getenv("APP_URL", "http://localhost:5173")
-        sym = "₹" if currency == "INR" else ("$" if currency == "USD" else currency + " ")
         for r in recipients:
             try:
                 send_governance_notification(
@@ -3981,7 +3971,6 @@ try:
     if _p4_sh not in list(_shared_pkg.__path__):
         _shared_pkg.__path__.append(_p4_sh)
 
-    import json as _json
     from fastapi import APIRouter as _P4APIRouter
     from services.reconciliation_svc.handler import ReconciliationHandler  as _ReconH
     from services.audit_acr_svc.handler      import AuditACRHandler        as _ACRH

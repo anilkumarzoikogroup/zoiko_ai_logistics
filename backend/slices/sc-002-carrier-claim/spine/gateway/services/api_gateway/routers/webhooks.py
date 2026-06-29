@@ -226,7 +226,6 @@ async def receive_carrier_settlement(
 
     envelope_id = str(envelope["id"])
     case_id     = str(envelope["case_id"]) if envelope["case_id"] else ""
-    expected    = float(envelope["amount"])
 
     # 5. Idempotency — skip if a response already exists for this envelope
     existing = q1(

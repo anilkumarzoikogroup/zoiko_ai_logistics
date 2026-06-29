@@ -1,0 +1,135 @@
+"""
+SC-005 Token Service — mints a signed governance token after an APPROVED accessorial dispute decision.
+
+Scope: EXECUTE_PARTIAL_CREDIT
+token_binding = SHA-256(tenant_id_utf8 || decision_id_utf8)
+token_hash    = SHA-256(b"zoiko.token.v1:" + JCS(token_payload))
+expires_at    = issued_at + TOKEN_TTL_MINUTES (default 15)
+"""
+import hashlib
+import json as _json
+import os
+import uuid
+from datetime import datetime, timezone, timedelta
+
+import paths  # noqa: F401
+import psycopg2
+import psycopg2.extras
+import shared.db  # noqa: F401
+
+from shared.signer import sign
+from zoiko_common.crypto.jcs import canonicalize
+from services.token_svc.models import TokenResult
+
+TOKEN_TTL_MINUTES = int(os.getenv("TOKEN_TTL_MINUTES", "15"))
+
+
+class TokenHandler:
+    def __init__(self, db_url: str, kafka_broker, tenant_slug: str = "default"):
+        self.db_url      = db_url
+        self.broker      = kafka_broker
+        self.tenant_slug = tenant_slug
+
+    def mint(
+        self,
+        tenant_id:   str,
+        decision_id: str,
+        case_id:     str,
+        scope:       str = "EXECUTE_PARTIAL_CREDIT",
+        actor_sub:   str = "system",
+    ) -> TokenResult:
+        tenant_id   = str(tenant_id)
+        decision_id = str(decision_id)
+        case_id     = str(case_id)
+        now         = datetime.now(timezone.utc)
+        expires_at  = now + timedelta(minutes=TOKEN_TTL_MINUTES)
+
+        psycopg2.extras.register_uuid()
+        conn = psycopg2.connect(self.db_url)
+        try:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                "SELECT outcome, approval_chain_hash, policy_version "
+                "FROM governance_decisions WHERE id=%s AND tenant_id=%s",
+                (uuid.UUID(decision_id), tenant_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"Governance decision {decision_id} not found for tenant {tenant_id}")
+            if row["outcome"] != "EXECUTION_READY":
+                raise ValueError(
+                    f"Cannot mint token: decision outcome is {row['outcome']}, must be EXECUTION_READY"
+                )
+
+            approval_chain_hash_bytes = row["approval_chain_hash"] or b""
+            policy_version            = row["policy_version"] or "v1.0.0"
+            approval_chain_hash_hex   = (
+                approval_chain_hash_bytes.hex()
+                if isinstance(approval_chain_hash_bytes, (bytes, bytearray))
+                else str(approval_chain_hash_bytes)
+            )
+
+            tenant_binding = hashlib.sha256(
+                tenant_id.encode("utf-8") + decision_id.encode("utf-8")
+            ).digest()
+
+            token_payload = {
+                "approval_chain_hash": approval_chain_hash_hex,
+                "case_id":             case_id,
+                "decision_id":         decision_id,
+                "expires_at":          expires_at.isoformat(),
+                "policy_version":      policy_version,
+                "scope":               scope,
+                "tenant_id":           tenant_id,
+            }
+            token_bytes = canonicalize(token_payload)
+            token_hash  = hashlib.sha256(b"zoiko.token.v1:" + token_bytes).digest()
+            token_sig, token_kid = sign(self.tenant_slug, token_hash)
+
+            token_id = uuid.uuid4()
+            cur.execute("""
+                INSERT INTO governance_tokens
+                    (id, tenant_id, decision_id, scope, tenant_binding, status,
+                     expires_at, token_hash, signature, kid, issued_at,
+                     approval_chain_hash, policy_version)
+                VALUES (%s, %s, %s, %s, %s, 'ACTIVE', %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                token_id, tenant_id, uuid.UUID(decision_id), scope,
+                tenant_binding, expires_at,
+                token_hash, token_sig, token_kid, now,
+                approval_chain_hash_bytes if approval_chain_hash_bytes else None,
+                policy_version,
+            ))
+
+            outbox_payload = {
+                "token_id":    str(token_id),
+                "decision_id": decision_id,
+                "case_id":     case_id,
+                "scope":       scope,
+                "expires_at":  expires_at.isoformat(),
+            }
+            cur.execute("""
+                INSERT INTO outbox (id, tenant_id, topic, partition_key, payload, created_at)
+                VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+            """, (
+                uuid.uuid4(), tenant_id, "token.issued",
+                str(token_id), _json.dumps(outbox_payload), now,
+            ))
+            conn.commit()
+        finally:
+            conn.close()
+
+        return TokenResult(
+            token_id            = token_id,
+            tenant_id           = tenant_id,
+            decision_id         = decision_id,
+            case_id             = case_id,
+            scope               = scope,
+            status              = "ACTIVE",
+            token_hash          = token_hash.hex(),
+            tenant_binding      = tenant_binding.hex(),
+            expires_at          = expires_at,
+            issued_at           = now,
+            approval_chain_hash = approval_chain_hash_hex,
+            policy_version      = policy_version,
+        )

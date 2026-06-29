@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useAppSelector } from "@/store";
-import { zoikoApi } from "@/api/zoiko";
+import { zoikoApi, scorecardApi, accessorialApi } from "@/api/zoiko";
 import { formatCurrency, cn } from "@/utils/cn";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -14,20 +14,31 @@ import {
   IndianRupee, BarChart3, Users, Truck, FileWarning,
   LayoutGrid, Building2, Package, ShoppingCart, Boxes, ChevronDown,
 } from "lucide-react";
-import type { Case, Claim, GovernanceToken } from "@/types";
+import type { Case, Claim, GovernanceToken, ShipmentException, ScorecardPeriod, AccessorialDispute } from "@/types";
 
-// A row from either backend, tagged so the merged dashboard can tell them apart —
-// SC-001 (invoices, port 8000) and SC-002 (claims, port 8010) are independent
-// backends sharing the same `cases` table shape, so the fields line up exactly.
-type SliceTag = "Invoices" | "Claims";
-type ActivityRow = (Case | Claim) & { slice: SliceTag };
+// All five live slices normalised to a common shape so the dashboard can merge
+// and sort them without knowing which backend they came from.
+type SliceTag = "Invoices" | "Claims" | "Shipments" | "Suppliers" | "Accessorials";
+interface ActivityRow {
+  id:          string;
+  slice:       SliceTag;
+  state:       string;
+  carrier:     string;
+  amount:      number;
+  diff:        number;
+  confidence?: number;
+  opened_at:   string;
+}
 
 // ── Colour palette ────────────────────────────────────────────────────────────
 const CARRIER_COLORS = ["#3b82f6","#8b5cf6","#f59e0b","#10b981","#ef4444","#06b6d4"];
 
 const SLICE_BADGE: Record<SliceTag, { bg: string; text: string }> = {
-  Invoices: { bg: "#dbeafe", text: "#2563eb" },
-  Claims:   { bg: "#ede9fe", text: "#7c3aed" },
+  Invoices:     { bg: "#dbeafe", text: "#2563eb" },
+  Claims:       { bg: "#ede9fe", text: "#7c3aed" },
+  Shipments:    { bg: "#d1fae5", text: "#059669" },
+  Suppliers:    { bg: "#fef3c7", text: "#d97706" },
+  Accessorials: { bg: "#fee2e2", text: "#dc2626" },
 };
 
 // Tab row above the dashboard — "All"/"Invoices"/"Claims" filter real data;
@@ -43,7 +54,7 @@ const TABS: { key: TabKey; icon: React.ElementType }[] = [
   { key: "Procurement",  icon: ShoppingCart },
   { key: "Inventory",    icon: Boxes },
 ];
-const LIVE_TABS: TabKey[] = ["All", "Invoices", "Claims"];
+const LIVE_TABS: TabKey[] = ["All", "Invoices", "Claims", "Shipments", "Suppliers", "Accessorials"];
 
 // ── Customer-friendly state labels ────────────────────────────────────────────
 const STATE_LABEL: Record<string, string> = {
@@ -204,30 +215,63 @@ export default function Home() {
   const user = useAppSelector(s => s.auth.user) || localStorage.getItem("zoiko_user") || "User";
   const role = useAppSelector(s => s.auth.role) || localStorage.getItem("zoiko_role") || "analyst";
 
-  const { data: cases = [],  isLoading: casesLoading }  = useQuery({ queryKey: ["cases"],  queryFn: () => zoikoApi.listCases(),   refetchInterval: 5000 });
-  const { data: claimsPaged, isLoading: claimsLoading } = useQuery({ queryKey: ["claims-dashboard"], queryFn: () => zoikoApi.listClaimsPaged({ page_size: 100 }), refetchInterval: 5000 });
-  const { data: tokens = [] }            = useQuery({ queryKey: ["tokens"], queryFn: () => zoikoApi.listTokens(), refetchInterval: 10000 });
-  const { data: stats }                  = useQuery({ queryKey: ["stats"],  queryFn: zoikoApi.getStats,            refetchInterval: 10000 });
+  const { data: cases = [],      isLoading: casesLoading }  = useQuery({ queryKey: ["cases"],      queryFn: () => zoikoApi.listCases(),                              refetchInterval: 5000  });
+  const { data: claimsPaged,    isLoading: claimsLoading } = useQuery({ queryKey: ["claims-dash"], queryFn: () => zoikoApi.listClaimsPaged({ page_size: 100 }),        refetchInterval: 5000  });
+  const { data: excPaged }                                  = useQuery({ queryKey: ["exc-dash"],   queryFn: () => zoikoApi.listExceptionsPaged({ page_size: 100 }),    refetchInterval: 10000 });
+  const { data: scorecards = [] }                           = useQuery({ queryKey: ["score-dash"], queryFn: () => scorecardApi.listScorecards(),                       refetchInterval: 15000 });
+  const { data: accPaged }                                  = useQuery({ queryKey: ["acc-dash"],   queryFn: () => accessorialApi.list({ page_size: 100 }),             refetchInterval: 10000 });
+  const { data: tokens = [] }                               = useQuery({ queryKey: ["tokens"],     queryFn: () => zoikoApi.listTokens(),                               refetchInterval: 10000 });
+  const { data: stats }                                     = useQuery({ queryKey: ["stats"],      queryFn: zoikoApi.getStats,                                         refetchInterval: 10000 });
   const [activeTab, setActiveTab] = useState<TabKey>("All");
   const [showSubmitMenu, setShowSubmitMenu] = useState(false);
 
-  // ── Derived metrics ──────────────────────────────────────────────────────────
-  const isLoading        = casesLoading || claimsLoading;
-  const invoiceRows: ActivityRow[] = (cases as Case[]).map(c => ({ ...c, slice: "Invoices" as const }));
-  const claimRows:   ActivityRow[] = (claimsPaged?.claims ?? []).map(c => ({ ...c, slice: "Claims" as const }));
-  const allActivityUnfiltered: ActivityRow[] = [...invoiceRows, ...claimRows]
-    .sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
-  // The whole dashboard below reacts to the selected tab — "All" shows everything,
-  // "Invoices"/"Claims" filter to that slice, the rest have no backend yet.
+  // ── Normalise each slice into ActivityRow ─────────────────────────────────
+  const isLoading = casesLoading || claimsLoading;
+
+  const invoiceRows: ActivityRow[] = (cases as Case[]).map(c => ({
+    id: c.id, slice: "Invoices" as const, state: c.state,
+    carrier: c.carrier ?? "—", amount: c.amount ?? 0, diff: c.diff ?? 0,
+    confidence: c.confidence, opened_at: c.opened_at,
+  }));
+  const claimRows: ActivityRow[] = ((claimsPaged as any)?.claims ?? []).map((c: any) => ({
+    id: c.id, slice: "Claims" as const, state: c.state,
+    carrier: c.carrier ?? "—", amount: c.amount ?? 0, diff: c.diff ?? 0,
+    confidence: c.confidence, opened_at: c.opened_at,
+  }));
+  const exceptionRows: ActivityRow[] = ((excPaged as any)?.exceptions ?? []).map((e: ShipmentException) => ({
+    id: e.id, slice: "Shipments" as const, state: e.state,
+    carrier: e.carrier ?? "—", amount: e.sla_penalty_amount ?? 0, diff: e.sla_penalty_amount ?? 0,
+    confidence: e.confidence, opened_at: e.opened_at,
+  }));
+  const scorecardRows: ActivityRow[] = (scorecards as ScorecardPeriod[])
+    .filter(s => s.breach_detected)
+    .map(s => ({
+      id: s.id, slice: "Suppliers" as const,
+      state: s.case_state ?? "FINDING_GENERATED",
+      carrier: s.carrier_id ?? "—", amount: s.composite_score ?? 0, diff: s.breach_amount ?? 0,
+      confidence: 0.9640, opened_at: s.created_at,
+    }));
+  const accRows: ActivityRow[] = ((accPaged as any)?.disputes ?? []).map((d: AccessorialDispute) => ({
+    id: d.id, slice: "Accessorials" as const,
+    state: d.case_state ?? "FINDING_GENERATED",
+    carrier: d.carrier_id ?? "—", amount: d.dispute_total ?? 0, diff: d.dispute_total ?? 0,
+    confidence: d.confidence ?? undefined, opened_at: d.opened_at ?? new Date().toISOString(),
+  }));
+
+  const allActivityUnfiltered: ActivityRow[] = [
+    ...invoiceRows, ...claimRows, ...exceptionRows, ...scorecardRows, ...accRows,
+  ].sort((a, b) => new Date(b.opened_at).getTime() - new Date(a.opened_at).getTime());
+
   const allActivity: ActivityRow[] =
     activeTab === "All" ? allActivityUnfiltered :
-    activeTab === "Invoices" || activeTab === "Claims" ? allActivityUnfiltered.filter(c => c.slice === activeTab) :
-    [];
+    allActivityUnfiltered.filter(c => c.slice === activeTab);
   const allTokens       = tokens as GovernanceToken[];
   const carriers        = carrierBreakdown(allActivity);
   const trend           = monthlyRecovery(allActivity);
 
-  const totalSubmitted  = activeTab === "All" ? (stats?.total_cases ?? invoiceRows.length) + claimRows.length : allActivity.length;
+  const totalSubmitted  = activeTab === "All"
+    ? (stats?.total_cases ?? invoiceRows.length) + claimRows.length + exceptionRows.length + scorecardRows.length + accRows.length
+    : allActivity.length;
   const totalOvercharge = allActivity.reduce((s, c) => s + (c.diff ?? 0), 0);
   const totalRecovered  = allActivity.filter(c => ["DISPATCHED","OUTCOME_RECORDED","CLOSED"].includes(c.state))
                                    .reduce((s, c) => s + (c.diff ?? 0), 0);
@@ -235,23 +279,44 @@ export default function Home() {
     ? Math.round((totalRecovered / totalOvercharge) * 100)
     : 0;
 
-  // Role-based action items — invoices route to the existing Analyst/Manager/Execute
-  // queues; claims are self-contained (propose/approve/execute happen inline on
-  // ClaimDetail), so they get their own action card pointing at /claims instead.
-  const needsProposal   = invoiceRows.filter(c => c.state === "FINDING_GENERATED");
-  const needsApproval   = invoiceRows.filter(c => c.state === "APPROVAL_PENDING");
-  const readyToExecute  = invoiceRows.filter(c => c.state === "EXECUTION_READY");
-  const activeTokens    = allTokens.filter(t => t.status === "ACTIVE");
-  const claimsNeedingAttention = claimRows.filter(c => !["CLOSED","ABORTED"].includes(c.state) && c.state !== "DISPATCHED" && c.state !== "OUTCOME_RECORDED");
+  // ── Tab-gated action items ── each set only activates on its own tab (or "All")
+  const onAll      = activeTab === "All";
+  const onInvoices = onAll || activeTab === "Invoices";
+  const onClaims   = onAll || activeTab === "Claims";
+  const onShip     = onAll || activeTab === "Shipments";
+  const onSupp     = onAll || activeTab === "Suppliers";
+  const onAcc      = onAll || activeTab === "Accessorials";
 
-  const pendingApprovalAmt = needsApproval.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const proposalAmt        = needsProposal.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const executeAmt         = readyToExecute.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const claimsAttentionAmt = claimsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const DONE = ["CLOSED","ABORTED","DISPATCHED","OUTCOME_RECORDED"];
+
+  // SC-001 — analyst/manager/execute queues (invoice-only governance flow)
+  const needsProposal  = onInvoices ? invoiceRows.filter(c => c.state === "FINDING_GENERATED") : [];
+  const needsApproval  = onInvoices ? invoiceRows.filter(c => c.state === "APPROVAL_PENDING")  : [];
+  const readyToExecute = onInvoices ? invoiceRows.filter(c => c.state === "EXECUTION_READY")   : [];
+  const activeTokens   = onInvoices ? allTokens.filter(t => t.status === "ACTIVE")             : [];
+
+  // SC-002 — claims needing any attention (inline flow on ClaimDetail)
+  const claimsNeedingAttention     = onClaims ? claimRows.filter(c => !DONE.includes(c.state))     : [];
+  // SC-003 — exceptions with open governance
+  const exceptionsNeedingAttention = onShip   ? exceptionRows.filter(c => !DONE.includes(c.state)) : [];
+  // SC-004 — scorecard breaches in governance
+  const suppliersNeedingAttention  = onSupp   ? scorecardRows.filter(c => !DONE.includes(c.state)) : [];
+  // SC-005 — accessorial disputes in governance
+  const accNeedingAttention        = onAcc    ? accRows.filter(c => !DONE.includes(c.state))       : [];
+
+  const pendingApprovalAmt  = needsApproval.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const proposalAmt         = needsProposal.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const executeAmt          = readyToExecute.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const claimsAttentionAmt  = claimsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const excAttentionAmt     = exceptionsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const accAttentionAmt     = accNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
 
   const hasActions = needsProposal.length > 0 || needsApproval.length > 0
                   || readyToExecute.length > 0 || activeTokens.length > 0
-                  || claimsNeedingAttention.length > 0;
+                  || claimsNeedingAttention.length > 0
+                  || exceptionsNeedingAttention.length > 0
+                  || suppliersNeedingAttention.length > 0
+                  || accNeedingAttention.length > 0;
 
   const recentActivity = allActivity.slice(0, 8);
   const openCases   = allActivity.filter(c => !["CLOSED","ABORTED"].includes(c.state));
@@ -266,6 +331,19 @@ export default function Home() {
 
   const firstName = user.split(" ")[0];
 
+  // Per-tab config — drives KPI label and scorecard heading copy.
+  const TAB_CONFIG: Record<TabKey, { entityLabel: string; metricLabel: string; counterpartyLabel: string; navAll: string }> = {
+    All:          { entityLabel: "Cases Submitted",    metricLabel: "Recovery Rate",    counterpartyLabel: "Counterparty Scorecard", navAll: "/cases"       },
+    Invoices:     { entityLabel: "Invoices Submitted", metricLabel: "Recovery Rate",    counterpartyLabel: "Carrier Scorecard",       navAll: "/cases"       },
+    Claims:       { entityLabel: "Claims Submitted",   metricLabel: "Recovery Rate",    counterpartyLabel: "Carrier Scorecard",       navAll: "/claims"      },
+    Shipments:    { entityLabel: "SLA Exceptions",     metricLabel: "Penalty Recovery", counterpartyLabel: "Carrier Scorecard",       navAll: "/exceptions"  },
+    Suppliers:    { entityLabel: "Score Breaches",     metricLabel: "Breach Rate",      counterpartyLabel: "Supplier Scorecard",      navAll: "/scorecards"  },
+    Accessorials: { entityLabel: "Disputes Filed",     metricLabel: "Recovery Rate",    counterpartyLabel: "Carrier Scorecard",       navAll: "/accessorial" },
+    Procurement:  { entityLabel: "Cases Submitted",    metricLabel: "Recovery Rate",    counterpartyLabel: "Counterparty Scorecard",  navAll: "/"            },
+    Inventory:    { entityLabel: "Cases Submitted",    metricLabel: "Recovery Rate",    counterpartyLabel: "Counterparty Scorecard",  navAll: "/"            },
+  };
+  const tabCfg = TAB_CONFIG[activeTab];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
 
@@ -276,9 +354,16 @@ export default function Home() {
             Welcome back, {firstName}
           </h1>
           <p style={{ fontSize: 13, color: "#64748b", margin: "2px 0 0" }}>
-            {role === "analyst" && "Review flagged invoices and propose recoveries"}
-            {role === "manager" && "Approve pending recovery proposals"}
-            {role === "admin"   && "Freight overcharge recovery overview"}
+            {activeTab === "All"          && role === "admin"   && "All-slice freight recovery overview"}
+            {activeTab === "All"          && role === "analyst" && "Review flagged cases across all slices"}
+            {activeTab === "All"          && role === "manager" && "Approve pending recovery proposals"}
+            {activeTab === "Invoices"     && "Invoice overcharge detection and recovery"}
+            {activeTab === "Claims"       && "Carrier claim management and settlement"}
+            {activeTab === "Shipments"    && "SLA breach detection and penalty recovery"}
+            {activeTab === "Suppliers"    && "Supplier scorecard breach governance"}
+            {activeTab === "Accessorials" && "Accessorial charge dispute resolution"}
+            {activeTab === "Procurement"  && "Procurement analytics (coming soon)"}
+            {activeTab === "Inventory"    && "Inventory analytics (coming soon)"}
           </p>
         </div>
         <div style={{ position: "relative" }}>
@@ -318,6 +403,23 @@ export default function Home() {
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                 >
                   <FileWarning style={{ width: 14, height: 14, color: "#7c3aed" }} /> Submit Claim
+                </button>
+                <div style={{ height: 1, background: "#f1f5f9", margin: "2px 0" }} />
+                <button
+                  onClick={() => { setShowSubmitMenu(false); nav("/exceptions/new"); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Truck style={{ width: 14, height: 14, color: "#059669" }} /> Report Exception
+                </button>
+                <button
+                  onClick={() => { setShowSubmitMenu(false); nav("/accessorial/new"); }}
+                  style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px", background: "none", border: "none", textAlign: "left", fontSize: 13, fontWeight: 600, color: "#334155", cursor: "pointer" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <Package style={{ width: 14, height: 14, color: "#dc2626" }} /> Submit Dispute
                 </button>
               </div>
             </>
@@ -369,19 +471,27 @@ export default function Home() {
             <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Action Required</p>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* SC-001 invoice governance queue (analyst/manager/execute) */}
             {(role === "analyst" || role === "admin") && (
-              <ActionCard icon={FileText}   title="Cases need your proposal"      count={needsProposal.length}  amount={proposalAmt}       actionLabel="Review Now"  to="/analyst"  color="#7c3aed" />
+              <ActionCard icon={FileText}    title="Invoices need your proposal"       count={needsProposal.length}  amount={proposalAmt}       actionLabel="Review Now"  to="/analyst"  color="#7c3aed" />
             )}
             {(role === "manager" || role === "admin") && (
-              <ActionCard icon={CheckCircle2} title="Cases awaiting your approval" count={needsApproval.length}  amount={pendingApprovalAmt} actionLabel="Approve Now" to="/manager"  color="#d97706" />
+              <ActionCard icon={CheckCircle2} title="Invoices awaiting your approval"  count={needsApproval.length}  amount={pendingApprovalAmt} actionLabel="Approve Now" to="/manager"  color="#d97706" />
             )}
             {(role === "manager" || role === "admin") && (
-              <ActionCard icon={Zap}        title="Approved cases ready to execute" count={readyToExecute.length} amount={executeAmt}        actionLabel="Execute"     to="/execute" color="#2563eb" />
+              <ActionCard icon={Zap}          title="Approved invoices ready to execute" count={readyToExecute.length} amount={executeAmt}       actionLabel="Execute"     to="/execute" color="#2563eb" />
             )}
             {(role === "manager" || role === "admin") && activeTokens.length > 0 && (
-              <ActionCard icon={Clock}      title="Active governance tokens expiring" count={activeTokens.length} amount={activeTokens.reduce((s,t)=>s+t.amount,0)} actionLabel="Execute Now" to="/execute" color="#dc2626" />
+              <ActionCard icon={Clock}        title="Governance tokens expiring"       count={activeTokens.length} amount={activeTokens.reduce((s,t)=>s+t.amount,0)} actionLabel="Execute Now" to="/execute" color="#dc2626" />
             )}
-            <ActionCard icon={FileWarning} title="Claims need attention" count={claimsNeedingAttention.length} amount={claimsAttentionAmt} actionLabel="Review Claims" to="/claims" color="#7c3aed" />
+            {/* SC-002 carrier claims */}
+            <ActionCard icon={FileWarning}  title="Carrier claims need attention"     count={claimsNeedingAttention.length}     amount={claimsAttentionAmt} actionLabel="Review Claims"     to="/claims"      color="#7c3aed" />
+            {/* SC-003 shipment exceptions */}
+            <ActionCard icon={Truck}        title="SLA exceptions need review"        count={exceptionsNeedingAttention.length}  amount={excAttentionAmt}    actionLabel="Review Exceptions" to="/exceptions"  color="#059669" />
+            {/* SC-004 scorecard breaches */}
+            <ActionCard icon={Building2}    title="Supplier breaches need approval"   count={suppliersNeedingAttention.length}   amount={0}                  actionLabel="Review Scores"     to="/scorecards"  color="#d97706" />
+            {/* SC-005 accessorial disputes */}
+            <ActionCard icon={Package}      title="Accessorial disputes need review"  count={accNeedingAttention.length}         amount={accAttentionAmt}    actionLabel="Review Disputes"   to="/accessorial" color="#dc2626" />
           </div>
         </div>
       )}
@@ -389,12 +499,14 @@ export default function Home() {
       {/* ── 4 KPI cards ───────────────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
         <KpiCard
-          label="Cases Submitted"
+          label={tabCfg.entityLabel}
           value={totalSubmitted.toLocaleString("en-IN")}
-          sub={`${openCases.length} in progress · ${invoiceRows.length} invoices, ${claimRows.length} claims`}
+          sub={activeTab === "All"
+            ? `${openCases.length} open · ${invoiceRows.length} inv · ${claimRows.length} claims · ${exceptionRows.length} exc · ${accRows.length} acc`
+            : `${openCases.length} open · ${allActivity.length} total`}
           icon={FileText}
           accent="#3b82f6"
-          onClick={() => nav("/cases")}
+          onClick={() => nav(tabCfg.navAll)}
         />
         <KpiCard
           label="Overcharges Detected"
@@ -413,7 +525,7 @@ export default function Home() {
           accent="#10b981"
         />
         <KpiCard
-          label="Recovery Rate"
+          label={tabCfg.metricLabel}
           value={totalOvercharge > 0 ? `${successRate}%` : "—"}
           sub={totalOvercharge > 0 ? (successRate >= 70 ? "Above target" : "In progress") : "No data yet"}
           subUp={successRate >= 70}
@@ -431,9 +543,9 @@ export default function Home() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <Truck style={{ width: 14, height: 14, color: "#64748b" }} />
-              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Counterparty Scorecard</p>
+              <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>{tabCfg.counterpartyLabel}</p>
             </div>
-            <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
+            <button onClick={() => nav(tabCfg.navAll)} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
               All <ChevronRight style={{ width: 12, height: 12 }} />
             </button>
           </div>
@@ -540,7 +652,7 @@ export default function Home() {
       <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #f1f5f9" }}>
           <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Recent Activity</p>
-          <button onClick={() => nav("/cases")} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
+          <button onClick={() => nav(tabCfg.navAll)} style={{ fontSize: 11, color: "#2563eb", fontWeight: 600, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
             View all <ArrowRight style={{ width: 12, height: 12 }} />
           </button>
         </div>
@@ -573,7 +685,7 @@ export default function Home() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#f8fafc" }}>
-                {["Case ID", "Slice", "Counterparty", "Amount", "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
+                {["Case ID", "Slice", activeTab === "Suppliers" ? "Carrier ID" : "Counterparty", activeTab === "Suppliers" ? "Score" : "Amount", activeTab === "Suppliers" ? "Breach Δ" : "Overcharge", "AI Confidence", "Status", "Date"].map(h => (
                   <th key={h} style={{ padding: "9px 16px", textAlign: "left", fontSize: 10, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid #f1f5f9" }}>
                     {h}
                   </th>
@@ -584,7 +696,13 @@ export default function Home() {
               {recentActivity.map((c, i) => (
                 <tr
                   key={c.id}
-                  onClick={() => nav(c.slice === "Claims" ? `/claims/${c.id}` : `/cases/${c.id}`)}
+                  onClick={() => {
+                    if      (c.slice === "Claims")       nav(`/claims/${c.id}`);
+                    else if (c.slice === "Shipments")    nav(`/exceptions/${c.id}`);
+                    else if (c.slice === "Suppliers")    nav(`/scorecards/${c.id}`);
+                    else if (c.slice === "Accessorials") nav(`/accessorial/${c.id}`);
+                    else                                 nav(`/cases/${c.id}`);
+                  }}
                   style={{ cursor: "pointer", borderBottom: i < recentActivity.length - 1 ? "1px solid #f8fafc" : "none", transition: "background 0.1s" }}
                   onMouseEnter={e => (e.currentTarget.style.background = "#f8fafc")}
                   onMouseLeave={e => (e.currentTarget.style.background = "transparent")}

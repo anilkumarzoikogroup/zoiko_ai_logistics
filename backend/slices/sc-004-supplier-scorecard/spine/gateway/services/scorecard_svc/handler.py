@@ -24,7 +24,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
-from shared.db import q, q1, DB_URL
+from shared.db import q, q1
 
 # ── Formula weights — deterministic, never change ─────────────────────────────
 WEIGHTS = {
@@ -265,7 +265,6 @@ class ScorecardHandler:
         case_id    = uuid.uuid4()
         finding_id = uuid.uuid4()
         bundle_id  = uuid.uuid4()
-        item_id    = uuid.uuid4()
 
         # ── Evidence item: scorecard payload ──────────────────────────────────
         evidence_payload = json.dumps({

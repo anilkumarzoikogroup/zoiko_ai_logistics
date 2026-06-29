@@ -1,7 +1,6 @@
 import paths  # noqa F401
 import uuid
 import hashlib
-import json
 from datetime import datetime, timezone
 
 from shared.db import q, q1, DB_URL
@@ -113,7 +112,7 @@ class IngestionHandler:
         return {
             "source_record_id": str(source_record_id),
             "charge_lines": charge_lines,
-            "total_billed": sum(float(l["billed_amount"]) for l in charge_lines),
-            "total_cap": sum(float(l["contracted_cap"]) for l in charge_lines),
+            "total_billed": sum(float(line["billed_amount"]) for line in charge_lines),
+            "total_cap": sum(float(line["contracted_cap"]) for line in charge_lines),
             "dispute_total": dispute_total,
         }

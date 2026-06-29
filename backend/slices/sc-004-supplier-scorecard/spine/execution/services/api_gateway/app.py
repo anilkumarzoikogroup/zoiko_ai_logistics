@@ -2,7 +2,7 @@
 import paths  # noqa: F401 — must be first
 
 import os
-from fastapi import FastAPI, Depends, HTTPException, Header, status
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 

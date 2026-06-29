@@ -197,7 +197,7 @@ class ShipmentExceptionValidationHandler:
         result_id = str(uuid.uuid4())
         try:
             import json as _json
-            from shared.db import q as _q, q1 as _q1
+            from shared.db import q as _q
             import psycopg2, psycopg2.extras
             psycopg2.extras.register_uuid()
 

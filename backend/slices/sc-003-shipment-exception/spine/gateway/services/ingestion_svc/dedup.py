@@ -1,5 +1,4 @@
 """SC-003 deduplication helpers — same pattern as SC-002."""
-import hashlib
 
 
 def compute_dedup_key(
@@ -30,7 +29,7 @@ def write_dedup_index(
     source_record_id, original_id, external_source_ref: str,
     payload_hash_hex: str, source_type: str, source_type_version: str,
 ) -> None:
-    import uuid, datetime
+    import uuid
     # Use a savepoint so a failure (e.g. table missing) doesn't abort the outer transaction.
     try:
         cur.execute("SAVEPOINT write_dedup_index")

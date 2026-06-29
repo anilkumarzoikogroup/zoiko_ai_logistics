@@ -38,7 +38,6 @@ def _reset_pool():
             except Exception: pass
         _pool = _make_pool()
 
-from contextlib import contextmanager
 
 @contextmanager
 def get_conn(db_url=None):

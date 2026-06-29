@@ -25,7 +25,9 @@ services:
       - key: ZOIKO_FF_SC_001_ENABLED
         value: "*"
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics-quwz.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+
+      # ── AI (Groq) ─────────────────────────────────────────────────────────
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
@@ -63,7 +65,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
     autoDeploy: false
@@ -78,7 +80,7 @@ services:
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: SANCTIONS_STRICT
@@ -106,7 +108,7 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    dockerCommand: "sh -c 'cd /app/backend/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
+    dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
     autoDeploy: false

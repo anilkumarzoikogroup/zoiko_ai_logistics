@@ -19,8 +19,6 @@ Column additions:
 """
 from __future__ import annotations
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB
 
 revision = "0005"
 down_revision = "0004"

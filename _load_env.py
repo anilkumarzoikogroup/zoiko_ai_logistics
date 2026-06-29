@@ -22,7 +22,7 @@ except Exception:
 with open(".env_tmp.bat", "w", encoding="ascii", errors="replace") as out:
     for k, v in vals.items():
         if v is not None:
-            # Quote value to prevent & in URLs being treated as command separator
+            # Quoted form handles & % ^ and other special batch characters
             out.write(f'set "{k}={v}"\r\n')
 
 print("OK")

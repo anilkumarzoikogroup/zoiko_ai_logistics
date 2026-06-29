@@ -40,8 +40,8 @@ jobs:
         env:
           VITE_USE_MOCK: "false"
 
-          # ── SC-001 (freight invoice overcharge) ───────────────────────────
-          VITE_API_BASE:    "https://zoiko-api.onrender.com"
+          # ── SC-001 (freight invoice overcharge) — confirmed real hostname ──
+          VITE_API_BASE:    "https://zoiko-ai-logistics-2f1v.onrender.com"
           VITE_API3_BASE:   "https://zoiko-governance.onrender.com"
           VITE_API4_BASE:   "https://zoiko-execution.onrender.com"
 

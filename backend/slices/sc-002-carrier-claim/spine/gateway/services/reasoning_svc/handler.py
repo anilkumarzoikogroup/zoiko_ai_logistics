@@ -140,7 +140,6 @@ class AgentRuntime:
 
         for rule_name, rule_result in {k: v for k, v in rule_trace.items() if k != "weighted_average"}.items():
             step_num += 1
-            rule_cfg = rules.get(rule_name, {})
             steps.append({
                 "step":           step_num,
                 "tool":           "RULE_ENGINE",

@@ -17,7 +17,7 @@ import os
 import uuid
 import json
 import hashlib
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import paths  # noqa: F401
 
