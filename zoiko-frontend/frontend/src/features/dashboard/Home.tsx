@@ -279,23 +279,44 @@ export default function Home() {
     ? Math.round((totalRecovered / totalOvercharge) * 100)
     : 0;
 
-  // Role-based action items — invoices route to the existing Analyst/Manager/Execute
-  // queues; claims are self-contained (propose/approve/execute happen inline on
-  // ClaimDetail), so they get their own action card pointing at /claims instead.
-  const needsProposal   = invoiceRows.filter(c => c.state === "FINDING_GENERATED");
-  const needsApproval   = invoiceRows.filter(c => c.state === "APPROVAL_PENDING");
-  const readyToExecute  = invoiceRows.filter(c => c.state === "EXECUTION_READY");
-  const activeTokens    = allTokens.filter(t => t.status === "ACTIVE");
-  const claimsNeedingAttention = claimRows.filter(c => !["CLOSED","ABORTED"].includes(c.state) && c.state !== "DISPATCHED" && c.state !== "OUTCOME_RECORDED");
+  // ── Tab-gated action items ── each set only activates on its own tab (or "All")
+  const onAll      = activeTab === "All";
+  const onInvoices = onAll || activeTab === "Invoices";
+  const onClaims   = onAll || activeTab === "Claims";
+  const onShip     = onAll || activeTab === "Shipments";
+  const onSupp     = onAll || activeTab === "Suppliers";
+  const onAcc      = onAll || activeTab === "Accessorials";
 
-  const pendingApprovalAmt = needsApproval.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const proposalAmt        = needsProposal.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const executeAmt         = readyToExecute.reduce((s, c) => s + (c.diff ?? 0), 0);
-  const claimsAttentionAmt = claimsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const DONE = ["CLOSED","ABORTED","DISPATCHED","OUTCOME_RECORDED"];
+
+  // SC-001 — analyst/manager/execute queues (invoice-only governance flow)
+  const needsProposal  = onInvoices ? invoiceRows.filter(c => c.state === "FINDING_GENERATED") : [];
+  const needsApproval  = onInvoices ? invoiceRows.filter(c => c.state === "APPROVAL_PENDING")  : [];
+  const readyToExecute = onInvoices ? invoiceRows.filter(c => c.state === "EXECUTION_READY")   : [];
+  const activeTokens   = onInvoices ? allTokens.filter(t => t.status === "ACTIVE")             : [];
+
+  // SC-002 — claims needing any attention (inline flow on ClaimDetail)
+  const claimsNeedingAttention     = onClaims ? claimRows.filter(c => !DONE.includes(c.state))     : [];
+  // SC-003 — exceptions with open governance
+  const exceptionsNeedingAttention = onShip   ? exceptionRows.filter(c => !DONE.includes(c.state)) : [];
+  // SC-004 — scorecard breaches in governance
+  const suppliersNeedingAttention  = onSupp   ? scorecardRows.filter(c => !DONE.includes(c.state)) : [];
+  // SC-005 — accessorial disputes in governance
+  const accNeedingAttention        = onAcc    ? accRows.filter(c => !DONE.includes(c.state))       : [];
+
+  const pendingApprovalAmt  = needsApproval.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const proposalAmt         = needsProposal.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const executeAmt          = readyToExecute.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const claimsAttentionAmt  = claimsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const excAttentionAmt     = exceptionsNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
+  const accAttentionAmt     = accNeedingAttention.reduce((s, c) => s + (c.diff ?? 0), 0);
 
   const hasActions = needsProposal.length > 0 || needsApproval.length > 0
                   || readyToExecute.length > 0 || activeTokens.length > 0
-                  || claimsNeedingAttention.length > 0;
+                  || claimsNeedingAttention.length > 0
+                  || exceptionsNeedingAttention.length > 0
+                  || suppliersNeedingAttention.length > 0
+                  || accNeedingAttention.length > 0;
 
   const recentActivity = allActivity.slice(0, 8);
   const openCases   = allActivity.filter(c => !["CLOSED","ABORTED"].includes(c.state));
@@ -333,9 +354,16 @@ export default function Home() {
             Welcome back, {firstName}
           </h1>
           <p style={{ fontSize: 13, color: "#64748b", margin: "2px 0 0" }}>
-            {role === "analyst" && "Review flagged invoices and propose recoveries"}
-            {role === "manager" && "Approve pending recovery proposals"}
-            {role === "admin"   && "Freight overcharge recovery overview"}
+            {activeTab === "All"          && role === "admin"   && "All-slice freight recovery overview"}
+            {activeTab === "All"          && role === "analyst" && "Review flagged cases across all slices"}
+            {activeTab === "All"          && role === "manager" && "Approve pending recovery proposals"}
+            {activeTab === "Invoices"     && "Invoice overcharge detection and recovery"}
+            {activeTab === "Claims"       && "Carrier claim management and settlement"}
+            {activeTab === "Shipments"    && "SLA breach detection and penalty recovery"}
+            {activeTab === "Suppliers"    && "Supplier scorecard breach governance"}
+            {activeTab === "Accessorials" && "Accessorial charge dispute resolution"}
+            {activeTab === "Procurement"  && "Procurement analytics (coming soon)"}
+            {activeTab === "Inventory"    && "Inventory analytics (coming soon)"}
           </p>
         </div>
         <div style={{ position: "relative" }}>
@@ -443,19 +471,27 @@ export default function Home() {
             <p style={{ fontSize: 13, fontWeight: 700, color: "#1e293b", margin: 0 }}>Action Required</p>
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* SC-001 invoice governance queue (analyst/manager/execute) */}
             {(role === "analyst" || role === "admin") && (
-              <ActionCard icon={FileText}   title="Cases need your proposal"      count={needsProposal.length}  amount={proposalAmt}       actionLabel="Review Now"  to="/analyst"  color="#7c3aed" />
+              <ActionCard icon={FileText}    title="Invoices need your proposal"       count={needsProposal.length}  amount={proposalAmt}       actionLabel="Review Now"  to="/analyst"  color="#7c3aed" />
             )}
             {(role === "manager" || role === "admin") && (
-              <ActionCard icon={CheckCircle2} title="Cases awaiting your approval" count={needsApproval.length}  amount={pendingApprovalAmt} actionLabel="Approve Now" to="/manager"  color="#d97706" />
+              <ActionCard icon={CheckCircle2} title="Invoices awaiting your approval"  count={needsApproval.length}  amount={pendingApprovalAmt} actionLabel="Approve Now" to="/manager"  color="#d97706" />
             )}
             {(role === "manager" || role === "admin") && (
-              <ActionCard icon={Zap}        title="Approved cases ready to execute" count={readyToExecute.length} amount={executeAmt}        actionLabel="Execute"     to="/execute" color="#2563eb" />
+              <ActionCard icon={Zap}          title="Approved invoices ready to execute" count={readyToExecute.length} amount={executeAmt}       actionLabel="Execute"     to="/execute" color="#2563eb" />
             )}
             {(role === "manager" || role === "admin") && activeTokens.length > 0 && (
-              <ActionCard icon={Clock}      title="Active governance tokens expiring" count={activeTokens.length} amount={activeTokens.reduce((s,t)=>s+t.amount,0)} actionLabel="Execute Now" to="/execute" color="#dc2626" />
+              <ActionCard icon={Clock}        title="Governance tokens expiring"       count={activeTokens.length} amount={activeTokens.reduce((s,t)=>s+t.amount,0)} actionLabel="Execute Now" to="/execute" color="#dc2626" />
             )}
-            <ActionCard icon={FileWarning} title="Claims need attention" count={claimsNeedingAttention.length} amount={claimsAttentionAmt} actionLabel="Review Claims" to="/claims" color="#7c3aed" />
+            {/* SC-002 carrier claims */}
+            <ActionCard icon={FileWarning}  title="Carrier claims need attention"     count={claimsNeedingAttention.length}     amount={claimsAttentionAmt} actionLabel="Review Claims"     to="/claims"      color="#7c3aed" />
+            {/* SC-003 shipment exceptions */}
+            <ActionCard icon={Truck}        title="SLA exceptions need review"        count={exceptionsNeedingAttention.length}  amount={excAttentionAmt}    actionLabel="Review Exceptions" to="/exceptions"  color="#059669" />
+            {/* SC-004 scorecard breaches */}
+            <ActionCard icon={Building2}    title="Supplier breaches need approval"   count={suppliersNeedingAttention.length}   amount={0}                  actionLabel="Review Scores"     to="/scorecards"  color="#d97706" />
+            {/* SC-005 accessorial disputes */}
+            <ActionCard icon={Package}      title="Accessorial disputes need review"  count={accNeedingAttention.length}         amount={accAttentionAmt}    actionLabel="Review Disputes"   to="/accessorial" color="#dc2626" />
           </div>
         </div>
       )}
