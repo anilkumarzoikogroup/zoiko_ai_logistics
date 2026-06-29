@@ -1,4 +1,7 @@
 services:
+
+  # ── SC-001: Freight Invoice Overcharge ─────────────────────────────────────
+  # Gateway — /v1/cases, /v1/ingestion, /v1/contract-rates, /v1/tokens, C07
   - type: web
     name: zoiko-api
     runtime: docker
@@ -6,52 +9,39 @@ services:
     dockerContext: .
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
-      # ── Database (Neon cloud) ─────────────────────────────────────────────
       - key: DB_URL
-        sync: false          # Set manually in Render dashboard — keep secret
-
-      # ── Auth ─────────────────────────────────────────────────────────────
+        sync: false
       - key: ZOIKO_DEV_MODE
         value: "false"
       - key: ZOIKO_DEV_SECRET
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: JWT_TTL_SECONDS
         value: "86400"
-
-      # ── Feature flags ─────────────────────────────────────────────────────
       - key: ZOIKO_FF_SC_001_ENABLED
         value: "*"
-
-      # ── CORS — allow your live Vercel frontend and local dev ─────────────
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+        value: https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics-quwz.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
 
       # ── AI (Groq) ─────────────────────────────────────────────────────────
       - key: GROQ_API_KEY
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: GROQ_MODEL
         value: llama-3.1-8b-instant
-
-      # ── Admin seed (first-run only) ────────────────────────────────────────
       - key: ZOIKO_COMPANY_NAME
         value: Zoiko
       - key: ZOIKO_ADMIN_EMAIL
-        sync: false          # Set manually in Render dashboard
+        sync: false
       - key: ZOIKO_ADMIN_PASSWORD
-        sync: false          # Set manually in Render dashboard
+        sync: false
       - key: ZOIKO_ADMIN_NAME
         value: Platform Admin
-
-      # ── Governance ────────────────────────────────────────────────────────
       - key: TOKEN_TTL_MINUTES
         value: "1440"
-
-      # ── Rate limiting ──────────────────────────────────────────────────────
       - key: ZOIKO_RATE_LIMIT_ENABLED
         value: "true"
       - key: RATE_LIMIT_INGESTION
@@ -60,12 +50,8 @@ services:
         value: "20"
       - key: RATE_LIMIT_EXECUTION
         value: "10"
-
-      # ── Python / encoding ─────────────────────────────────────────────────
       - key: PYTHONIOENCODING
         value: utf-8
-
-      # ── OPA — real fail-closed policy server (see zoiko-opa service below) ──
       - key: OPA_URL
         value: https://zoiko-opa.onrender.com
       - key: KAFKA_BOOTSTRAP
@@ -73,7 +59,7 @@ services:
       - key: REDIS_URL
         value: ""
 
-  # ── Execution Gateway — /v1/execute, /v1/reconcile, /v1/recovery/*, ACR ────
+  # Execution — /v1/execute, /v1/reconcile, /v1/recovery/*, /v1/cases/{id}/acr
   - type: web
     name: zoiko-execution
     runtime: docker
@@ -82,15 +68,15 @@ services:
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_DEV_MODE
         value: "false"
       - key: ZOIKO_DEV_SECRET
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: ZOIKO_CORS_ORIGINS
@@ -116,7 +102,7 @@ services:
       - key: REDIS_URL
         value: ""
 
-  # ── Governance — evidence / reasoning / governance tokens (port 8002) ──────
+  # Governance — evidence / reasoning / governance tokens
   - type: web
     name: zoiko-governance
     runtime: docker
@@ -125,21 +111,21 @@ services:
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-001-freight-invoice-overcharge/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_DEV_MODE
         value: "false"
       - key: ZOIKO_DEV_SECRET
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
       - key: TOKEN_TTL_MINUTES
         value: "1440"
       - key: GROQ_API_KEY
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: GROQ_MODEL
         value: llama-3.1-8b-instant
       - key: ZOIKO_RATE_LIMIT_ENABLED
@@ -155,46 +141,37 @@ services:
       - key: REDIS_URL
         value: ""
 
-  # ── OPA — fail-closed policy decision point for every gateway below ────────
+  # ── SC-002: Carrier Claim ──────────────────────────────────────────────────
+  # Gateway — /v1/carrier-claims, propose, decide
   - type: web
-    name: zoiko-opa
-    runtime: docker
-    dockerfilePath: ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/opa/Dockerfile
-    dockerContext: ./backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/opa
-    plan: free
-    healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
-
-  # ═══════════════════════════════════════════════════════════════════════════
-  # SC-002 — Carrier Claim (gateway:8010 execution:8011 governance:8012)
-  # ═══════════════════════════════════════════════════════════════════════════
-  - type: web
-    name: zoiko-claim-gateway
+    name: zoiko-sc002-gateway
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-002-carrier-claim/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_DEV_MODE
         value: "false"
       - key: ZOIKO_DEV_SECRET
-        sync: false          # Set manually in Render dashboard — keep secret
+        sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
-      - key: ZOIKO_FF_SC_002_ENABLED
-        value: "*"
+      - key: JWT_TTL_SECONDS
+        value: "86400"
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_INGESTION
-        value: "100"
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -204,15 +181,16 @@ services:
       - key: REDIS_URL
         value: ""
 
+  # Execution — /v1/execute, /v1/reconcile, /v1/cases/{id}/acr
   - type: web
-    name: zoiko-claim-execution
+    name: zoiko-sc002-execution
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-002-carrier-claim/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -223,20 +201,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
-      - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
+      - key: ZOIKO_CORS_ORIGINS
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: SANCTIONS_STRICT
         value: "false"
       - key: FX_STRICT
         value: "false"
       - key: CONNECTOR_STRICT
         value: "false"
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_EXECUTION
-        value: "10"
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -246,15 +220,16 @@ services:
       - key: REDIS_URL
         value: ""
 
+  # Governance — evidence / reasoning / tokens
   - type: web
-    name: zoiko-claim-governance
+    name: zoiko-sc002-governance
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-002-carrier-claim/spine/governance && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -271,10 +246,6 @@ services:
         sync: false
       - key: GROQ_MODEL
         value: llama-3.1-8b-instant
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_GOVERNANCE
-        value: "20"
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -284,18 +255,17 @@ services:
       - key: REDIS_URL
         value: ""
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # SC-003 — Shipment Exception / SLA Breach (gateway:8020 execution:8021)
-  # ═══════════════════════════════════════════════════════════════════════════
+  # ── SC-003: Shipment Exception / SLA Breach ───────────────────────────────
+  # Gateway — /v1/shipment-exceptions, propose, decide
   - type: web
-    name: zoiko-exception-gateway
+    name: zoiko-sc003-gateway
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-003-shipment-exception/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -306,12 +276,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
+      - key: JWT_TTL_SECONDS
+        value: "86400"
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_INGESTION
-        value: "100"
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -321,15 +295,16 @@ services:
       - key: REDIS_URL
         value: ""
 
+  # Execution — /v1/execute (ISSUE_SLA_CREDIT), /v1/reconcile, /v1/cases/{id}/acr
   - type: web
-    name: zoiko-exception-execution
+    name: zoiko-sc003-execution
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-003-shipment-exception/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -340,20 +315,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
-      - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
+      - key: ZOIKO_CORS_ORIGINS
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: SANCTIONS_STRICT
         value: "false"
       - key: FX_STRICT
         value: "false"
       - key: CONNECTOR_STRICT
         value: "false"
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_EXECUTION
-        value: "10"
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -363,18 +334,17 @@ services:
       - key: REDIS_URL
         value: ""
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # SC-004 — Supplier Scorecard Breach (gateway:8030 execution:8031)
-  # ═══════════════════════════════════════════════════════════════════════════
+  # ── SC-004: Supplier Scorecard Breach ─────────────────────────────────────
+  # Gateway — /v1/scorecard-breaches, propose, decide (NOTIFY_FLAG)
   - type: web
-    name: zoiko-scorecard-gateway
+    name: zoiko-sc004-gateway
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-004-supplier-scorecard/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -385,12 +355,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
+      - key: JWT_TTL_SECONDS
+        value: "86400"
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_INGESTION
-        value: "100"
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -400,15 +374,16 @@ services:
       - key: REDIS_URL
         value: ""
 
+  # Execution — /v1/execute (NOTIFY_FLAG), /v1/reconcile (SCORE_OUTCOME), /v1/cases/{id}/acr
   - type: web
-    name: zoiko-scorecard-execution
+    name: zoiko-sc004-execution
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-004-supplier-scorecard/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -419,20 +394,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
-      - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
+      - key: ZOIKO_CORS_ORIGINS
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: SANCTIONS_STRICT
         value: "false"
       - key: FX_STRICT
         value: "false"
       - key: CONNECTOR_STRICT
         value: "false"
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_EXECUTION
-        value: "10"
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -442,18 +413,17 @@ services:
       - key: REDIS_URL
         value: ""
 
-  # ═══════════════════════════════════════════════════════════════════════════
-  # SC-005 — Accessorial Charge Dispute (gateway:8040 execution:8041)
-  # ═══════════════════════════════════════════════════════════════════════════
+  # ── SC-005: Accessorial Charge Dispute ────────────────────────────────────
+  # Gateway — /v1/accessorial-disputes, propose, decide (ISSUE_PARTIAL_CREDIT)
   - type: web
-    name: zoiko-dispute-gateway
+    name: zoiko-sc005-gateway
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-005-accessorial-dispute/spine/gateway && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -464,12 +434,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
+      - key: JWT_TTL_SECONDS
+        value: "86400"
+      - key: TOKEN_TTL_MINUTES
+        value: "1440"
       - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_INGESTION
-        value: "100"
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.1-8b-instant
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -479,15 +453,16 @@ services:
       - key: REDIS_URL
         value: ""
 
+  # Execution — /v1/execute (ISSUE_PARTIAL_CREDIT), /v1/reconcile (PARTIAL_ACCEPTANCE), /v1/cases/{id}/acr
   - type: web
-    name: zoiko-dispute-execution
+    name: zoiko-sc005-execution
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: "sh -c 'cd /app/backend/slices/sc-005-accessorial-dispute/spine/execution && python -m uvicorn services.api_gateway.app:app --host 0.0.0.0 --port $PORT --workers 2'"
     plan: free
     healthCheckPath: /health
-    autoDeploy: false    # controlled by .github/workflows/deploy-render.yml (CI must pass first)
+    autoDeploy: false
 
     envVars:
       - key: DB_URL
@@ -498,20 +473,16 @@ services:
         sync: false
       - key: ZOIKO_ISSUER
         value: https://auth.zoikotech.com
-      - key: ZOIKO_CORS_ORIGINS
-        value: https://zoiko-ai.vercel.app,https://zoiko-ai-logistics-yrxe.vercel.app,https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: TOKEN_TTL_MINUTES
         value: "1440"
+      - key: ZOIKO_CORS_ORIGINS
+        value: https://zoiko-ai-logistics.vercel.app,https://zoiko-frontend.vercel.app,http://localhost:5173
       - key: SANCTIONS_STRICT
         value: "false"
       - key: FX_STRICT
         value: "false"
       - key: CONNECTOR_STRICT
         value: "false"
-      - key: ZOIKO_RATE_LIMIT_ENABLED
-        value: "true"
-      - key: RATE_LIMIT_EXECUTION
-        value: "10"
       - key: PYTHONIOENCODING
         value: utf-8
       - key: OPA_URL
@@ -520,3 +491,13 @@ services:
         value: ""
       - key: REDIS_URL
         value: ""
+
+  # ── OPA — fail-closed policy decision point for all services ──────────────
+  - type: web
+    name: zoiko-opa
+    runtime: docker
+    dockerfilePath: ./opa/Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: false

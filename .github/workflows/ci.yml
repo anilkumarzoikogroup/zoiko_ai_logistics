@@ -12,12 +12,12 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
-  PYTHON_VERSION: "3.11"          # matches production Dockerfile
+  PYTHON_VERSION: "3.11"
   PYTHONIOENCODING: utf-8
   ZOIKO_ISSUER: https://auth.zoikotech.com
-  ZOIKO_DEV_SECRET: zoiko-dev-secret-for-testing-only   # CI-only test value
-  # ZOIKO_DEV_MODE is set per-job: true for gateway/governance (API tests need it),
-  # NOT set for execution (unit tests assert gate rejection behaviour)
+  ZOIKO_DEV_SECRET: zoiko-dev-secret-for-testing-only
+  # Short alias reused in every job that touches the SC-001 spine
+  SC001: backend/slices/sc-001-freight-invoice-overcharge/spine
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 0  Security scan — runs in parallel with lint, never blocks deploy alone
@@ -40,7 +40,7 @@ jobs:
 
       - name: Audit Python dependencies
         run: pip-audit -r requirements.txt
-        continue-on-error: true   # warn only — harden to fail before public launch
+        continue-on-error: true
 
       - uses: actions/setup-node@v4
         with:
@@ -55,7 +55,7 @@ jobs:
       - name: Audit npm dependencies
         run: npm audit --audit-level=high
         working-directory: zoiko-frontend/frontend
-        continue-on-error: true   # warn only — harden to fail before public launch
+        continue-on-error: true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 1  Lint — blocks all downstream gates
@@ -91,10 +91,13 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
 
       - name: JCS canonical vectors (must be 100%)
-        run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/tests/crypto/test_jcs.py -v --tb=short
+        run: |
+          python -m pytest \
+            ${{ env.SC001 }}/core_lib/packages/zoiko-common/tests/crypto/test_jcs.py \
+            -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 3a  Crypto + Merkle
@@ -115,8 +118,11 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common
-      - run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common/tests/ -v --tb=short
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: |
+          python -m pytest \
+            ${{ env.SC001 }}/core_lib/packages/zoiko-common/tests/ \
+            -v --tb=short
 
   kms:
     name: KMS Hierarchy
@@ -132,8 +138,12 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
-      - run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms/tests/ -v --tb=short
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: pip install -e ${{ env.SC001 }}/platform_lib/packages/zoiko-kms
+      - run: |
+          python -m pytest \
+            ${{ env.SC001 }}/platform_lib/packages/zoiko-kms/tests/ \
+            -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 4  Platform — Kafka + OPA + OIDC
@@ -152,22 +162,50 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
-      - run: python -m pytest backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/tests/ -v --tb=short
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: pip install -e ${{ env.SC001 }}/platform_lib/packages/zoiko-kms
+      - run: |
+          python -m pytest \
+            ${{ env.SC001 }}/platform_lib/tests/ \
+            -v --tb=short
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 5a  Gateway Integration     — uses Neon DB (secret: NEON_DB_URL)
-# GATE 5b  Governance Integration  — uses Neon DB (secret: NEON_DB_URL)
-# GATE 5c  Execution Tests         — uses Neon DB (secret: NEON_DB_URL)
-# All three run in parallel after platform passes
+# GATE 5  DB Migrations — runs once after platform passes
+# Gateway and Governance depend on this to avoid parallel advisory lock conflicts
+# ─────────────────────────────────────────────────────────────────────────────
+  migrate:
+    name: DB Migrations (Neon)
+    runs-on: ubuntu-latest
+    needs: platform
+    env:
+      DB_URL: ${{ secrets.NEON_DB_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GATE 6a  Gateway Integration   — uses Neon DB (secret: NEON_DB_URL)
+# GATE 6b  Governance Integration — uses Neon DB (secret: NEON_DB_URL)
+# GATE 6c  Execution Tests        — unit tests only (no DB required)
+# All three run in parallel after migrate passes
 # ─────────────────────────────────────────────────────────────────────────────
   gateway:
     name: Gateway Integration
     runs-on: ubuntu-latest
-    needs: platform
+    needs: migrate
     env:
       DB_URL: ${{ secrets.NEON_DB_URL }}
-      ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
+      ZOIKO_DEV_MODE: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -178,25 +216,20 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
-
-      - name: Write .env
-        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
-
-      - name: Run migrations
-        run: alembic upgrade head
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: pip install -e ${{ env.SC001 }}/platform_lib/packages/zoiko-kms
 
       - name: Run Gateway tests
         run: python -m pytest -v --tb=short -q
-        working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/gateway
+        working-directory: ${{ env.SC001 }}/gateway
 
   governance:
     name: Governance Integration
     runs-on: ubuntu-latest
-    needs: platform
+    needs: migrate
     env:
       DB_URL: ${{ secrets.NEON_DB_URL }}
-      ZOIKO_DEV_MODE: "true"    # needed for API gateway auth bypass in tests
+      ZOIKO_DEV_MODE: "true"
     steps:
       - uses: actions/checkout@v4
 
@@ -207,26 +240,19 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
-
-      - name: Write .env
-        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
-
-      - name: Run migrations
-        run: alembic upgrade head
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: pip install -e ${{ env.SC001 }}/platform_lib/packages/zoiko-kms
 
       - name: Run Governance tests
         run: python -m pytest -v --tb=short -q
-        working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/governance
+        working-directory: ${{ env.SC001 }}/governance
 
   execution:
     name: Execution Tests
     runs-on: ubuntu-latest
-    needs: platform
-    # Execution tests are all unit tests (no DB required — use "unused-url" +
-    # MockKafkaBroker). The integration test is explicitly skipif(True).
-    # Running alembic in parallel with gateway/governance causes advisory lock
-    # conflicts on the shared Neon DB, so we skip migrations here entirely.
+    needs: migrate
+    # All unit tests — MockKafkaBroker, no DB. Running separately avoids
+    # advisory lock conflicts when gateway + governance run migrations in parallel.
     steps:
       - uses: actions/checkout@v4
 
@@ -237,88 +263,15 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: pip install -e ${{ env.SC001 }}/platform_lib/packages/zoiko-kms
 
-      - run: python -m pytest tests/ -v --tb=short -q
-        working-directory: backend/slices/sc-001-freight-invoice-overcharge/spine/execution
+      - name: Run Execution tests
+        run: python -m pytest tests/ -v --tb=short -q
+        working-directory: ${{ env.SC001 }}/execution
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 5d-f  SC-002 (carrier claim) — self-contained spine, own core_lib/platform_lib.
-# needs: gateway (not platform) so SC-001's `alembic upgrade head` has already
-# run against the shared Neon DB before these jobs start — running alembic
-# again in parallel causes advisory lock conflicts (see execution job above).
-# ─────────────────────────────────────────────────────────────────────────────
-  sc002-gateway:
-    name: SC-002 Gateway Integration
-    runs-on: ubuntu-latest
-    needs: gateway
-    env:
-      DB_URL: ${{ secrets.NEON_DB_URL }}
-      ZOIKO_DEV_MODE: "true"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-002-carrier-claim/spine/core_lib/packages/zoiko-common -e backend/slices/sc-002-carrier-claim/spine/platform_lib/packages/zoiko-kms
-
-      - name: Run SC-002 Gateway tests
-        run: python -m pytest -v --tb=short -q
-        working-directory: backend/slices/sc-002-carrier-claim/spine/gateway
-
-  sc002-execution:
-    name: SC-002 Execution Tests
-    runs-on: ubuntu-latest
-    needs: gateway
-    env:
-      DB_URL: ${{ secrets.NEON_DB_URL }}
-      ZOIKO_DEV_MODE: "true"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-002-carrier-claim/spine/core_lib/packages/zoiko-common -e backend/slices/sc-002-carrier-claim/spine/platform_lib/packages/zoiko-kms
-
-      - name: Run SC-002 Execution tests
-        run: python -m pytest -v --tb=short -q
-        working-directory: backend/slices/sc-002-carrier-claim/spine/execution
-
-  sc002-governance:
-    name: SC-002 Governance Integration
-    runs-on: ubuntu-latest
-    needs: gateway
-    env:
-      DB_URL: ${{ secrets.NEON_DB_URL }}
-      ZOIKO_DEV_MODE: "true"
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-002-carrier-claim/spine/core_lib/packages/zoiko-common -e backend/slices/sc-002-carrier-claim/spine/platform_lib/packages/zoiko-kms
-
-      - name: Run SC-002 Governance tests
-        run: python -m pytest -v --tb=short -q
-        working-directory: backend/slices/sc-002-carrier-claim/spine/governance
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GATE 6  Frontend — TypeScript build + type check
+# GATE 7  Frontend — TypeScript build + type check
 # Runs after lint (parallel with phase gates)
 # ─────────────────────────────────────────────────────────────────────────────
   frontend:
@@ -348,7 +301,7 @@ jobs:
           VITE_DEV_TENANT: "11111111-1111-1111-1111-111111111111"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GATE 7  Docker build — verifies both Dockerfiles produce valid images
+# GATE 8  Docker build — verifies Dockerfile and frontend Dockerfile are valid
 # Final gate: needs all integration + frontend jobs to pass first
 # ─────────────────────────────────────────────────────────────────────────────
   docker-build:
@@ -363,6 +316,9 @@ jobs:
 
       - name: Build frontend image
         run: docker build -f zoiko-frontend/frontend/Dockerfile -t zoiko-frontend:ci zoiko-frontend/frontend
+
+      - name: Build OPA image
+        run: docker build -f opa/Dockerfile -t zoiko-opa:ci .
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GATE 8  Slice boot smoke test — SC-003/004/005 have no pytest suites, so this
@@ -433,10 +389,8 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - run: pip install -r requirements.txt
-      - run: pip install -e backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/packages/zoiko-common -e backend/slices/sc-001-freight-invoice-overcharge/spine/platform_lib/packages/zoiko-kms
+      - run: pip install -e ${{ env.SC001 }}/core_lib/packages/zoiko-common
+      - run: pip install -e ${{ env.SC001 }}/platform_lib/packages/zoiko-kms
 
-      - name: Write .env
-        run: echo "DB_URL=${{ secrets.NEON_DB_URL }}" > .env
-
-      - run: alembic upgrade head
-      - run: python backend/slices/sc-001-freight-invoice-overcharge/spine/core_lib/scripts/tenant_fuzzer.py
+      - run: |
+          python ${{ env.SC001 }}/core_lib/scripts/tenant_fuzzer.py
