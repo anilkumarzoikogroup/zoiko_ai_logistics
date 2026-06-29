@@ -81,7 +81,7 @@ echo.
 REM ── Step 4: Seed admin user ──────────────────────────────────
 echo [4/5] Seeding users...
 if "!SKIP_DB!"=="1" (
-    echo  SKIPPED (database not reachable).
+    echo  SKIPPED ^(database not reachable^).
     goto :step5
 )
 .venv\Scripts\python backend\slices\sc-001-freight-invoice-overcharge\spine\core_lib\scripts\seed_users.py 2>nul
