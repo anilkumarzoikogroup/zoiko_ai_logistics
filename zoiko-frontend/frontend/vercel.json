@@ -3,7 +3,18 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
+    { "source": "/api3/:path*", "destination": "https://zoiko-governance.onrender.com/:path*" },
+    { "source": "/api4/:path*", "destination": "https://zoiko-execution.onrender.com/:path*" },
     { "source": "/api/:path*", "destination": "https://zoiko-ai-logistics-2f1v.onrender.com/:path*" },
+    { "source": "/claimapi3/:path*", "destination": "https://zoiko-claim-governance.onrender.com/:path*" },
+    { "source": "/claimapi4/:path*", "destination": "https://zoiko-claim-execution.onrender.com/:path*" },
+    { "source": "/claimapi/:path*", "destination": "https://zoiko-claim-gateway.onrender.com/:path*" },
+    { "source": "/excapi4/:path*", "destination": "https://zoiko-exception-execution.onrender.com/:path*" },
+    { "source": "/excapi/:path*", "destination": "https://zoiko-exception-gateway.onrender.com/:path*" },
+    { "source": "/scoreapi4/:path*", "destination": "https://zoiko-scorecard-execution.onrender.com/:path*" },
+    { "source": "/scoreapi/:path*", "destination": "https://zoiko-scorecard-gateway.onrender.com/:path*" },
+    { "source": "/accapi4/:path*", "destination": "https://zoiko-dispute-execution.onrender.com/:path*" },
+    { "source": "/accapi/:path*", "destination": "https://zoiko-dispute-gateway.onrender.com/:path*" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
