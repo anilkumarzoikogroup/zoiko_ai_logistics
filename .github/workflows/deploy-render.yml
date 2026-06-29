@@ -80,7 +80,7 @@ jobs:
         run: |
           echo "Waiting for zoiko-api..."
           for i in $(seq 1 20); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-ai-logistics.onrender.com/health)
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://zoiko-ai-logistics-2f1v.onrender.com/health)
             echo "Attempt $i — HTTP $STATUS"
             if [ "$STATUS" = "200" ]; then echo "zoiko-api is healthy."; exit 0; fi
             sleep 15
