@@ -112,10 +112,13 @@ class ClaimValidationHandler:
 
         if structural:
             final_status = "FAIL"
-        elif semantic or cross:
+        elif semantic:
             final_status = "FAIL"
-        elif policy:
-            final_status = "WARN"   # over cap: warn, don't block
+        elif cross or policy:
+            # duplicate claim_reference and over-cap amounts are recorded but don't
+            # block — dedup is resolved downstream when canonicalize/open_case
+            # reuses the existing case (see routes_logic.submit_claim_async_worker)
+            final_status = "WARN"
         else:
             final_status = "PASS"
 
